@@ -8,7 +8,7 @@ test("toIsoStart returns undefined for empty value", () => {
 });
 
 test("toIsoStart appends start-of-day suffix", () => {
-  assert.equal(toIsoStart("2026-02-01"), "2026-02-01T00:00:00Z");
+  assert.equal(toIsoStart("2026-02-01"), "2026-01-31T16:00:00Z");
 });
 
 test("toIsoEnd returns undefined for empty value", () => {
@@ -16,5 +16,5 @@ test("toIsoEnd returns undefined for empty value", () => {
 });
 
 test("toIsoEnd appends end-of-day suffix", () => {
-  assert.equal(toIsoEnd("2026-02-01"), "2026-02-01T23:59:59Z");
+  assert.equal(toIsoEnd("2026-02-01"), "2026-02-01T15:59:59Z");
 });

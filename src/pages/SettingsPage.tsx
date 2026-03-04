@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { onboardingGetState, onboardingSetSkillsDir } from "../api/tauri";
 import { useI18n } from "../i18n/I18nProvider";
 import type { Locale } from "../i18n/messages";
+import { useTheme, type ThemeMode } from "../theme/ThemeProvider";
 import "./SettingsPage.css";
 
 type Props = {
@@ -26,6 +27,7 @@ function formatStatusError(
 
 export default function SettingsPage({ onSkillsDirChanged }: Props) {
   const { t, locale, setLocale } = useI18n();
+  const { themeMode, setThemeMode } = useTheme();
   const [skillsDir, setSkillsDir] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
@@ -118,6 +120,22 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
           >
             {busy ? t("tools.path.saving") : t("tools.path.save")}
           </button>
+        </div>
+      </section>
+
+      <section className="chart-card settings-card">
+        <h2 className="chart-title">{t("settings.theme")}</h2>
+        <p className="settings-help">{t("settings.theme.help")}</p>
+        <div className="settings-row">
+          <select
+            className="filter-select settings-theme-select"
+            value={themeMode}
+            onChange={(e) => setThemeMode(e.target.value as ThemeMode)}
+          >
+            <option value="system">{t("settings.theme.system")}</option>
+            <option value="light">{t("settings.theme.light")}</option>
+            <option value="dark">{t("settings.theme.dark")}</option>
+          </select>
         </div>
       </section>
 

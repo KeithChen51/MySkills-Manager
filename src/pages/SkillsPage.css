@@ -183,7 +183,7 @@
 }
 
 .skills-conflict-overlay {
-  background: rgba(25, 57, 102, 0.28);
+  background: var(--overlay-scrim);
   backdrop-filter: blur(4px);
   display: flex;
   inset: 0;

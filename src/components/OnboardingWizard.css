@@ -1,7 +1,7 @@
 .onboarding-screen {
   background:
-    radial-gradient(circle at 15% 20%, rgba(74, 157, 255, 0.2), transparent 35%),
-    radial-gradient(circle at 85% 80%, rgba(58, 162, 173, 0.18), transparent 35%),
+    radial-gradient(circle at 15% 20%, var(--ambient-glow-1), transparent 35%),
+    radial-gradient(circle at 85% 80%, var(--ambient-glow-2), transparent 35%),
     var(--bg-primary);
   display: grid;
   place-items: center;

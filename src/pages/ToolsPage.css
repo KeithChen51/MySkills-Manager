@@ -198,8 +198,8 @@
 
 .tool-switch {
   align-items: center;
-  background: #d2dae8;
-  border: 1px solid #c3ccdd;
+  background: var(--switch-track);
+  border: 1px solid var(--switch-track-border);
   border-radius: 999px;
   cursor: pointer;
   display: inline-flex;
@@ -212,16 +212,16 @@
 }
 
 .tool-switch.active {
-  background: #22c55e;
-  border-color: #16a34a;
+  background: var(--switch-track-active);
+  border-color: var(--switch-track-active-border);
 }
 
 .tool-switch-thumb {
-  background: #ffffff;
+  background: var(--switch-thumb);
   border-radius: 50%;
   display: block;
   height: 26px;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.24);
+  box-shadow: var(--switch-thumb-shadow);
   transition: transform var(--transition);
   width: 26px;
 }

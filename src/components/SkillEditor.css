@@ -1,5 +1,5 @@
 .drawer-overlay {
-  background: rgba(25, 57, 102, 0.24);
+  background: var(--overlay-scrim);
   backdrop-filter: blur(4px);
   display: flex;
   inset: 0;

@@ -1,6 +1,6 @@
 .app-shell {
   background:
-    linear-gradient(145deg, rgba(74, 157, 255, 0.1), transparent 35%),
+    linear-gradient(145deg, var(--shell-glow), transparent 35%),
     var(--bg-app);
   color: var(--text-primary);
   display: flex;
@@ -10,7 +10,7 @@
 
 .app-content {
   background:
-    linear-gradient(180deg, rgba(74, 157, 255, 0.1), rgba(255, 255, 255, 0)),
+    linear-gradient(180deg, var(--content-glow), transparent),
     var(--bg-app);
   border-left: 1px solid var(--border-card);
   display: flex;
@@ -22,7 +22,7 @@
 
 .app-status-bar {
   align-items: center;
-  background: rgba(236, 244, 255, 0.88);
+  background: var(--status-bar-bg);
   backdrop-filter: blur(6px);
   border-bottom: 1px solid var(--border-card);
   display: flex;

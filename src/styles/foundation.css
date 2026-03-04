@@ -17,13 +17,14 @@ html {
 
 body {
   background:
-    radial-gradient(circle at 14% 8%, rgba(74, 157, 255, 0.24), transparent 38%),
-    radial-gradient(circle at 88% 84%, rgba(58, 162, 173, 0.18), transparent 34%),
-    radial-gradient(circle at 52% 104%, rgba(111, 141, 232, 0.14), transparent 42%),
+    radial-gradient(circle at 14% 8%, var(--ambient-glow-1), transparent 38%),
+    radial-gradient(circle at 88% 84%, var(--ambient-glow-2), transparent 34%),
+    radial-gradient(circle at 52% 104%, var(--ambient-glow-3), transparent 42%),
     var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-body);
   line-height: 1.5;
+  transition: background var(--transition), color var(--transition);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;

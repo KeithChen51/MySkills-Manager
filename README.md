@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./public/skillar-dark-v1-white-bg.png" alt="Skillar Logo" width="220">
+  <img src="./skillar-design-pack/logo/skillar-icon-centered-light.png" alt="Skillar Logo" width="220">
 </p>
 
 <h1 align="center">Skillar (MySkills Manager)</h1>

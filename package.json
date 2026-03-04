@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:desktop": "cargo tauri build",
+    "sync:tauri-icons": "cargo tauri icon ./skillar-design-pack/logo/skillar-icon-centered-light.png --output ./src-tauri/icons",
+    "build:desktop": "npm run sync:tauri-icons && cargo tauri build",
     "build:desktop:windows": "npm run build:desktop && node scripts/expose-skillar-exe.mjs && node scripts/prepare-gitee-package.mjs",
     "expose:exe": "node scripts/expose-skillar-exe.mjs",
     "pack:gitee": "node scripts/prepare-gitee-package.mjs",

@@ -7,6 +7,9 @@ import {
     IconTools,
 } from "./icons";
 import { useI18n } from "../i18n/I18nProvider";
+import { useTheme } from "../theme/ThemeProvider";
+import brandLogoTransparent from "../../skillar-design-pack/logo/skillar-logo-transparent.png";
+import brandLogoWhiteBg from "../../skillar-design-pack/logo/skillar-logo-white-bg.png";
 import "./Sidebar.css";
 
 export type ViewName = "skills" | "dashboard" | "logs" | "tools" | "git" | "settings";
@@ -18,6 +21,8 @@ type Props = {
 
 export default function Sidebar({ active, onChange }: Props) {
     const { t } = useI18n();
+    const { resolvedTheme } = useTheme();
+    const brandLogoSrc = resolvedTheme === "dark" ? brandLogoWhiteBg : brandLogoTransparent;
     const navItems: { view: ViewName; icon: React.ReactNode; label: string }[] = [
         { view: "skills", icon: <IconSkills size={20} />, label: t("nav.skills") },
         { view: "tools", icon: <IconTools size={20} />, label: t("nav.tools") },
@@ -31,7 +36,7 @@ export default function Sidebar({ active, onChange }: Props) {
             <div className="sidebar-top">
                 <div className="sidebar-brand">
                     <div className="sidebar-logo" aria-label="Skillar logo">
-                        <img src="/skillar-icon.png" alt="Skillar" className="sidebar-logo-image" />
+                        <img src={brandLogoSrc} alt="Skillar" className="sidebar-logo-image" />
                     </div>
                     <div className="sidebar-brand-copy">
                         <strong className="sidebar-brand-text">Skillar</strong>

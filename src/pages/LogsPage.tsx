@@ -3,13 +3,14 @@ import { useEffect, useMemo, useState } from "react";
 import { logsGet, statsGet, type LogsResult, type SkillMeta, type StatsResult } from "../api/tauri";
 import { IconChevronLeft, IconChevronRight } from "../components/icons";
 import { toIsoEnd, toIsoStart } from "../domain/logDateRange";
+import { formatLogTimestamp } from "../domain/logTimestamp";
 import { useI18n } from "../i18n/I18nProvider";
 import "./LogsPage.css";
 
 type Props = { skills: SkillMeta[] };
 
 export default function LogsPage({ skills }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const logsLimit = 50;
   const [skill, setSkill] = useState("all");
   const [tool, setTool] = useState("all");
@@ -143,7 +144,7 @@ export default function LogsPage({ skills }: Props) {
             ) : (
               data.logs.map((log) => (
                 <tr key={`${log.ts}-${log.skill}-${log.cwd}`}>
-                  <td>{log.ts}</td>
+                  <td>{formatLogTimestamp(log.ts, locale)}</td>
                   <td>{log.skill}</td>
                   <td>{log.tool}</td>
                   <td className="cwd-cell">{log.cwd}</td>

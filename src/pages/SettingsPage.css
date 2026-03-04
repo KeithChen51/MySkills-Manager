@@ -30,6 +30,10 @@
   min-width: 220px;
 }
 
+.settings-theme-select {
+  min-width: 220px;
+}
+
 .settings-status {
   background: var(--bg-card);
   border: 1px solid var(--border-card);
@@ -47,7 +51,8 @@
   }
 
   .settings-path-input,
-  .settings-language-select {
+  .settings-language-select,
+  .settings-theme-select {
     min-width: 0;
     width: 100%;
   }

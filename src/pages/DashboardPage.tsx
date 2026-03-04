@@ -5,37 +5,65 @@ import * as echarts from "echarts";
 import { statsGet, type SkillMeta, type StatsResult } from "../api/tauri";
 import KpiCard from "../components/KpiCard";
 import { useI18n } from "../i18n/I18nProvider";
+import { useTheme } from "../theme/ThemeProvider";
 import "./DashboardPage.css";
 
 type Props = { skills: SkillMeta[] };
 
-const STARSHIP_THEME_NAME = "myskills-starship";
+const CHART_THEME_LIGHT = "myskills-soft-light";
+const CHART_THEME_DARK = "myskills-soft-dark";
 let themesRegistered = false;
 
 function ensureEchartsThemes() {
   if (themesRegistered) return;
-  echarts.registerTheme(STARSHIP_THEME_NAME, {
+
+  echarts.registerTheme(CHART_THEME_LIGHT, {
     backgroundColor: "transparent",
-    color: ["#2f76ff", "#4fa7c5", "#6f8de8", "#2fa67a", "#87b4ff", "#5cb7d7"],
-    textStyle: { color: "#13243a" },
-    title: { textStyle: { color: "#13243a" } },
-    legend: { textStyle: { color: "#2b425d" } },
+    color: ["#7f9cf5", "#63b3ed", "#b794f4", "#68d391", "#f6ad55", "#fc8181"],
+    textStyle: { color: "#1a202c" },
+    title: { textStyle: { color: "#1a202c" } },
+    legend: { textStyle: { color: "#4a5568" } },
     tooltip: {
       backgroundColor: "rgba(255, 255, 255, 0.97)",
-      borderColor: "#c3d5eb",
-      textStyle: { color: "#13243a" },
+      borderColor: "#e2e8f0",
+      textStyle: { color: "#1a202c" },
     },
     categoryAxis: {
-      axisLine: { lineStyle: { color: "#c3d5eb" } },
-      axisTick: { lineStyle: { color: "#c3d5eb" } },
-      axisLabel: { color: "#5f7694" },
-      splitLine: { lineStyle: { color: "#dbe8f7" } },
+      axisLine: { lineStyle: { color: "#e2e8f0" } },
+      axisTick: { lineStyle: { color: "#e2e8f0" } },
+      axisLabel: { color: "#718096" },
+      splitLine: { lineStyle: { color: "#edf2f7" } },
     },
     valueAxis: {
-      axisLine: { lineStyle: { color: "#c3d5eb" } },
-      axisTick: { lineStyle: { color: "#c3d5eb" } },
-      axisLabel: { color: "#5f7694" },
-      splitLine: { lineStyle: { color: "#dbe8f7" } },
+      axisLine: { lineStyle: { color: "#e2e8f0" } },
+      axisTick: { lineStyle: { color: "#e2e8f0" } },
+      axisLabel: { color: "#718096" },
+      splitLine: { lineStyle: { color: "#edf2f7" } },
+    },
+  });
+
+  echarts.registerTheme(CHART_THEME_DARK, {
+    backgroundColor: "transparent",
+    color: ["#a3bffa", "#90cdf4", "#d6bcfa", "#9ae6b4", "#fbd38d", "#feb2b2"],
+    textStyle: { color: "#f7fafc" },
+    title: { textStyle: { color: "#f7fafc" } },
+    legend: { textStyle: { color: "#cbd5e0" } },
+    tooltip: {
+      backgroundColor: "rgba(45, 55, 72, 0.96)",
+      borderColor: "#718096",
+      textStyle: { color: "#f7fafc" },
+    },
+    categoryAxis: {
+      axisLine: { lineStyle: { color: "#4a5568" } },
+      axisTick: { lineStyle: { color: "#4a5568" } },
+      axisLabel: { color: "#a0aec0" },
+      splitLine: { lineStyle: { color: "#4a5568" } },
+    },
+    valueAxis: {
+      axisLine: { lineStyle: { color: "#4a5568" } },
+      axisTick: { lineStyle: { color: "#4a5568" } },
+      axisLabel: { color: "#a0aec0" },
+      splitLine: { lineStyle: { color: "#4a5568" } },
     },
   });
 
@@ -44,7 +72,9 @@ function ensureEchartsThemes() {
 
 export default function DashboardPage({ skills }: Props) {
   const { t } = useI18n();
+  const { resolvedTheme } = useTheme();
   ensureEchartsThemes();
+  const chartThemeName = resolvedTheme === "dark" ? CHART_THEME_DARK : CHART_THEME_LIGHT;
   const [days, setDays] = useState(30);
   const [stats, setStats] = useState<StatsResult | null>(null);
   const [status, setStatus] = useState("");
@@ -93,7 +123,7 @@ export default function DashboardPage({ skills }: Props) {
           <h3 className="chart-title">{t("dashboard.topSkills")}</h3>
           <ReactECharts
             className="dashboard-chart dashboard-chart--tall"
-            theme={STARSHIP_THEME_NAME}
+            theme={chartThemeName}
             option={{
               tooltip: { trigger: "axis" },
               xAxis: { type: "value" },
@@ -108,7 +138,7 @@ export default function DashboardPage({ skills }: Props) {
           <h3 className="chart-title">{t("dashboard.byTool")}</h3>
           <ReactECharts
             className="dashboard-chart dashboard-chart--tall"
-            theme={STARSHIP_THEME_NAME}
+            theme={chartThemeName}
             option={{
               tooltip: { trigger: "item" },
               series: [
@@ -127,7 +157,7 @@ export default function DashboardPage({ skills }: Props) {
         <h3 className="chart-title">{t("dashboard.byDay")}</h3>
         <ReactECharts
           className="dashboard-chart dashboard-chart--medium"
-          theme={STARSHIP_THEME_NAME}
+          theme={chartThemeName}
           option={{
             tooltip: { trigger: "axis" },
             xAxis: { type: "category", data: byDay.map((i) => i.date) },
