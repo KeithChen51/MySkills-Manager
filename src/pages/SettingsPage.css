@@ -20,6 +20,20 @@
   gap: var(--sp-sm);
 }
 
+.settings-update-row {
+  justify-content: space-between;
+}
+
+.settings-version-chip {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  padding: 6px 10px;
+}
+
 .settings-path-input {
   flex: 1 1 420px;
   font-family: var(--font-mono);

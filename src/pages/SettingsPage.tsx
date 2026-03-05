@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
 
 import { onboardingGetState, onboardingSetSkillsDir, setupGetImportMode, setupSetImportMode } from "../api/tauri";
 import { useI18n } from "../i18n/I18nProvider";
@@ -10,6 +13,20 @@ import "./SettingsPage.css";
 type Props = {
   onSkillsDirChanged: () => void;
 };
+
+function formatSize(bytes: number): string {
+  if (bytes <= 0 || !Number.isFinite(bytes)) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
 
 function formatStatusError(
   error: unknown,
@@ -31,6 +48,8 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
   const [skillsDir, setSkillsDir] = useState("");
   const [importMode, setImportMode] = useState("manual");
   const [busy, setBusy] = useState(false);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [appVersion, setAppVersion] = useState("-");
   const [status, setStatus] = useState("");
 
   useEffect(() => {
@@ -38,10 +57,12 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
     void Promise.all([
       onboardingGetState(),
       setupGetImportMode(),
+      getVersion().catch(() => "-"),
     ])
-      .then(([state, mode]) => {
+      .then(([state, mode, version]) => {
         setSkillsDir(state.skillsDir);
         setImportMode(mode);
+        setAppVersion(version);
         setStatus("");
       })
       .catch((error: unknown) => {
@@ -97,6 +118,68 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
     }
   }
 
+  async function handleCheckForUpdates() {
+    setUpdateBusy(true);
+    setStatus(t("settings.update.checking"));
+
+    try {
+      const update = await check();
+      if (!update) {
+        setStatus(t("settings.update.none"));
+        return;
+      }
+
+      const installNow = window.confirm(
+        t("settings.update.available", {
+          version: update.version,
+          current: update.currentVersion,
+        }),
+      );
+      if (!installNow) {
+        setStatus(t("settings.update.declined", { version: update.version }));
+        return;
+      }
+
+      let downloaded = 0;
+      let contentLength: number | undefined;
+      setStatus(t("settings.update.downloading"));
+
+      await update.downloadAndInstall((event: DownloadEvent) => {
+        if (event.event === "Started") {
+          contentLength = event.data.contentLength;
+          return;
+        }
+
+        if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+          if (contentLength && contentLength > 0) {
+            setStatus(
+              t("settings.update.downloading.progress", {
+                downloaded: formatSize(downloaded),
+                total: formatSize(contentLength),
+              }),
+            );
+          }
+          return;
+        }
+
+        setStatus(t("settings.update.installing"));
+      });
+
+      const restartNow = window.confirm(t("settings.update.restartNow"));
+      if (restartNow) {
+        setStatus(t("settings.update.relaunching"));
+        await relaunch();
+        return;
+      }
+      setStatus(t("settings.update.restartLater"));
+    } catch (error: unknown) {
+      setStatus(`${t("settings.update.failed")}: ${String(error)}`);
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
   return (
     <div className="page animate-fadein settings-page">
       <header className="page-header">
@@ -124,6 +207,24 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
             disabled={busy}
           >
             {busy ? t("tools.path.saving") : t("tools.path.save")}
+          </button>
+        </div>
+      </section>
+
+      <section className="chart-card settings-card">
+        <h2 className="chart-title">{t("settings.update.title")}</h2>
+        <p className="settings-help">{t("settings.update.help")}</p>
+        <div className="settings-row settings-update-row">
+          <span className="settings-version-chip">
+            {t("settings.update.current", { version: appVersion })}
+          </span>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => void handleCheckForUpdates()}
+            disabled={busy || updateBusy}
+          >
+            {updateBusy ? t("settings.update.checkingButton") : t("settings.update.checkButton")}
           </button>
         </div>
       </section>

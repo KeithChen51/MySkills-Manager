@@ -18,6 +18,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_process::init())?;
+
             if let Err(err) = onboarding::apply_bootstrap_env() {
                 eprintln!("onboarding bootstrap failed: {err}");
             }
