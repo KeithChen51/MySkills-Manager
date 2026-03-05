@@ -4,6 +4,9 @@ import {
   APP_ERROR_EVENT,
   appPing,
   onboardingGetState,
+  onboardingImportInstalledSkills,
+  setupGetImportMode,
+  setupLocalSkillsOverview,
   type OnboardingCompleteResult,
   skillsList,
   type SkillMeta,
@@ -30,6 +33,7 @@ export default function App() {
   const [initialSkillsDir, setInitialSkillsDir] = useState("");
   const [initialAutoSync, setInitialAutoSync] = useState(false);
   const [globalErrors, setGlobalErrors] = useState<{ id: number; message: string }[]>([]);
+  const [importStatus, setImportStatus] = useState("");
 
   function pushGlobalError(message: string) {
     const id = Date.now() + Math.floor(Math.random() * 1000);
@@ -55,6 +59,7 @@ export default function App() {
         if (state.completed) {
           void appPing().then(setPing).catch(() => setPing(t("app.ping.error")));
           loadSkills();
+          void runBootScan();
         } else {
           setPing(t("app.ping.onboarding"));
         }
@@ -64,7 +69,47 @@ export default function App() {
         setBooting(false);
       }
     })();
-  }, [t]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function runBootScan() {
+    try {
+      const mode = await setupGetImportMode();
+      if (mode === "manual") return;
+
+      setImportStatus("正在扫描工具中的新 skills...");
+      const overview = await setupLocalSkillsOverview();
+      if (overview.missingInMySkills === 0) {
+        setImportStatus("");
+        return;
+      }
+
+      if (mode === "auto") {
+        setImportStatus(`正在自动导入 ${overview.missingInMySkills} 个新 skills...`);
+        const result = await onboardingImportInstalledSkills();
+        setImportStatus(`已自动导入 ${result.importedTotal} 个新 skills`);
+        loadSkills();
+        setTimeout(() => setImportStatus(""), 5000);
+      } else if (mode === "prompt") {
+        setImportStatus(`发现 ${overview.missingInMySkills} 个新 skills`);
+        const confirmed = window.confirm(
+          `发现 ${overview.missingInMySkills} 个未收录的 skills，是否立即导入到基准目录？`,
+        );
+        if (confirmed) {
+          setImportStatus(`正在导入 ${overview.missingInMySkills} 个新 skills...`);
+          const result = await onboardingImportInstalledSkills();
+          setImportStatus(`已导入 ${result.importedTotal} 个新 skills`);
+          loadSkills();
+          setTimeout(() => setImportStatus(""), 5000);
+        } else {
+          setImportStatus("");
+        }
+      }
+    } catch (err: unknown) {
+      console.error("Boot scan failed:", err);
+      setImportStatus("");
+    }
+  }
 
   useEffect(() => {
     const handleAppError = (event: Event) => {
@@ -138,6 +183,9 @@ export default function App() {
             <span className="status-text">
               {t("app.status")}: {ping}
             </span>
+            {importStatus && (
+              <span className="status-import">{importStatus}</span>
+            )}
           </div>
           {renderPage()}
         </div>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { type SetupApplyResult, type ToolStatus } from "../api/tauri";
+import { type SetupApplyResult, type ToolRouterHealthStatus, type ToolStatus } from "../api/tauri";
 import { IconClose, IconPlus, IconRefresh, IconSave } from "../components/icons";
 import { useI18n } from "../i18n/I18nProvider";
 import { type ToolPathDraft } from "./toolsPathPicker";
@@ -13,6 +13,9 @@ import "./ToolsPage.css";
 export default function ToolsPage() {
   const { t, locale } = useI18n();
   const [tools, setTools] = useState<ToolStatus[]>([]);
+  const [routerHealthByTool, setRouterHealthByTool] = useState<
+    Record<string, ToolRouterHealthStatus>
+  >({});
   const [pathDrafts, setPathDrafts] = useState<Record<string, ToolPathDraft>>({});
   const [status, setStatus] = useState("");
   const [applyResults, setApplyResults] = useState<SetupApplyResult[]>([]);
@@ -49,6 +52,7 @@ export default function ToolsPage() {
     form,
     pathDrafts,
     setTools,
+    setRouterHealthByTool,
     setPathDrafts,
     setStatus,
     setApplyResults,
@@ -107,6 +111,7 @@ export default function ToolsPage() {
           title={t("tools.section.installed", { count: installedTools.length })}
           tools={installedTools}
           installed
+          routerHealthByTool={routerHealthByTool}
           pathDrafts={pathDrafts}
           busy={busy}
           savingPathToolId={savingPathToolId}
@@ -130,6 +135,7 @@ export default function ToolsPage() {
           title={t("tools.section.uninstalled", { count: uninstalledTools.length })}
           tools={uninstalledTools}
           installed={false}
+          routerHealthByTool={routerHealthByTool}
           pathDrafts={pathDrafts}
           busy={busy}
           savingPathToolId={savingPathToolId}

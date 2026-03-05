@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import { onboardingGetState, onboardingSetSkillsDir } from "../api/tauri";
+import { onboardingGetState, onboardingSetSkillsDir, setupGetImportMode, setupSetImportMode } from "../api/tauri";
 import { useI18n } from "../i18n/I18nProvider";
 import type { Locale } from "../i18n/messages";
 import { useTheme, type ThemeMode } from "../theme/ThemeProvider";
@@ -29,14 +29,19 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
   const { t, locale, setLocale } = useI18n();
   const { themeMode, setThemeMode } = useTheme();
   const [skillsDir, setSkillsDir] = useState("");
+  const [importMode, setImportMode] = useState("manual");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
 
   useEffect(() => {
     setBusy(true);
-    void onboardingGetState()
-      .then((state) => {
+    void Promise.all([
+      onboardingGetState(),
+      setupGetImportMode(),
+    ])
+      .then(([state, mode]) => {
         setSkillsDir(state.skillsDir);
+        setImportMode(mode);
         setStatus("");
       })
       .catch((error: unknown) => {
@@ -149,6 +154,31 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
           >
             <option value="zh-CN">Chinese (Simplified)</option>
             <option value="en-US">English</option>
+          </select>
+        </div>
+      </section>
+
+      <section className="chart-card settings-card">
+        <h2 className="chart-title">Skills 导入模式</h2>
+        <p className="settings-help">
+          设置从工具中发现新 skills 时的处理方式。
+        </p>
+        <div className="settings-row">
+          <select
+            className="filter-select settings-import-mode-select"
+            value={importMode}
+            disabled={busy}
+            onChange={(e) => {
+              const mode = e.target.value;
+              setImportMode(mode);
+              void setupSetImportMode(mode).catch((err: unknown) => {
+                setStatus(String(err));
+              });
+            }}
+          >
+            <option value="manual">手动 — 需要用户在 Skills 页面点击同步按钮</option>
+            <option value="prompt">提示 — 发现新 skills 时弹窗询问用户</option>
+            <option value="auto">自动 — 发现新 skills 时自动导入到基准目录</option>
           </select>
         </div>
       </section>

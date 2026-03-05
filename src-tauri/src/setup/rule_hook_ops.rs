@@ -248,6 +248,26 @@ pub(super) fn ensure_rules_removed(rules_path: &Path) -> Result<(), String> {
     fs::write(rules_path, next).map_err(|e| format!("Write rules file failed: {e}"))
 }
 
+pub(super) fn apply_instruction_gate(
+    tool_id: &str,
+    rules_path: &Path,
+    tracking_enabled: bool,
+) -> Result<String, String> {
+    if tracking_enabled {
+        ensure_rules_injected(tool_id, rules_path)?;
+        return Ok(format!(
+            "rules injected into {}",
+            rules_path.to_string_lossy()
+        ));
+    }
+
+    ensure_rules_removed(rules_path)?;
+    Ok(format!(
+        "rules removed from {}",
+        rules_path.to_string_lossy()
+    ))
+}
+
 pub(super) fn ensure_claude_hook(home: &Path) -> Result<(), String> {
     let hook_path = home.join(super::CLAUDE_HOOK_REL_PATH);
     if let Some(parent) = hook_path.parent() {
@@ -364,4 +384,23 @@ pub(super) fn ensure_claude_hook_removed(home: &Path) -> Result<(), String> {
         .map_err(|e| format!("Serialize settings failed: {e}"))?;
     fs::write(settings_path, format!("{content}\n"))
         .map_err(|e| format!("Write claude settings failed: {e}"))
+}
+
+pub(super) fn apply_hook_configuration(
+    home: &Path,
+    tool_id: &str,
+    tracking_enabled: bool,
+) -> Result<Option<String>, String> {
+    match tool_id {
+        "claude-code" => {
+            if tracking_enabled {
+                ensure_claude_hook(home)?;
+                Ok(Some("claude hook configured".to_string()))
+            } else {
+                ensure_claude_hook_removed(home)?;
+                Ok(Some("claude hook removed".to_string()))
+            }
+        }
+        _ => Ok(None),
+    }
 }

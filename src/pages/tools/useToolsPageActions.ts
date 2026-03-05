@@ -5,11 +5,13 @@ import {
   setupAddCustomTool,
   setupApply,
   setupRemoveCustomTool,
+  setupRouterHealth,
   setupSetToolAutoSync,
   setupSetToolTrackingEnabled,
   setupStatus,
   setupUpdateToolPaths,
   type SetupApplyResult,
+  type ToolRouterHealthStatus,
   type ToolStatus,
 } from "../../api/tauri";
 import type { MessageKey } from "../../i18n/messages";
@@ -33,6 +35,7 @@ type UseToolsPageActionsParams = {
   form: CustomToolForm;
   pathDrafts: Record<string, ToolPathDraft>;
   setTools: Dispatch<SetStateAction<ToolStatus[]>>;
+  setRouterHealthByTool: Dispatch<SetStateAction<Record<string, ToolRouterHealthStatus>>>;
   setPathDrafts: Dispatch<SetStateAction<Record<string, ToolPathDraft>>>;
   setStatus: Dispatch<SetStateAction<string>>;
   setApplyResults: Dispatch<SetStateAction<SetupApplyResult[]>>;
@@ -56,6 +59,7 @@ export function useToolsPageActions({
   form,
   pathDrafts,
   setTools,
+  setRouterHealthByTool,
   setPathDrafts,
   setStatus,
   setApplyResults,
@@ -72,8 +76,11 @@ export function useToolsPageActions({
     setBusy(true);
     setStatus(t("tools.loading"));
     try {
-      const data = await setupStatus();
+      const [data, routerHealth] = await Promise.all([setupStatus(), setupRouterHealth()]);
       setTools(data);
+      setRouterHealthByTool(
+        Object.fromEntries(routerHealth.map((item) => [item.toolId, item])),
+      );
       setPathDrafts(() => {
         const next: Record<string, ToolPathDraft> = {};
         for (const tool of data) {
@@ -90,7 +97,7 @@ export function useToolsPageActions({
     } finally {
       setBusy(false);
     }
-  }, [setBusy, setStatus, t, setTools, setPathDrafts]);
+  }, [setBusy, setStatus, t, setTools, setRouterHealthByTool, setPathDrafts]);
 
   const handleApplyAutoTools = useCallback(async () => {
     if (autoToolIds.length === 0) {

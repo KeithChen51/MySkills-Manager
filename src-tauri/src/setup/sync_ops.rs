@@ -117,6 +117,7 @@ pub(super) fn sync_skill_file(source: &Path, target: &Path) -> Result<String, St
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn remove_skill_target(target_dir: &Path, target_file: &Path) -> Result<(), String> {
     remove_if_exists(target_file)?;
     if target_dir.exists() {
@@ -127,4 +128,70 @@ pub(super) fn remove_skill_target(target_dir: &Path, target_file: &Path) -> Resu
         }
     }
     Ok(())
+}
+
+fn collect_relative_paths(dir: &Path, prefix: &Path) -> Result<Vec<String>, String> {
+    let mut paths = Vec::new();
+    let entries = fs::read_dir(dir).map_err(|e| format!("Read dir failed: {e}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Read entry failed: {e}"))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let entry_path = entry.path();
+        let rel = entry_path
+            .strip_prefix(prefix)
+            .map_err(|e| format!("Strip prefix failed: {e}"))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if entry_path.is_dir() {
+            paths.extend(collect_relative_paths(&entry_path, prefix)?);
+        } else {
+            paths.push(rel);
+        }
+    }
+    Ok(paths)
+}
+
+pub(super) fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
+    remove_if_exists(target)?;
+    fs::create_dir_all(target).map_err(|e| format!("Create target dir failed: {e}"))?;
+
+    let entries = fs::read_dir(source).map_err(|e| format!("Read source dir failed: {e}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Read entry failed: {e}"))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let src = entry.path();
+        let dst = target.join(&name);
+        if src.is_dir() {
+            copy_dir_recursive(&src, &dst)?;
+        } else {
+            fs::copy(&src, &dst).map_err(|e| format!("Copy file failed: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn dir_content_hash(dir: &Path) -> Result<String, String> {
+    use std::hash::{Hash, Hasher};
+
+    if !dir.exists() {
+        return Ok(String::new());
+    }
+
+    let mut rel_paths = collect_relative_paths(dir, dir)?;
+    rel_paths.sort();
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for rel in &rel_paths {
+        rel.hash(&mut hasher);
+        let file_path = dir.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let content = fs::read(&file_path).map_err(|e| format!("Read file for hash failed: {e}"))?;
+        content.hash(&mut hasher);
+    }
+    Ok(format!("{:016x}", hasher.finish()))
 }

@@ -3,6 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const ANTIGRAVITY_MANAGED_WORKFLOW_MANIFEST: &str = ".myskills-managed-workflows.json";
+const MYSKILLS_ROUTER_SKILL_NAME: &str = "myskills-router";
+const MYSKILLS_ROUTER_SKILL_MD: &str =
+    include_str!("../../../builtin-skills/myskills-router/SKILL.md");
 
 fn is_skill_enabled_for_tool(
     skill_name: &str,
@@ -148,6 +151,36 @@ fn sync_antigravity_workflow_aliases(
     Ok(current_managed.len())
 }
 
+fn ensure_router_skill_source(skills_root: &Path) -> Result<PathBuf, String> {
+    let source_dir = skills_root.join(MYSKILLS_ROUTER_SKILL_NAME);
+    let source_file = source_dir.join("SKILL.md");
+    fs::create_dir_all(&source_dir)
+        .map_err(|e| format!("Create myskills-router source dir failed: {e}"))?;
+
+    let should_write = match fs::read_to_string(&source_file) {
+        Ok(existing) => existing != MYSKILLS_ROUTER_SKILL_MD,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+        Err(err) => return Err(format!("Read myskills-router source failed: {err}")),
+    };
+    if should_write {
+        fs::write(&source_file, MYSKILLS_ROUTER_SKILL_MD)
+            .map_err(|e| format!("Write myskills-router source failed: {e}"))?;
+    }
+
+    Ok(source_dir)
+}
+
+fn ensure_codex_router_seeded(skills_root: &Path, codex_skills_dir: &Path) -> Result<bool, String> {
+    let target_dir = codex_skills_dir.join(MYSKILLS_ROUTER_SKILL_NAME);
+    if target_dir.join("SKILL.md").exists() {
+        return Ok(false);
+    }
+
+    let source_dir = ensure_router_skill_source(skills_root)?;
+    super::sync_ops::copy_dir_recursive(&source_dir, &target_dir)?;
+    Ok(true)
+}
+
 pub(super) fn sync_saved_skill_to_copy_tools_with_home(
     home: &Path,
     skills_root: &Path,
@@ -157,12 +190,13 @@ pub(super) fn sync_saved_skill_to_copy_tools_with_home(
     let stored_sync_config = super::read_sync_config(home)?;
     let config_ref = configured_skills(stored_sync_config.as_ref());
 
-    let source_file = crate::skills::list_skills(skills_root)?
+    let source_dir = crate::skills::list_skills(skills_root)?
         .into_iter()
         .find(|item| item.name == skill_name)
-        .map(|item| PathBuf::from(item.directory).join("SKILL.md"))
-        .unwrap_or_else(|| skills_root.join(skill_name).join("SKILL.md"));
+        .map(|item| PathBuf::from(item.directory))
+        .unwrap_or_else(|| skills_root.join(skill_name));
 
+    let source_file = source_dir.join("SKILL.md");
     if !source_file.exists() {
         return Ok(0);
     }
@@ -187,12 +221,9 @@ pub(super) fn sync_saved_skill_to_copy_tools_with_home(
         }
 
         let target_dir = tool.skills_dir.join(skill_name);
-        let target_file = target_dir.join("SKILL.md");
-        fs::create_dir_all(&target_dir).map_err(|e| format!("Create target dir failed: {e}"))?;
-        super::sync_ops::remove_if_exists(&target_file)?;
-        fs::copy(&source_file, &target_file).map_err(|e| format!("Copy skill file failed: {e}"))?;
+        super::sync_ops::copy_dir_recursive(&source_dir, &target_dir)?;
 
-        if tool.id == "antigravity" {
+        if tool.capabilities.startup_injection_supported && tool.id == "antigravity" {
             sync_antigravity_single_workflow_alias(
                 home,
                 &tool.skills_dir,
@@ -264,38 +295,35 @@ pub(super) fn apply_setup_with_paths(
 
         let mut synced_count = 0usize;
         let mut removed_count = 0usize;
-        let mut sync_mode = "symlink".to_string();
+        let sync_mode = "copy".to_string();
         let mut failure: Option<String> = None;
         let mut antigravity_aliases = BTreeMap::<String, PathBuf>::new();
+        let should_manage_antigravity_workflows =
+            tool.capabilities.startup_injection_supported && tool.id == "antigravity";
 
+        // Stage A: sync skills content.
         for skill in &skills {
-            let source = PathBuf::from(&skill.directory).join("SKILL.md");
+            let source_dir = PathBuf::from(&skill.directory);
+            let source_file = source_dir.join("SKILL.md");
             let target_dir = tool.skills_dir.join(&skill.name);
-            let target_file = target_dir.join("SKILL.md");
 
             if !is_skill_enabled_for_tool(&skill.name, &tool.id, config_ref) {
-                if let Err(err) = super::sync_ops::remove_skill_target(&target_dir, &target_file) {
-                    failure = Some(err);
-                    break;
+                if target_dir.exists() {
+                    if let Err(err) = super::sync_ops::remove_if_exists(&target_dir) {
+                        failure = Some(err);
+                        break;
+                    }
                 }
                 removed_count += 1;
                 continue;
             }
 
-            if let Err(err) = fs::create_dir_all(&target_dir) {
-                failure = Some(format!("Create target dir failed: {err}"));
-                break;
-            }
-
-            match super::sync_ops::sync_skill_file(&source, &target_file) {
-                Ok(mode) => {
-                    if mode == "copy" {
-                        sync_mode = "copy".to_string();
-                    }
-                    if tool.id == "antigravity" {
+            match super::sync_ops::copy_dir_recursive(&source_dir, &target_dir) {
+                Ok(()) => {
+                    if should_manage_antigravity_workflows {
                         antigravity_aliases.insert(
                             antigravity_workflow_alias_file_name(&skill.name),
-                            source.clone(),
+                            source_file,
                         );
                     }
                     synced_count += 1;
@@ -311,7 +339,7 @@ pub(super) fn apply_setup_with_paths(
             let failure_result = super::ApplyResult {
                 tool: tool.id.clone(),
                 success: false,
-                action: "sync failed".to_string(),
+                action: "skill sync stage failed".to_string(),
                 sync_mode: if synced_count == 0 {
                     "none".to_string()
                 } else {
@@ -327,27 +355,34 @@ pub(super) fn apply_setup_with_paths(
             ));
         }
 
-        if tool.id == "antigravity" {
-            if let Err(err) =
-                sync_antigravity_workflow_aliases(home, &tool.skills_dir, &antigravity_aliases)
-            {
-                let failure_result = super::ApplyResult {
-                    tool: tool.id.clone(),
-                    success: false,
-                    action: "sync failed".to_string(),
-                    sync_mode: if synced_count == 0 {
-                        "none".to_string()
-                    } else {
-                        sync_mode.clone()
-                    },
-                    synced_count,
-                    error: Some(err),
-                };
-                return Ok(super::sync_ops::finalize_with_rollback(
-                    out,
-                    failure_result,
-                    &rollback_paths,
-                ));
+        let mut router_seeded = false;
+        if tool.id == "codex" && tool.capabilities.native_skill_discovery {
+            match ensure_codex_router_seeded(skills_root, &tool.skills_dir) {
+                Ok(seed_applied) => {
+                    if seed_applied {
+                        synced_count += 1;
+                        router_seeded = true;
+                    }
+                }
+                Err(err) => {
+                    let failure_result = super::ApplyResult {
+                        tool: tool.id.clone(),
+                        success: false,
+                        action: "skill sync stage failed".to_string(),
+                        sync_mode: if synced_count == 0 {
+                            "none".to_string()
+                        } else {
+                            sync_mode.clone()
+                        },
+                        synced_count,
+                        error: Some(err),
+                    };
+                    return Ok(super::sync_ops::finalize_with_rollback(
+                        out,
+                        failure_result,
+                        &rollback_paths,
+                    ));
+                }
             }
         }
 
@@ -355,49 +390,54 @@ pub(super) fn apply_setup_with_paths(
             "synced {synced_count} skills to {} (removed {removed_count})",
             tool.skills_dir.to_string_lossy()
         )];
-        if tool.id == "antigravity" {
-            action_parts.push(format!(
-                "updated {} antigravity workflows",
-                antigravity_aliases.len()
-            ));
+        if router_seeded {
+            action_parts.push("seeded myskills-router".to_string());
         }
 
         let tracking_enabled = is_tracking_enabled_for_tool(&tool.id, &tracking_disabled_tools);
-        if let Some(rules_path) = tool.rules_path.as_ref() {
-            super::sync_ops::register_rollback_path(&mut rollback_paths, rules_path);
-            let rules_result = if tracking_enabled {
-                super::rule_hook_ops::ensure_rules_injected(&tool.id, rules_path)
-            } else {
-                super::rule_hook_ops::ensure_rules_removed(rules_path)
-            };
 
-            if let Err(err) = rules_result {
-                let failure_result = super::ApplyResult {
-                    tool: tool.id.clone(),
-                    success: false,
-                    action: "rules sync failed".to_string(),
-                    sync_mode: if synced_count == 0 {
-                        "none".to_string()
-                    } else {
-                        sync_mode.clone()
-                    },
-                    synced_count,
-                    error: Some(err),
-                };
-                return Ok(super::sync_ops::finalize_with_rollback(
-                    out,
-                    failure_result,
-                    &rollback_paths,
-                ));
+        // Stage B: instruction-chain gate (rules block) if supported.
+        if tool.capabilities.instruction_chain_supported {
+            if let Some(rules_path) = tool.rules_path.as_ref() {
+                super::sync_ops::register_rollback_path(&mut rollback_paths, rules_path);
+                match super::rule_hook_ops::apply_instruction_gate(
+                    &tool.id,
+                    rules_path,
+                    tracking_enabled,
+                ) {
+                    Ok(action) => action_parts.push(action),
+                    Err(err) => {
+                        let failure_result = super::ApplyResult {
+                            tool: tool.id.clone(),
+                            success: false,
+                            action: "instruction gate stage failed".to_string(),
+                            sync_mode: if synced_count == 0 {
+                                "none".to_string()
+                            } else {
+                                sync_mode.clone()
+                            },
+                            synced_count,
+                            error: Some(err),
+                        };
+                        return Ok(super::sync_ops::finalize_with_rollback(
+                            out,
+                            failure_result,
+                            &rollback_paths,
+                        ));
+                    }
+                }
             }
-            action_parts.push(if tracking_enabled {
-                format!("rules injected into {}", rules_path.to_string_lossy())
-            } else {
-                format!("rules removed from {}", rules_path.to_string_lossy())
-            });
         }
 
-        if tool.id == "claude-code" {
+        // Stage C: optional startup bootstrap (plugin/workflow/hook).
+        if should_manage_antigravity_workflows {
+            match sync_antigravity_workflow_aliases(home, &tool.skills_dir, &antigravity_aliases) {
+                Ok(count) => action_parts.push(format!("updated {count} antigravity workflows")),
+                Err(err) => action_parts.push(format!("startup bootstrap skipped: {err}")),
+            }
+        }
+
+        if tool.capabilities.hook_config_supported {
             super::sync_ops::register_rollback_path(
                 &mut rollback_paths,
                 &home.join(super::CLAUDE_HOOK_REL_PATH),
@@ -406,35 +446,11 @@ pub(super) fn apply_setup_with_paths(
                 &mut rollback_paths,
                 &home.join(".claude").join("settings.json"),
             );
-            let hook_result = if tracking_enabled {
-                super::rule_hook_ops::ensure_claude_hook(home)
-            } else {
-                super::rule_hook_ops::ensure_claude_hook_removed(home)
-            };
-            if let Err(err) = hook_result {
-                let failure_result = super::ApplyResult {
-                    tool: tool.id.clone(),
-                    success: false,
-                    action: "claude hook sync failed".to_string(),
-                    sync_mode: if synced_count == 0 {
-                        "none".to_string()
-                    } else {
-                        sync_mode.clone()
-                    },
-                    synced_count,
-                    error: Some(err),
-                };
-                return Ok(super::sync_ops::finalize_with_rollback(
-                    out,
-                    failure_result,
-                    &rollback_paths,
-                ));
+            match super::rule_hook_ops::apply_hook_configuration(home, &tool.id, tracking_enabled) {
+                Ok(Some(action)) => action_parts.push(action),
+                Ok(None) => {}
+                Err(err) => action_parts.push(format!("hook setup skipped: {err}")),
             }
-            action_parts.push(if tracking_enabled {
-                "claude hook configured".to_string()
-            } else {
-                "claude hook removed".to_string()
-            });
         }
 
         out.push(super::ApplyResult {

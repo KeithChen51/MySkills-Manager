@@ -1,4 +1,6 @@
-import type { ToolStatus } from "../../api/tauri";
+import { useState } from "react";
+
+import type { ToolRouterHealthStatus, ToolStatus } from "../../api/tauri";
 import { IconFolder } from "../../components/icons";
 import ToolLogo from "../../components/ToolLogo";
 import { formatLastSyncTime } from "../../domain/lastSyncTime";
@@ -13,6 +15,7 @@ type TranslateFn = (
 
 type ToolCardProps = {
   tool: ToolStatus;
+  routerHealth?: ToolRouterHealthStatus;
   installed: boolean;
   draft: ToolPathDraft;
   hasPathChange: boolean;
@@ -49,8 +52,29 @@ function pathSourceLabel(
   }
 }
 
+function healthBadgeClass(health: string) {
+  if (health === "healthy") {
+    return "ok";
+  }
+  if (health === "broken") {
+    return "warn";
+  }
+  return "neutral";
+}
+
+function healthLabel(health: string, t: TranslateFn) {
+  if (health === "healthy") {
+    return t("tools.routerHealth.healthy");
+  }
+  if (health === "broken") {
+    return t("tools.routerHealth.broken");
+  }
+  return t("tools.routerHealth.degraded");
+}
+
 export default function ToolCard({
   tool,
+  routerHealth,
   installed,
   draft,
   hasPathChange,
@@ -70,8 +94,10 @@ export default function ToolCard({
   onSaveToolPaths,
   onRemoveCustomTool,
 }: ToolCardProps) {
+  const [pathsOpen, setPathsOpen] = useState(false);
   const { skillsPathHealthy, rulesPathHealthy, skillsPathLabel, rulesPathLabel } =
     buildToolPathDiagnostics(tool);
+  const healthNeedsFix = routerHealth && routerHealth.health !== "healthy";
 
   return (
     <article key={tool.id} className={`tool-card ${installed ? "" : "tool-card-uninstalled"}`.trim()}>
@@ -124,7 +150,11 @@ export default function ToolCard({
 
       <div className="tool-card-divider" />
 
-      <details className="tool-paths-accordion">
+      <details
+        className="tool-paths-accordion"
+        open={pathsOpen}
+        onToggle={(event) => setPathsOpen((event.currentTarget as HTMLDetailsElement).open)}
+      >
         <summary className="tool-paths-summary">{t("tools.path.section")}</summary>
         <div className="tool-card-paths">
           <label className="tool-path-field">
@@ -181,6 +211,7 @@ export default function ToolCard({
         <div className="tool-card-meta">
           <span>{t("tools.syncedSkills")}: {tool.syncedSkills}</span>
           <span>{t("tools.syncMode")}: {tool.syncMode}</span>
+          <span>Integration: {tool.integrationMode}</span>
           <span>{t("tools.pathSource")}: {pathSourceLabel(tool.pathSource, t)}</span>
           <span>
             {t("tools.lastSync")}:{" "}
@@ -189,6 +220,14 @@ export default function ToolCard({
         </div>
 
         <div className="tool-card-flags">
+          {routerHealth && (
+            <span
+              className={`tool-card-badge ${healthBadgeClass(routerHealth.health)}`}
+              title={routerHealth.reason}
+            >
+              {healthLabel(routerHealth.health, t)}
+            </span>
+          )}
           <span className={`tool-card-badge ${tool.configured ? "ok" : "warn"}`}>
             {tool.configured ? t("tools.flag.rulesOk") : t("tools.flag.rulesMissing")}
           </span>
@@ -205,6 +244,28 @@ export default function ToolCard({
           )}
         </div>
       </footer>
+
+      {healthNeedsFix && (
+        <div className="tool-card-health-actions">
+          <button
+            type="button"
+            className="btn btn-ghost tool-card-action-btn"
+            onClick={onManualSync}
+            disabled={busy || syncingCurrentTool}
+          >
+            {t("tools.routerHealth.reapply")}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost tool-card-action-btn"
+            onClick={() => setPathsOpen(true)}
+            disabled={busy || savingCurrentTool}
+          >
+            {t("tools.routerHealth.openPath")}
+          </button>
+          <span className="tool-card-health-reason">{routerHealth.reason}</span>
+        </div>
+      )}
 
       <div className="tool-card-actions">
         {installed && (

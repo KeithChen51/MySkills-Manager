@@ -67,7 +67,7 @@ pub(super) fn detect_claude_hook(home: &Path) -> bool {
         return false;
     }
     match fs::read_to_string(settings) {
-        Ok(content) => content.contains("skill-tracker.sh"),
+        Ok(content) => content.contains("skill-tracker.sh") || content.contains("skill-tracker.ps1"),
         Err(_) => false,
     }
 }

@@ -10,25 +10,33 @@ mod apply_engine;
 mod rule_hook_ops;
 mod sync_ops;
 mod status_probe;
+mod tool_registry;
 mod tool_catalog;
 mod skills_overview;
 mod tool_mutations;
 mod status_aggregation;
 mod path_validation;
 mod conflict_resolution;
+mod router_health;
 mod types;
 
 pub use types::{
     ApplyResult, BuiltInToolPathAudit, CustomTool, LocalSkillsOverview, PathCandidateAudit,
     SetupMutationResult, SkillConflictDetail, SkillConflictVariant, SkillOverviewEntry,
-    SkillSyncConfig, ToolSkillOverview, ToolStatus,
+    SkillSyncConfig, ToolCapabilities, ToolRouterHealthStatus, ToolSkillOverview, ToolStatus,
 };
+
+fn default_import_mode() -> String {
+    "manual".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct SyncConfigFile {
     #[serde(default = "default_sync_mode")]
     sync_mode: String,
+    #[serde(default = "default_import_mode")]
+    import_mode: String,
     #[serde(default)]
     skills: Vec<SkillSyncConfig>,
     #[serde(default)]
@@ -81,6 +89,10 @@ fn write_sync_config(home: &Path, skills: &[SkillSyncConfig]) -> Result<(), Stri
         .as_ref()
         .map(|cfg| cfg.sync_mode.clone())
         .unwrap_or_else(default_sync_mode);
+    let import_mode = existing
+        .as_ref()
+        .map(|cfg| cfg.import_mode.clone())
+        .unwrap_or_else(default_import_mode);
     let auto_tools = existing
         .as_ref()
         .map(|cfg| cfg.auto_tools.clone())
@@ -92,6 +104,7 @@ fn write_sync_config(home: &Path, skills: &[SkillSyncConfig]) -> Result<(), Stri
         home,
         &SyncConfigFile {
             sync_mode,
+            import_mode,
             skills: skills.to_vec(),
             auto_tools,
             tracking_disabled_tools,
@@ -120,6 +133,10 @@ pub fn local_skills_overview_with_home(home: &Path) -> Result<LocalSkillsOvervie
 
 pub fn setup_status_with_home(home: &Path) -> Result<Vec<ToolStatus>, String> {
     status_aggregation::setup_status_with_home(home)
+}
+
+pub fn setup_router_health_with_home(home: &Path) -> Result<Vec<ToolRouterHealthStatus>, String> {
+    router_health::setup_router_health_with_home(home)
 }
 
 pub fn setup_path_validation_matrix_with_home(
@@ -151,6 +168,11 @@ pub fn setup_status() -> Result<Vec<ToolStatus>, String> {
 #[tauri::command]
 pub fn setup_path_validation_matrix() -> Result<Vec<BuiltInToolPathAudit>, String> {
     setup_path_validation_matrix_with_home(&crate::root_dir::default_home_dir())
+}
+
+#[tauri::command]
+pub fn setup_router_health() -> Result<Vec<ToolRouterHealthStatus>, String> {
+    setup_router_health_with_home(&crate::root_dir::default_home_dir())
 }
 
 #[tauri::command]
@@ -297,6 +319,41 @@ pub fn setup_apply(
     let home = crate::root_dir::default_home_dir();
     let skills_root = crate::root_dir::default_skills_root(&home);
     apply_setup_with_paths(&home, &skills_root, &tools, skills.as_deref())
+}
+
+fn get_import_mode_with_home(home: &Path) -> Result<String, String> {
+    let config = read_sync_config(home)?;
+    Ok(config
+        .map(|cfg| cfg.import_mode)
+        .unwrap_or_else(default_import_mode))
+}
+
+fn set_import_mode_with_home(home: &Path, mode: &str) -> Result<SetupMutationResult, String> {
+    let valid_modes = ["manual", "prompt", "auto"];
+    if !valid_modes.contains(&mode) {
+        return Err(format!("Invalid import mode: {mode}. Valid modes: manual, prompt, auto"));
+    }
+
+    let mut config = read_sync_config(home)?.unwrap_or(SyncConfigFile {
+        sync_mode: default_sync_mode(),
+        import_mode: default_import_mode(),
+        skills: Vec::new(),
+        auto_tools: Vec::new(),
+        tracking_disabled_tools: Vec::new(),
+    });
+    config.import_mode = mode.to_string();
+    write_sync_config_file(home, &config)?;
+    Ok(SetupMutationResult { success: true })
+}
+
+#[tauri::command]
+pub fn setup_get_import_mode() -> Result<String, String> {
+    get_import_mode_with_home(&crate::root_dir::default_home_dir())
+}
+
+#[tauri::command]
+pub fn setup_set_import_mode(mode: String) -> Result<SetupMutationResult, String> {
+    set_import_mode_with_home(&crate::root_dir::default_home_dir(), &mode)
 }
 
 #[cfg(test)]

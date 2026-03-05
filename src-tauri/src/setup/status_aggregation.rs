@@ -6,6 +6,25 @@ use super::config_store::read_sync_config;
 use super::status_probe::{detect_claude_hook, detect_sync_stats, file_contains_marker};
 use super::{all_tools, ToolStatus};
 
+fn integration_mode(capabilities: &super::ToolCapabilities) -> String {
+    if capabilities.native_skill_discovery && capabilities.instruction_chain_supported {
+        "native".to_string()
+    } else {
+        "fallback".to_string()
+    }
+}
+
+fn detect_hook_configuration(home: &Path, tool: &super::tool_catalog::ToolDescriptor) -> bool {
+    if !tool.capabilities.hook_config_supported {
+        return false;
+    }
+
+    match tool.id.as_str() {
+        "claude-code" => detect_claude_hook(home),
+        _ => false,
+    }
+}
+
 pub(super) fn path_writable(path: &Path) -> bool {
     if let Ok(metadata) = fs::metadata(path) {
         return !metadata.permissions().readonly();
@@ -55,11 +74,7 @@ pub(super) fn setup_status_with_home(home: &Path) -> Result<Vec<ToolStatus>, Str
             .map(|path| file_contains_marker(path))
             .unwrap_or(false);
         let (synced_skills, sync_mode, last_sync_time) = detect_sync_stats(&tool.skills_dir)?;
-        let hook_configured = if tool.id == "claude-code" {
-            detect_claude_hook(home)
-        } else {
-            false
-        };
+        let hook_configured = detect_hook_configuration(home, &tool);
 
         list.push(ToolStatus {
             name: tool.name.clone(),
@@ -84,6 +99,8 @@ pub(super) fn setup_status_with_home(home: &Path) -> Result<Vec<ToolStatus>, Str
             auto_sync: auto_tools.contains(&tool.id),
             tracking_enabled: !tracking_disabled_tools.contains(&tool.id),
             hook_configured,
+            integration_mode: integration_mode(&tool.capabilities),
+            capabilities: tool.capabilities.clone(),
             is_custom: tool.is_custom,
         });
     }

@@ -31,6 +31,19 @@ fn find_path_audit<'a>(list: &'a [BuiltInToolPathAudit], id: &str) -> &'a BuiltI
         .expect("find path audit")
 }
 
+fn find_router_health<'a>(
+    list: &'a [ToolRouterHealthStatus],
+    id: &str,
+) -> &'a ToolRouterHealthStatus {
+    list.iter()
+        .find(|item| item.tool_id == id)
+        .expect("find tool router health")
+}
+
+fn marker_count(raw: &str) -> usize {
+    raw.matches(super::TRACKER_BLOCK_START).count()
+}
+
 #[test]
 fn custom_tool_registry_adds_and_removes_tool() {
     let home = temp_home();
@@ -98,7 +111,56 @@ fn setup_status_reads_codex_configuration_and_copy_sync_mode() {
     assert_eq!(codex.synced_skills, 2);
     assert_eq!(codex.sync_mode, "copy");
     assert!(!codex.hook_configured);
+    assert_eq!(codex.integration_mode, "native");
+    assert!(codex.capabilities.native_skill_discovery);
+    assert!(codex.capabilities.instruction_chain_supported);
+    assert!(!codex.capabilities.startup_injection_supported);
+    assert!(!codex.capabilities.hook_config_supported);
     assert!(!codex.is_custom);
+}
+
+#[test]
+fn setup_status_exposes_capability_model_for_builtin_and_custom_tools() {
+    let home = temp_home();
+    let codex_skills = home.join(".codex").join("skills");
+    fs::create_dir_all(codex_skills.join("code-review")).expect("create codex skill dir");
+    fs::write(
+        codex_skills.join("code-review").join("SKILL.md"),
+        "---\nname: code-review\n---\n",
+    )
+    .expect("write codex skill");
+
+    add_custom_tool_with_home(
+        &home,
+        CustomTool {
+            name: "Aider".to_string(),
+            id: "aider".to_string(),
+            skills_dir: home
+                .join(".aider")
+                .join("skills")
+                .to_string_lossy()
+                .to_string(),
+            rules_file: None,
+            icon: None,
+        },
+    )
+    .expect("add custom tool");
+
+    let list = setup_status_with_home(&home).expect("setup status");
+    let codex = find_tool(&list, "codex");
+    let aider = find_tool(&list, "aider");
+
+    assert_eq!(codex.integration_mode, "native");
+    assert!(codex.capabilities.native_skill_discovery);
+    assert!(codex.capabilities.instruction_chain_supported);
+    assert!(!codex.capabilities.startup_injection_supported);
+    assert!(!codex.capabilities.hook_config_supported);
+
+    assert_eq!(aider.integration_mode, "fallback");
+    assert!(aider.capabilities.native_skill_discovery);
+    assert!(!aider.capabilities.instruction_chain_supported);
+    assert!(!aider.capabilities.startup_injection_supported);
+    assert!(!aider.capabilities.hook_config_supported);
 }
 
 #[test]
@@ -116,6 +178,50 @@ fn setup_status_exposes_last_sync_time_for_copy_mode() {
     let codex = find_tool(&list, "codex");
     assert_eq!(codex.sync_mode, "copy");
     assert!(codex.last_sync_time.is_some());
+}
+
+#[test]
+fn setup_status_prefers_codex_agents_skills_when_available() {
+    let home = temp_home();
+    let agents_skills = home.join(".agents").join("skills");
+    let codex_skills = home.join(".codex").join("skills");
+
+    fs::create_dir_all(agents_skills.join("router-skill")).expect("create agents skill dir");
+    fs::write(
+        agents_skills.join("router-skill").join("SKILL.md"),
+        "---\nname: router-skill\n---\n",
+    )
+    .expect("write agents skill");
+
+    fs::create_dir_all(codex_skills.join("legacy-skill")).expect("create codex skill dir");
+    fs::write(
+        codex_skills.join("legacy-skill").join("SKILL.md"),
+        "---\nname: legacy-skill\n---\n",
+    )
+    .expect("write codex skill");
+
+    let list = setup_status_with_home(&home).expect("setup status");
+    let codex = find_tool(&list, "codex");
+    assert_eq!(codex.skills_dir, agents_skills.to_string_lossy().to_string());
+    assert_eq!(codex.path_source, "auto-detected");
+}
+
+#[test]
+fn setup_status_falls_back_to_legacy_codex_skills_when_agents_missing() {
+    let home = temp_home();
+    let codex_skills = home.join(".codex").join("skills");
+
+    fs::create_dir_all(codex_skills.join("legacy-skill")).expect("create codex skill dir");
+    fs::write(
+        codex_skills.join("legacy-skill").join("SKILL.md"),
+        "---\nname: legacy-skill\n---\n",
+    )
+    .expect("write codex skill");
+
+    let list = setup_status_with_home(&home).expect("setup status");
+    let codex = find_tool(&list, "codex");
+    assert_eq!(codex.skills_dir, codex_skills.to_string_lossy().to_string());
+    assert_eq!(codex.path_source, "default");
 }
 
 #[test]
@@ -291,6 +397,10 @@ fn setup_path_validation_matrix_reports_candidates_and_review_flags() {
     assert_eq!(codex.path_source, "default");
     assert!(!codex.selected_candidate_exists);
     assert!(codex.needs_manual_review);
+    assert!(codex
+        .candidates
+        .iter()
+        .any(|candidate| candidate.skills_dir.contains(".agents")));
 }
 
 #[test]
@@ -306,6 +416,221 @@ fn setup_status_detects_claude_hook() {
     let list = setup_status_with_home(&home).expect("setup status");
     let claude = find_tool(&list, "claude-code");
     assert!(claude.hook_configured);
+    assert!(claude.capabilities.hook_config_supported);
+    assert_eq!(claude.integration_mode, "native");
+}
+
+#[test]
+fn setup_router_health_reports_broken_when_router_not_discoverable() {
+    let home = temp_home();
+    fs::create_dir_all(home.join(".codex").join("skills").join("code-review"))
+        .expect("create codex skill dir");
+    fs::write(
+        home.join(".codex")
+            .join("skills")
+            .join("code-review")
+            .join("SKILL.md"),
+        "---\nname: code-review\n---\n",
+    )
+    .expect("write codex skill");
+
+    let health = setup_router_health_with_home(&home).expect("router health");
+    let codex = find_router_health(&health, "codex");
+
+    assert_eq!(codex.health, "broken");
+    assert!(!codex.discoverable);
+    assert!(codex.reason.contains("not discoverable"));
+}
+
+#[test]
+fn setup_router_health_reports_healthy_and_last_usage_when_ready() {
+    let home = temp_home();
+    let codex_skills = home.join(".codex").join("skills");
+    fs::create_dir_all(codex_skills.join("myskills-router")).expect("create router dir");
+    fs::write(
+        codex_skills.join("myskills-router").join("SKILL.md"),
+        "---\nname: myskills-router\n---\n",
+    )
+    .expect("write router skill");
+
+    let codex_rules = home.join(".codex").join("AGENTS.md");
+    ensure_rules_injected("codex", &codex_rules).expect("inject codex rules");
+
+    let logs_dir = home.join("my-skills").join(".logs");
+    fs::create_dir_all(&logs_dir).expect("create logs dir");
+    fs::write(
+        logs_dir.join("skill-usage.jsonl"),
+        r#"{"ts":"2026-03-05T01:00:00Z","skill":"myskills-router","cwd":"/tmp/a","tool":"codex"}"#,
+    )
+    .expect("write router usage logs");
+
+    let health = setup_router_health_with_home(&home).expect("router health");
+    let codex = find_router_health(&health, "codex");
+
+    assert_eq!(codex.health, "healthy");
+    assert!(codex.discoverable);
+    assert!(codex.gate_present);
+    assert_eq!(
+        codex.last_usage_seen.as_deref(),
+        Some("2026-03-05T01:00:00Z")
+    );
+}
+
+#[test]
+fn setup_router_health_reports_degraded_when_startup_bootstrap_missing() {
+    let home = temp_home();
+    let claude_skills = home.join(".claude").join("skills");
+    fs::create_dir_all(claude_skills.join("myskills-router")).expect("create router dir");
+    fs::write(
+        claude_skills.join("myskills-router").join("SKILL.md"),
+        "---\nname: myskills-router\n---\n",
+    )
+    .expect("write router skill");
+
+    let claude_rules = home.join(".claude").join("CLAUDE.md");
+    ensure_rules_injected("claude-code", &claude_rules).expect("inject claude rules");
+
+    let health = setup_router_health_with_home(&home).expect("router health");
+    let claude = find_router_health(&health, "claude-code");
+
+    assert_eq!(claude.health, "degraded");
+    assert!(claude.discoverable);
+    assert!(claude.gate_present);
+    assert_eq!(claude.startup_injection_present, Some(false));
+    assert!(claude.reason.contains("startup bootstrap"));
+}
+
+#[test]
+fn capability_contract_native_only_tool_keeps_path_selection_router_and_gate_idempotent() {
+    let home = temp_home();
+    let skills_root = temp_home();
+    let codex_agents_skills = home.join(".agents").join("skills");
+    fs::create_dir_all(&codex_agents_skills).expect("create .agents skills");
+
+    fs::create_dir_all(skills_root.join("myskills-router")).expect("create router skill dir");
+    fs::write(
+        skills_root.join("myskills-router").join("SKILL.md"),
+        "---\nname: myskills-router\n---\n",
+    )
+    .expect("write router skill");
+    fs::create_dir_all(skills_root.join("code-review")).expect("create code-review skill dir");
+    fs::write(
+        skills_root.join("code-review").join("SKILL.md"),
+        "---\nname: code-review\n---\n",
+    )
+    .expect("write code-review skill");
+
+    let first = apply_setup_with_paths(&home, &skills_root, &["codex".to_string()], None)
+        .expect("first apply");
+    let second = apply_setup_with_paths(&home, &skills_root, &["codex".to_string()], None)
+        .expect("second apply");
+    assert!(first[0].success);
+    assert!(second[0].success);
+
+    let status = setup_status_with_home(&home).expect("setup status");
+    let codex = find_tool(&status, "codex");
+    assert_eq!(
+        codex.skills_dir,
+        codex_agents_skills.to_string_lossy().to_string()
+    );
+    assert!(home
+        .join(".agents")
+        .join("skills")
+        .join("myskills-router")
+        .join("SKILL.md")
+        .exists());
+
+    let codex_rules =
+        fs::read_to_string(home.join(".codex").join("AGENTS.md")).expect("read codex rules");
+    assert_eq!(marker_count(&codex_rules), 1);
+
+    let health = setup_router_health_with_home(&home).expect("router health");
+    let codex_health = find_router_health(&health, "codex");
+    assert_eq!(codex_health.health, "healthy");
+    assert!(codex_health.discoverable);
+    assert!(codex_health.gate_present);
+}
+
+#[test]
+fn capability_contract_native_hook_tool_covers_router_gate_and_hook_bootstrap() {
+    let home = temp_home();
+    let skills_root = temp_home();
+    fs::create_dir_all(skills_root.join("myskills-router")).expect("create router skill dir");
+    fs::write(
+        skills_root.join("myskills-router").join("SKILL.md"),
+        "---\nname: myskills-router\n---\n",
+    )
+    .expect("write router skill");
+
+    let result = apply_setup_with_paths(&home, &skills_root, &["claude-code".to_string()], None)
+        .expect("apply setup");
+    assert!(result[0].success);
+    assert!(home.join(super::CLAUDE_HOOK_REL_PATH).exists());
+
+    let settings_raw = fs::read_to_string(home.join(".claude").join("settings.json"))
+        .expect("read claude settings");
+    assert_eq!(settings_raw.matches("skill-tracker").count(), 1);
+
+    let health = setup_router_health_with_home(&home).expect("router health");
+    let claude = find_router_health(&health, "claude-code");
+    assert_eq!(claude.health, "healthy");
+    assert!(claude.discoverable);
+    assert!(claude.gate_present);
+    assert_eq!(claude.startup_injection_present, Some(true));
+}
+
+#[test]
+fn capability_contract_fallback_tool_still_syncs_router_without_gate_dependencies() {
+    let home = temp_home();
+    let skills_root = temp_home();
+    fs::create_dir_all(skills_root.join("myskills-router")).expect("create router skill dir");
+    fs::write(
+        skills_root.join("myskills-router").join("SKILL.md"),
+        "---\nname: myskills-router\n---\n",
+    )
+    .expect("write router skill");
+    fs::create_dir_all(skills_root.join("code-review")).expect("create code-review skill dir");
+    fs::write(
+        skills_root.join("code-review").join("SKILL.md"),
+        "---\nname: code-review\n---\n",
+    )
+    .expect("write code-review skill");
+
+    add_custom_tool_with_home(
+        &home,
+        CustomTool {
+            name: "Aider".to_string(),
+            id: "aider".to_string(),
+            skills_dir: home
+                .join(".aider")
+                .join("skills")
+                .to_string_lossy()
+                .to_string(),
+            rules_file: None,
+            icon: None,
+        },
+    )
+    .expect("add custom tool");
+
+    let result = apply_setup_with_paths(&home, &skills_root, &["aider".to_string()], None)
+        .expect("apply setup");
+    assert!(result[0].success);
+    assert!(home
+        .join(".aider")
+        .join("skills")
+        .join("myskills-router")
+        .join("SKILL.md")
+        .exists());
+
+    let status = setup_status_with_home(&home).expect("setup status");
+    let aider = find_tool(&status, "aider");
+    assert_eq!(aider.integration_mode, "fallback");
+    assert!(!aider.capabilities.instruction_chain_supported);
+
+    let health = setup_router_health_with_home(&home).expect("router health");
+    let aider_health = find_router_health(&health, "aider");
+    assert_eq!(aider_health.health, "healthy");
+    assert!(aider_health.discoverable);
 }
 
 #[test]
@@ -331,7 +656,7 @@ fn setup_apply_syncs_skills_to_codex() {
         .expect("apply setup");
     assert_eq!(result.len(), 1);
     assert!(result[0].success);
-    assert_eq!(result[0].synced_count, 2);
+    assert_eq!(result[0].synced_count, 3);
     assert!(result[0].sync_mode == "symlink" || result[0].sync_mode == "copy");
 
     assert!(home
@@ -344,6 +669,12 @@ fn setup_apply_syncs_skills_to_codex() {
         .join(".codex")
         .join("skills")
         .join("debug-helper")
+        .join("SKILL.md")
+        .exists());
+    assert!(home
+        .join(".codex")
+        .join("skills")
+        .join("myskills-router")
         .join("SKILL.md")
         .exists());
 }
@@ -428,6 +759,40 @@ fn setup_apply_updates_only_managed_antigravity_workflow_aliases() {
 }
 
 #[test]
+fn setup_apply_degrades_gracefully_when_claude_hook_stage_fails() {
+    let home = temp_home();
+    let skills_root = temp_home();
+
+    fs::create_dir_all(skills_root.join("code-review")).expect("create skill dir");
+    fs::write(
+        skills_root.join("code-review").join("SKILL.md"),
+        "---\nname: code-review\n---\n",
+    )
+    .expect("write skill");
+
+    let claude_dir = home.join(".claude");
+    fs::create_dir_all(&claude_dir).expect("create claude dir");
+    fs::create_dir_all(claude_dir.join("settings.json"))
+        .expect("create directory where settings file should be");
+
+    let result = apply_setup_with_paths(&home, &skills_root, &["claude-code".to_string()], None)
+        .expect("apply setup");
+    assert_eq!(result.len(), 1);
+    assert!(result[0].success);
+    assert!(result[0].action.contains("hook setup skipped"));
+
+    let rules_path = home.join(".claude").join("CLAUDE.md");
+    let rules = fs::read_to_string(rules_path).expect("read CLAUDE.md");
+    assert!(rules.contains("[MySkills Manager]"));
+    assert!(home
+        .join(".claude")
+        .join("skills")
+        .join("code-review")
+        .join("SKILL.md")
+        .exists());
+}
+
+#[test]
 fn setup_apply_respects_per_tool_skill_config() {
     let home = temp_home();
     let skills_root = temp_home();
@@ -464,7 +829,7 @@ fn setup_apply_respects_per_tool_skill_config() {
         .expect("apply setup");
 
     assert!(result[0].success);
-    assert_eq!(result[0].synced_count, 1);
+    assert_eq!(result[0].synced_count, 2);
     assert!(home
         .join(".codex")
         .join("skills")
@@ -475,6 +840,12 @@ fn setup_apply_respects_per_tool_skill_config() {
         .join(".codex")
         .join("skills")
         .join("debug-helper")
+        .join("SKILL.md")
+        .exists());
+    assert!(home
+        .join(".codex")
+        .join("skills")
+        .join("myskills-router")
         .join("SKILL.md")
         .exists());
 }
@@ -516,7 +887,7 @@ fn setup_apply_treats_empty_skill_config_as_unconfigured() {
         .expect("apply setup");
 
     assert!(result[0].success);
-    assert_eq!(result[0].synced_count, 2);
+    assert_eq!(result[0].synced_count, 3);
     assert!(home
         .join(".codex")
         .join("skills")
@@ -527,6 +898,12 @@ fn setup_apply_treats_empty_skill_config_as_unconfigured() {
         .join(".codex")
         .join("skills")
         .join("debug-helper")
+        .join("SKILL.md")
+        .exists());
+    assert!(home
+        .join(".codex")
+        .join("skills")
+        .join("myskills-router")
         .join("SKILL.md")
         .exists());
 }
@@ -1348,6 +1725,38 @@ fn tool_catalog_must_be_extracted_from_setup_module() {
             "tool catalog should live outside setup.rs: {signature}"
         );
     }
+}
+
+#[test]
+fn tool_registry_must_own_builtin_tool_definitions() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let catalog_source = fs::read_to_string(
+        manifest_dir
+            .join("src")
+            .join("setup")
+            .join("tool_catalog.rs"),
+    )
+    .expect("read tool_catalog.rs");
+    let registry_source = fs::read_to_string(
+        manifest_dir
+            .join("src")
+            .join("setup")
+            .join("tool_registry.rs"),
+    )
+    .expect("read tool_registry.rs");
+
+    assert!(
+        !catalog_source.contains("fn built_in_defaults("),
+        "built-in tool defaults should live in tool_registry.rs"
+    );
+    assert!(
+        catalog_source.contains("super::tool_registry::built_in_tool_definitions(home)"),
+        "tool_catalog should consume definitions from tool_registry.rs"
+    );
+    assert!(
+        registry_source.contains("pub(super) fn built_in_tool_definitions(home: &Path)"),
+        "tool_registry.rs should expose built-in tool definitions"
+    );
 }
 
 #[test]

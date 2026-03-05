@@ -1,6 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use super::tool_catalog::ToolDescriptor;
@@ -28,13 +26,6 @@ pub(super) fn setup_skill_source_dirs_with_home(
     Ok(out)
 }
 
-fn skill_file_hash(skill_file: &Path) -> Result<String, String> {
-    let raw = fs::read(skill_file).map_err(|e| format!("Read SKILL.md failed: {e}"))?;
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    raw.hash(&mut hasher);
-    Ok(format!("{:016x}", hasher.finish()))
-}
-
 fn skill_hashes_by_name(root: &Path) -> Result<HashMap<String, String>, String> {
     let mut out = HashMap::<String, String>::new();
     if !root.exists() {
@@ -43,8 +34,8 @@ fn skill_hashes_by_name(root: &Path) -> Result<HashMap<String, String>, String> 
 
     let skills = crate::skills::list_skills(root)?;
     for skill in skills {
-        let skill_path = PathBuf::from(&skill.directory).join("SKILL.md");
-        let hash = skill_file_hash(&skill_path)?;
+        let skill_dir = PathBuf::from(&skill.directory);
+        let hash = super::sync_ops::dir_content_hash(&skill_dir)?;
         out.insert(skill.name, hash);
     }
 
@@ -78,8 +69,8 @@ pub(super) fn local_skills_overview_with_home(home: &Path) -> Result<LocalSkills
                 if seen.contains_key(&skill.name) {
                     continue;
                 }
-                let skill_path = PathBuf::from(&skill.directory).join("SKILL.md");
-                let hash = skill_file_hash(&skill_path)?;
+                let skill_dir = PathBuf::from(&skill.directory);
+                let hash = super::sync_ops::dir_content_hash(&skill_dir)?;
                 seen.insert(skill.name, hash);
             }
         }

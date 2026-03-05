@@ -5,9 +5,7 @@ use super::config_store::{
     read_custom_tools, read_sync_config, read_tool_path_overrides, write_custom_tools,
     write_sync_config_file, write_tool_path_overrides,
 };
-use super::rule_hook_ops::{
-    ensure_claude_hook, ensure_claude_hook_removed, ensure_rules_injected, ensure_rules_removed,
-};
+use super::rule_hook_ops::{apply_hook_configuration, apply_instruction_gate};
 use super::tool_catalog::is_built_in_tool_id;
 use super::{
     all_tools, default_sync_mode, normalize_tool_ids, CustomTool, SetupMutationResult, SyncConfigFile,
@@ -144,6 +142,7 @@ pub(super) fn set_tool_auto_sync_with_home(
 
     let mut config = read_sync_config(home)?.unwrap_or(SyncConfigFile {
         sync_mode: default_sync_mode(),
+        import_mode: super::default_import_mode(),
         skills: Vec::new(),
         auto_tools: Vec::new(),
         tracking_disabled_tools: Vec::new(),
@@ -174,6 +173,7 @@ pub(super) fn set_tool_tracking_enabled_with_home(
 
     let mut config = read_sync_config(home)?.unwrap_or(SyncConfigFile {
         sync_mode: default_sync_mode(),
+        import_mode: super::default_import_mode(),
         skills: Vec::new(),
         auto_tools: Vec::new(),
         tracking_disabled_tools: Vec::new(),
@@ -192,20 +192,14 @@ pub(super) fn set_tool_tracking_enabled_with_home(
     config.tracking_disabled_tools = normalize_tool_ids(disabled_tools.into_iter().collect());
     write_sync_config_file(home, &config)?;
 
-    if let Some(rules_path) = tool.rules_path.as_ref() {
-        if enabled {
-            ensure_rules_injected(&tool_id, rules_path)?;
-        } else {
-            ensure_rules_removed(rules_path)?;
+    if tool.capabilities.instruction_chain_supported {
+        if let Some(rules_path) = tool.rules_path.as_ref() {
+            apply_instruction_gate(&tool_id, rules_path, enabled)?;
         }
     }
 
-    if tool_id == "claude-code" {
-        if enabled {
-            ensure_claude_hook(home)?;
-        } else {
-            ensure_claude_hook_removed(home)?;
-        }
+    if tool.capabilities.hook_config_supported {
+        apply_hook_configuration(home, &tool_id, enabled)?;
     }
 
     Ok(SetupMutationResult { success: true })

@@ -44,6 +44,11 @@ export type SaveResult = {
   success: boolean;
 };
 
+export type SkillFileEntry = {
+  path: string;
+  size: number;
+};
+
 export type RulesContent = {
   content: string;
 };
@@ -133,7 +138,27 @@ export type ToolStatus = {
   autoSync: boolean;
   trackingEnabled: boolean;
   hookConfigured: boolean;
+  integrationMode: "native" | "fallback" | string;
+  capabilities: ToolCapabilities;
   isCustom: boolean;
+};
+
+export type ToolCapabilities = {
+  nativeSkillDiscovery: boolean;
+  instructionChainSupported: boolean;
+  startupInjectionSupported: boolean;
+  hookConfigSupported: boolean;
+};
+
+export type ToolRouterHealthStatus = {
+  toolId: string;
+  toolName: string;
+  discoverable: boolean;
+  gatePresent: boolean;
+  startupInjectionPresent?: boolean;
+  lastUsageSeen?: string;
+  health: "healthy" | "degraded" | "broken" | string;
+  reason: string;
 };
 
 export type PathCandidateAudit = {
@@ -216,6 +241,8 @@ export type SkillConflictVariant = {
   inMySkills: boolean;
   hashMatchesMySkills: boolean;
   content: string;
+  fileList: string[];
+  sourceDir: string;
 };
 
 export type SkillConflictDetail = {
@@ -276,6 +303,10 @@ export async function skillsSaveContent(
   return invokeWithError<SaveResult>("skills_save_content", { name, content });
 }
 
+export async function skillsListFiles(name: string): Promise<SkillFileEntry[]> {
+  return invokeWithError<SkillFileEntry[]>("skills_list_files", { name });
+}
+
 export async function statsGet(days?: number): Promise<StatsResult> {
   return invokeWithError<StatsResult>("stats_get", { days });
 }
@@ -306,6 +337,10 @@ export async function gitPush(): Promise<GitPushResult> {
 
 export async function setupStatus(): Promise<ToolStatus[]> {
   return invokeWithError<ToolStatus[]>("setup_status");
+}
+
+export async function setupRouterHealth(): Promise<ToolRouterHealthStatus[]> {
+  return invokeWithError<ToolRouterHealthStatus[]>("setup_router_health");
 }
 
 export async function setupPathValidationMatrix(): Promise<BuiltInToolPathAudit[]> {
@@ -401,4 +436,12 @@ export async function onboardingComplete(autoSync: boolean): Promise<OnboardingC
 
 export async function onboardingImportInstalledSkills(): Promise<OnboardingImportSkillsResult> {
   return invokeWithError<OnboardingImportSkillsResult>("onboarding_import_installed_skills");
+}
+
+export async function setupGetImportMode(): Promise<string> {
+  return invokeWithError<string>("setup_get_import_mode");
+}
+
+export async function setupSetImportMode(mode: string): Promise<SetupMutationResult> {
+  return invokeWithError<SetupMutationResult>("setup_set_import_mode", { mode });
 }

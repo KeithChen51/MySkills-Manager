@@ -1,5 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCapabilities {
+    pub native_skill_discovery: bool,
+    pub instruction_chain_supported: bool,
+    pub startup_injection_supported: bool,
+    pub hook_config_supported: bool,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolStatus {
@@ -21,6 +30,8 @@ pub struct ToolStatus {
     pub auto_sync: bool,
     pub tracking_enabled: bool,
     pub hook_configured: bool,
+    pub integration_mode: String,
+    pub capabilities: ToolCapabilities,
     pub is_custom: bool,
 }
 
@@ -33,6 +44,8 @@ pub struct SkillConflictVariant {
     pub in_my_skills: bool,
     pub hash_matches_my_skills: bool,
     pub content: String,
+    pub file_list: Vec<String>,
+    pub source_dir: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -130,4 +143,17 @@ pub struct LocalSkillsOverview {
 pub struct SkillSyncConfig {
     pub skill_name: String,
     pub enabled_tools: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRouterHealthStatus {
+    pub tool_id: String,
+    pub tool_name: String,
+    pub discoverable: bool,
+    pub gate_present: bool,
+    pub startup_injection_present: Option<bool>,
+    pub last_usage_seen: Option<String>,
+    pub health: String,
+    pub reason: String,
 }

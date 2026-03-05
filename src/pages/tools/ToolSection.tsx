@@ -1,4 +1,4 @@
-import type { ToolStatus } from "../../api/tauri";
+import type { ToolRouterHealthStatus, ToolStatus } from "../../api/tauri";
 import type { MessageKey } from "../../i18n/messages";
 import type { PathPickerTarget, ToolPathDraft } from "../toolsPathPicker";
 import ToolCard from "./ToolCard";
@@ -12,6 +12,7 @@ type ToolSectionProps = {
   title: string;
   tools: ToolStatus[];
   installed: boolean;
+  routerHealthByTool: Record<string, ToolRouterHealthStatus>;
   pathDrafts: Record<string, ToolPathDraft>;
   busy: boolean;
   savingPathToolId: string | null;
@@ -37,6 +38,7 @@ export default function ToolSection({
   title,
   tools,
   installed,
+  routerHealthByTool,
   pathDrafts,
   busy,
   savingPathToolId,
@@ -68,6 +70,7 @@ export default function ToolSection({
               key={tool.id}
               tool={tool}
               installed={installed}
+              routerHealth={routerHealthByTool[tool.id]}
               draft={draft}
               hasPathChange={
                 normalizedPath(draft.skillsDir) !== normalizedPath(tool.skillsDir) ||

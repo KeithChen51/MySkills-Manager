@@ -45,6 +45,13 @@
   font-size: var(--text-xs);
 }
 
+.status-import {
+  color: var(--prism-aqua, #00bcd4);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  margin-left: auto;
+}
+
 .app-error-toast-wrap {
   display: grid;
   gap: var(--sp-sm);

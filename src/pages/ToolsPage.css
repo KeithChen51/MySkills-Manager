@@ -349,6 +349,18 @@
   min-height: 36px;
 }
 
+.tool-card-health-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-xs);
+}
+
+.tool-card-health-reason {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
 .tools-form-card {
   margin-top: var(--sp-xs);
 }

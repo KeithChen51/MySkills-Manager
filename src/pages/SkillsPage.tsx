@@ -491,7 +491,22 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
                         </div>
                         <div className="skills-overview-legend">
                           <span className="skills-overview-tag matched">当前基准</span>
+                          {conflictView.baseline.fileList.length > 0 && (
+                            <span className="skills-overview-tag tracked">
+                              {conflictView.baseline.fileList.length} 个文件
+                            </span>
+                          )}
                         </div>
+                        {conflictView.baseline.fileList.length > 1 && (
+                          <details className="skills-conflict-filelist">
+                            <summary>文件清单 ({conflictView.baseline.fileList.length})</summary>
+                            <ul>
+                              {conflictView.baseline.fileList.map((f) => (
+                                <li key={f}>{f}</li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
                         <pre className="skills-conflict-content">{conflictView.baseline.content}</pre>
                       </article>
                     )}
@@ -520,7 +535,22 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
                           <span className="skills-overview-tag conflict">与基准冲突</span>
                           <span className="skills-overview-tag duplicate">+{diff.added}</span>
                           <span className="skills-overview-tag duplicate">-{diff.removed}</span>
+                          {variant.fileList.length > 0 && (
+                            <span className="skills-overview-tag tracked">
+                              {variant.fileList.length} 个文件
+                            </span>
+                          )}
                         </div>
+                        {variant.fileList.length > 1 && (
+                          <details className="skills-conflict-filelist">
+                            <summary>文件清单 ({variant.fileList.length})</summary>
+                            <ul>
+                              {variant.fileList.map((f) => (
+                                <li key={f}>{f}</li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
                         {conflictViewMode === "full" ? (
                           <pre className="skills-conflict-content">{variant.content}</pre>
                         ) : diff.hasChanges ? (

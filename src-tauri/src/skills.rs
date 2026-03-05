@@ -29,8 +29,9 @@ pub struct SaveResult {
 
 fn split_frontmatter(raw: &str) -> Result<(Mapping, String), String> {
     let normalized = raw.replace("\r\n", "\n");
+    let normalized = normalized.strip_prefix('\u{feff}').unwrap_or(&normalized);
     if !normalized.starts_with("---\n") {
-        return Ok((Mapping::new(), normalized));
+        return Ok((Mapping::new(), normalized.to_string()));
     }
 
     let marker = "\n---\n";
@@ -197,6 +198,51 @@ pub fn skills_save_content(name: String, content: String) -> Result<SaveResult, 
     Ok(result)
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillFileEntry {
+    pub path: String,
+    pub size: u64,
+}
+
+fn list_files_recursive(base: &Path, current: &Path) -> Vec<SkillFileEntry> {
+    let mut out = Vec::new();
+    let Ok(entries) = fs::read_dir(current) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name.starts_with('.') {
+                continue;
+            }
+        }
+        if path.is_dir() {
+            out.extend(list_files_recursive(base, &path));
+        } else if path.is_file() {
+            let rel = path
+                .strip_prefix(base)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+            out.push(SkillFileEntry { path: rel, size });
+        }
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
+}
+
+pub fn list_files(root: &Path, name: &str) -> Result<Vec<SkillFileEntry>, String> {
+    let dir = locate_skill_dir(root, name)?;
+    Ok(list_files_recursive(&dir, &dir))
+}
+
+#[tauri::command]
+pub fn skills_list_files(name: String) -> Result<Vec<SkillFileEntry>, String> {
+    list_files(&crate::root_dir::default_root_dir(), &name)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -241,6 +287,22 @@ tags:
         let skills = list_skills(&root).expect("list skills");
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "code-review");
+    }
+
+    #[test]
+    fn list_skills_reads_metadata_with_utf8_bom() {
+        let root = temp_root();
+        fs::create_dir_all(root.join("myskills-router")).expect("create skill dir");
+        fs::write(
+            root.join("myskills-router").join("SKILL.md"),
+            "\u{feff}---\nname: myskills-router\ndescription: router\n---\n\n# Router\n",
+        )
+        .expect("write skill");
+
+        let skills = list_skills(&root).expect("list skills");
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "myskills-router");
+        assert_eq!(skills[0].description.as_deref(), Some("router"));
     }
 
     #[test]
