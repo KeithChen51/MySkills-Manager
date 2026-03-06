@@ -32,7 +32,7 @@ Skillar 的产品设计遵循三条原则：
 这三条原则对应到下方的核心能力：统一管理与同步、数据看板与日志、冲突治理与可控配置。
 ## 核心能力
 
-当前 README 内容已按仓库现状（`myskills-manager`）对齐。
+以下内容聚焦 `myskills-manager` 子项目当前已经落地的主应用能力。
 
 ### 1. Skills 管理与编辑
 
@@ -105,6 +105,10 @@ Skillar 的产品设计遵循三条原则：
 git clone https://github.com/KeithChen51/MySkills-Manager.git
 cd MySkills-Manager/myskills-manager
 npm install
+
+# 首次在本机运行时需要先安装 Tauri CLI（v2）
+cargo install tauri-cli --version "^2"
+
 cargo tauri dev
 ```
 
@@ -120,8 +124,9 @@ npm run build:desktop:windows
 
 ### 前置条件
 
-- Node.js 18+
-- Rust stable
+- Node.js 20.19+（或 22.12+）
+- Rust stable（当前 `src-tauri/Cargo.toml` 声明 `rust-version = 1.77.2`）
+- Tauri CLI v2（例如：`cargo install tauri-cli --version "^2"`）
 - Tauri 构建依赖
 
 ### 安装依赖
@@ -131,6 +136,14 @@ git clone https://github.com/KeithChen51/MySkills-Manager.git
 cd MySkills-Manager/myskills-manager
 npm install
 ```
+
+### 安装 Tauri CLI（首次一次性）
+
+```bash
+cargo install tauri-cli --version "^2"
+```
+
+说明：当前仓库没有把 Tauri CLI 作为项目内依赖一起安装，执行 `cargo tauri dev` / `cargo tauri build` 前需要先在本机准备好 CLI。
 
 ### 启动方式
 
@@ -181,6 +194,11 @@ npx tsx --test test/*.test.ts
 # Rust 测试
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
+
+### 当前测试状态
+
+- 2026-03-06 实测：`cargo test --manifest-path src-tauri/Cargo.toml` 全部通过。
+- 2026-03-06 实测：`npx tsx --test test/*.test.ts` 目前有 2 个失败断言，位于 `test/skillsConflictResolution.test.ts` 与 `test/toolsSwitchStyle.test.ts`。
 
 ## 项目结构
 
