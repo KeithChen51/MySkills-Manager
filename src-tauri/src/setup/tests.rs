@@ -1188,6 +1188,46 @@ fn local_skills_overview_marks_match_conflict_and_missing_vs_my_skills() {
 }
 
 #[test]
+fn local_skills_overview_ignores_line_ending_and_bom_only_drift() {
+    let home = temp_home();
+
+    let my_skill_dir = home.join("my-skills").join("router-skill");
+    fs::create_dir_all(&my_skill_dir).expect("create my skill dir");
+    fs::write(
+        my_skill_dir.join("SKILL.md"),
+        "\u{FEFF}---\r\nname: router-skill\r\ndescription: normalize me\r\n---\r\n",
+    )
+    .expect("write my skill");
+
+    let codex_skill_dir = home.join(".codex").join("skills").join("router-skill");
+    fs::create_dir_all(&codex_skill_dir).expect("create codex skill dir");
+    fs::write(
+        codex_skill_dir.join("SKILL.md"),
+        "---\nname: router-skill\ndescription: normalize me\n---\n",
+    )
+    .expect("write codex skill");
+
+    let overview = local_skills_overview_with_home(&home).expect("local skills overview");
+    assert_eq!(overview.matched_in_my_skills, 1);
+    assert_eq!(overview.missing_in_my_skills, 0);
+    assert_eq!(overview.conflict_with_my_skills, 0);
+
+    let codex = overview
+        .tools
+        .iter()
+        .find(|tool| tool.tool_id == "codex")
+        .expect("find codex");
+    let router = codex
+        .skills
+        .iter()
+        .find(|skill| skill.name == "router-skill")
+        .expect("find router skill");
+    assert!(router.in_my_skills);
+    assert!(router.hash_matches_my_skills);
+    assert!(!router.hash_conflicts_my_skills);
+}
+
+#[test]
 fn local_skills_overview_includes_codex_superpowers_skills() {
     let home = temp_home();
 
@@ -1276,6 +1316,35 @@ fn setup_get_skill_conflict_detail_includes_my_skills_and_tool_variants() {
         .find(|variant| variant.source_id == "codex")
         .expect("find codex variant");
     assert!(!codex.hash_matches_my_skills);
+}
+
+#[test]
+fn setup_get_skill_conflict_detail_ignores_line_ending_and_bom_only_drift() {
+    let home = temp_home();
+    let my_skill_dir = home.join("my-skills").join("myskills-router");
+    fs::create_dir_all(&my_skill_dir).expect("create my skill dir");
+    fs::write(
+        my_skill_dir.join("SKILL.md"),
+        "\u{FEFF}---\r\nname: myskills-router\r\ndescription: route first\r\n---\r\n",
+    )
+    .expect("write my skill");
+
+    let codex_skill_dir = home.join(".codex").join("skills").join("myskills-router");
+    fs::create_dir_all(&codex_skill_dir).expect("create codex skill dir");
+    fs::write(
+        codex_skill_dir.join("SKILL.md"),
+        "---\nname: myskills-router\ndescription: route first\n---\n",
+    )
+    .expect("write codex skill");
+
+    let detail =
+        setup_get_skill_conflict_detail_with_home(&home, "myskills-router").expect("get detail");
+    let codex = detail
+        .variants
+        .iter()
+        .find(|variant| variant.source_id == "codex")
+        .expect("find codex variant");
+    assert!(codex.hash_matches_my_skills);
 }
 
 #[test]

@@ -170,6 +170,20 @@ fn collect_relative_paths(dir: &Path, prefix: &Path) -> Result<Vec<String>, Stri
     Ok(paths)
 }
 
+fn canonicalize_text_for_hash(content: &[u8]) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(content).ok()?;
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut normalized = text.replace("\r\n", "\n");
+    if normalized.ends_with('\n') {
+        normalized.pop();
+    }
+    Some(normalized.into_bytes())
+}
+
+fn canonicalize_file_content_for_hash(content: &[u8]) -> Vec<u8> {
+    canonicalize_text_for_hash(content).unwrap_or_else(|| content.to_vec())
+}
+
 pub(crate) fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
     remove_if_exists(target)?;
     fs::create_dir_all(target).map_err(|e| format!("Create target dir failed: {e}"))?;
@@ -243,7 +257,8 @@ pub(super) fn dir_content_hash(dir: &Path) -> Result<String, String> {
         let file_path = dir.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
         let content =
             fs::read(&file_path).map_err(|e| format!("Read file for hash failed: {e}"))?;
-        hasher.update(content);
+        let normalized = canonicalize_file_content_for_hash(&content);
+        hasher.update(normalized);
         hasher.update([0u8]);
     }
     Ok(format!("{:x}", hasher.finalize()))
