@@ -3,52 +3,59 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-function readSkillsPageSource() {
-  const pagePath = path.resolve(process.cwd(), "src/pages/SkillsPage.tsx");
-  return fs.readFileSync(pagePath, "utf8");
+function readSource(relativePath: string) {
+  const filePath = path.resolve(process.cwd(), relativePath);
+  return fs.readFileSync(filePath, "utf8");
 }
 
 test("SkillsPage provides conflict detail, filtering, and resolve actions", () => {
-  const source = readSkillsPageSource();
+  const pageSource = readSource("src/pages/SkillsPage.tsx");
+  const controllerSource = readSource("src/pages/skills/useSkillsPageController.ts");
+  const drawerSource = readSource("src/pages/skills/SkillConflictDrawer.tsx");
+  const diffViewSource = readSource("src/pages/skills/useConflictDiffView.ts");
 
   assert.ok(
-    source.includes("setupGetSkillConflictDetail("),
-    "SkillsPage should request conflict detail when user opens a conflict",
+    pageSource.includes("useSkillsPageController"),
+    "SkillsPage should delegate conflict logic to the page controller hook",
   );
   assert.ok(
-    source.includes("setupResolveSkillConflict("),
-    "SkillsPage should call resolve API when user chooses a source",
-  );
-  assert.ok(
-    source.includes("handleOpenConflictResolver"),
+    pageSource.includes("handleOpenConflictResolver"),
     "SkillsPage should expose a dedicated conflict detail action",
   );
   assert.ok(
-    source.includes("handleResolveConflict"),
+    pageSource.includes("handleResolveConflict"),
     "SkillsPage should expose a dedicated conflict resolve action",
   );
   assert.ok(
-    source.includes("设为基准"),
-    "SkillsPage should offer a primary action to set selected source as baseline",
+    controllerSource.includes("setupGetSkillConflictDetail("),
+    "Controller should request conflict detail when user opens a conflict",
   );
   assert.ok(
-    source.includes("!variant.hashMatchesMySkills"),
-    "SkillsPage conflict drawer should hide variants that already match baseline",
+    controllerSource.includes("setupResolveSkillConflict("),
+    "Controller should call resolve API when user chooses a source",
   );
   assert.ok(
-    source.includes("buildSkillDiff("),
-    "SkillsPage should build readable diff between baseline and conflicting variant",
+    diffViewSource.includes("!variant.hashMatchesMySkills"),
+    "Conflict diff view should hide variants that already match baseline",
   );
   assert.ok(
-    source.includes("conflictViewMode"),
-    "SkillsPage should keep explicit conflict diff view mode state",
+    diffViewSource.includes("buildSkillDiff("),
+    "Conflict diff view should build readable diff between baseline and conflicting variants",
   );
   assert.ok(
-    source.includes("仅看变更"),
-    "SkillsPage should offer changed-lines mode in conflict drawer",
+    drawerSource.includes("conflictViewMode"),
+    "Conflict drawer should keep explicit conflict diff view mode state",
   );
   assert.ok(
-    source.includes("完整内容"),
-    "SkillsPage should offer full-content mode in conflict drawer",
+    drawerSource.includes('t("skills.conflict.view.diff")'),
+    "Conflict drawer should offer changed-lines mode in conflict drawer",
+  );
+  assert.ok(
+    drawerSource.includes('t("skills.conflict.view.full")'),
+    "Conflict drawer should offer full-content mode in conflict drawer",
+  );
+  assert.ok(
+    drawerSource.includes('t("skills.conflict.action.applyBaseline")'),
+    "Conflict drawer should offer a primary action to set selected source as baseline",
   );
 });
