@@ -101,8 +101,18 @@ fn create_symlink_file(source: &Path, target: &Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_file(source, target)
 }
 
+#[cfg(target_family = "windows")]
+fn create_symlink_dir(source: &Path, target: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(source, target)
+}
+
 #[cfg(target_family = "unix")]
 fn create_symlink_file(source: &Path, target: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(source, target)
+}
+
+#[cfg(target_family = "unix")]
+fn create_symlink_dir(source: &Path, target: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(source, target)
 }
 
@@ -115,6 +125,12 @@ pub(super) fn sync_skill_file(source: &Path, target: &Path) -> Result<String, St
             Ok("copy".to_string())
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DirSyncResult {
+    pub mode: String,
+    pub fallback_reason: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -154,7 +170,7 @@ fn collect_relative_paths(dir: &Path, prefix: &Path) -> Result<Vec<String>, Stri
     Ok(paths)
 }
 
-pub(super) fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
+pub(crate) fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
     remove_if_exists(target)?;
     fs::create_dir_all(target).map_err(|e| format!("Create target dir failed: {e}"))?;
 
@@ -176,8 +192,42 @@ pub(super) fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), Str
     Ok(())
 }
 
+pub(crate) fn sync_skill_dir_with_mode(
+    source: &Path,
+    target: &Path,
+    preferred_mode: &str,
+) -> Result<DirSyncResult, String> {
+    let preferred_mode = preferred_mode.trim().to_ascii_lowercase();
+    if preferred_mode != "symlink" {
+        copy_dir_recursive(source, target)?;
+        return Ok(DirSyncResult {
+            mode: "copy".to_string(),
+            fallback_reason: None,
+        });
+    }
+
+    remove_if_exists(target)?;
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Create target parent dir failed: {e}"))?;
+    }
+
+    match create_symlink_dir(source, target) {
+        Ok(()) => Ok(DirSyncResult {
+            mode: "symlink".to_string(),
+            fallback_reason: None,
+        }),
+        Err(err) => {
+            copy_dir_recursive(source, target)?;
+            Ok(DirSyncResult {
+                mode: "copy".to_string(),
+                fallback_reason: Some(format!("{err}")),
+            })
+        }
+    }
+}
+
 pub(super) fn dir_content_hash(dir: &Path) -> Result<String, String> {
-    use std::hash::{Hash, Hasher};
+    use sha2::{Digest, Sha256};
 
     if !dir.exists() {
         return Ok(String::new());
@@ -186,12 +236,15 @@ pub(super) fn dir_content_hash(dir: &Path) -> Result<String, String> {
     let mut rel_paths = collect_relative_paths(dir, dir)?;
     rel_paths.sort();
 
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = Sha256::new();
     for rel in &rel_paths {
-        rel.hash(&mut hasher);
+        hasher.update(rel.as_bytes());
+        hasher.update([0u8]);
         let file_path = dir.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
-        let content = fs::read(&file_path).map_err(|e| format!("Read file for hash failed: {e}"))?;
-        content.hash(&mut hasher);
+        let content =
+            fs::read(&file_path).map_err(|e| format!("Read file for hash failed: {e}"))?;
+        hasher.update(content);
+        hasher.update([0u8]);
     }
-    Ok(format!("{:016x}", hasher.finish()))
+    Ok(format!("{:x}", hasher.finalize()))
 }

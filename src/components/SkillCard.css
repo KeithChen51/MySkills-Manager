@@ -133,22 +133,82 @@
   font-style: italic;
 }
 
-.skill-card-edit {
+.skill-card-actions {
+  position: relative;
+}
+
+.skill-card-menu-trigger {
+  align-items: center;
   background: transparent;
-  border: none;
+  border: 1px solid var(--border-card);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: var(--text-md);
-  font-weight: 600;
-  min-height: 32px;
-  padding: 0 var(--sp-sm);
-  transition: color var(--transition), background var(--transition);
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
+  transition:
+    background var(--transition),
+    border-color var(--transition),
+    color var(--transition);
+  width: 32px;
 }
 
-.skill-card-edit:hover {
+.skill-card-menu-trigger:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--card-hover-border);
+  color: var(--text-primary);
+}
+
+.skill-card-menu {
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+  display: grid;
+  gap: 2px;
+  min-width: 144px;
+  padding: 4px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: var(--z-sticky);
+}
+
+.skill-card-menu-item {
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 var(--sp-sm);
+  text-align: left;
+  transition: background var(--transition), color var(--transition);
+}
+
+.skill-card-menu-item:hover:not(:disabled) {
   background: var(--bg-card-hover);
   color: var(--text-primary);
+}
+
+.skill-card-menu-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.skill-card-menu-item.danger {
+  color: var(--danger);
+}
+
+.skill-card-menu-item.danger:hover:not(:disabled) {
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 @media (max-width: 900px) {
@@ -161,7 +221,7 @@
     flex-direction: column;
   }
 
-  .skill-card-edit {
+  .skill-card-actions {
     align-self: flex-end;
   }
 }

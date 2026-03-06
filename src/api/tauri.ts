@@ -15,12 +15,22 @@ function reportGlobalError(message: string) {
   }
 }
 
-async function invokeWithError<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+type InvokeOptions = {
+  reportGlobal?: boolean;
+};
+
+async function invokeWithError<T>(
+  command: string,
+  args?: Record<string, unknown>,
+  options: InvokeOptions = {},
+): Promise<T> {
   try {
     return await invoke<T>(command, args);
   } catch (error: unknown) {
     const message = normalizeInvokeError(error);
-    reportGlobalError(message);
+    if (options.reportGlobal ?? false) {
+      reportGlobalError(message);
+    }
     throw new Error(message);
   }
 }
@@ -47,6 +57,18 @@ export type SaveResult = {
 export type SkillFileEntry = {
   path: string;
   size: number;
+};
+
+export type SkillDeleteFailure = {
+  root: string;
+  error: string;
+};
+
+export type SkillDeleteEverywhereResult = {
+  skillName: string;
+  scannedRoots: number;
+  removedPaths: string[];
+  failedRoots: SkillDeleteFailure[];
 };
 
 export type RulesContent = {
@@ -305,6 +327,10 @@ export async function skillsSaveContent(
 
 export async function skillsListFiles(name: string): Promise<SkillFileEntry[]> {
   return invokeWithError<SkillFileEntry[]>("skills_list_files", { name });
+}
+
+export async function skillsDeleteEverywhere(name: string): Promise<SkillDeleteEverywhereResult> {
+  return invokeWithError<SkillDeleteEverywhereResult>("skills_delete_everywhere", { name });
 }
 
 export async function statsGet(days?: number): Promise<StatsResult> {

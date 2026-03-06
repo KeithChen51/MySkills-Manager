@@ -5,8 +5,10 @@ use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 use std::time::UNIX_EPOCH;
 
+use crate::log_parse::parse_ts_utc;
 use crate::logs::LogEntry;
 use crate::skills::list_skills;
 
@@ -42,14 +44,8 @@ struct StatsCacheEntry {
 
 static STATS_CACHE: OnceLock<Mutex<Option<StatsCacheEntry>>> = OnceLock::new();
 
-fn parse_ts(ts: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(ts)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
 fn compare_logs_desc(a: &LogEntry, b: &LogEntry) -> Ordering {
-    match (parse_ts(&a.ts), parse_ts(&b.ts)) {
+    match (parse_ts_utc(&a.ts), parse_ts_utc(&b.ts)) {
         (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts),
         _ => b.ts.cmp(&a.ts),
     }
@@ -59,7 +55,10 @@ fn compare_logs_asc(a: &LogEntry, b: &LogEntry) -> Ordering {
     compare_logs_desc(b, a)
 }
 
-fn collect_unused_skills(root: &Path, used_skills: &HashSet<String>) -> Result<Vec<String>, String> {
+fn collect_unused_skills(
+    root: &Path,
+    used_skills: &HashSet<String>,
+) -> Result<Vec<String>, String> {
     let mut all_skills = list_skills(root)?
         .into_iter()
         .map(|skill| skill.name)
@@ -187,7 +186,7 @@ pub fn compute_stats_with_now(
     let mut recent_heap = BinaryHeap::<Reverse<RankedRecent>>::new();
 
     crate::logs::for_each_log(root, |log| {
-        let Some(ts) = parse_ts(&log.ts) else {
+        let Some(ts) = parse_ts_utc(&log.ts) else {
             return;
         };
         if ts < cutoff {
@@ -207,7 +206,7 @@ pub fn compute_stats_with_now(
         }
 
         if let Some(oldest) = recent_heap.peek() {
-            if compare_logs_desc(&log, &oldest.0.0) == Ordering::Less {
+            if compare_logs_desc(&log, &oldest.0 .0) == Ordering::Less {
                 let _ = recent_heap.pop();
                 recent_heap.push(Reverse(RankedRecent(log)));
             }
@@ -233,7 +232,7 @@ pub fn compute_stats_with_now(
 
     let mut recent = recent_heap
         .into_iter()
-        .map(|entry| entry.0.0)
+        .map(|entry| entry.0 .0)
         .collect::<Vec<_>>();
     recent.sort_by(compare_logs_desc);
 
@@ -254,37 +253,27 @@ pub fn compute_stats_with_now(
 }
 
 #[tauri::command]
-pub fn stats_get(days: Option<u32>) -> Result<StatsResult, String> {
-    compute_stats_with_now(
-        &crate::root_dir::default_root_dir(),
-        days.unwrap_or(30),
-        Utc::now(),
-    )
+pub async fn stats_get(days: Option<u32>) -> Result<StatsResult, String> {
+    let root = crate::root_dir::default_root_dir();
+    let days = days.unwrap_or(30);
+    let task = tauri::async_runtime::spawn_blocking(move || {
+        compute_stats_with_now(&root, days, Utc::now())
+    });
+    let joined = tokio::time::timeout(Duration::from_secs(30), task)
+        .await
+        .map_err(|_| "stats_get timed out after 30s".to_string())?;
+    joined.map_err(|e| format!("Run stats_get task failed: {e}"))?
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::test_utils::temp_root;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use chrono::TimeZone;
 
     use super::*;
-
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    fn temp_root() -> PathBuf {
-        let mut root = std::env::temp_dir();
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock")
-            .as_nanos();
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        root.push(format!("myskills-tauri-stats-test-{ts}-{n}"));
-        root
-    }
 
     fn seed(root: &Path) {
         fs::create_dir_all(root.join(".logs")).expect("create logs dir");
@@ -331,7 +320,7 @@ description: plan
 
     #[test]
     fn compute_stats_aggregates_expected_fields() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-stats-test");
         seed(&root);
         let now = Utc.with_ymd_and_hms(2026, 2, 27, 12, 0, 0).unwrap();
 
@@ -357,7 +346,7 @@ description: plan
 
     #[test]
     fn compute_stats_applies_days_window() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-stats-test");
         seed(&root);
         let now = Utc.with_ymd_and_hms(2026, 2, 27, 12, 0, 0).unwrap();
 
@@ -370,7 +359,7 @@ description: plan
 
     #[test]
     fn parse_ts_supports_rfc3339() {
-        let parsed = parse_ts("2026-02-27T03:00:00Z").expect("parse timestamp");
+        let parsed = parse_ts_utc("2026-02-27T03:00:00Z").expect("parse timestamp");
         assert_eq!(parsed.to_rfc3339(), "2026-02-27T03:00:00+00:00");
     }
 

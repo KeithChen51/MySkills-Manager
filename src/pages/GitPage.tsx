@@ -36,7 +36,7 @@ export default function GitPage() {
     void (async () => {
       try {
         const result = await gitCommit(commitMessage);
-        setActionStatus(`已提交: ${result.hash.slice(0, 8)}`);
+        setActionStatus(t("git.commit.ok", { hash: result.hash.slice(0, 8) }));
         setCommitMessage("");
         await refreshStatus();
       } catch (e: unknown) {

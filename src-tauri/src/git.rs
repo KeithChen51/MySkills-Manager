@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::path::Path;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct GitStatusResult {
@@ -270,41 +271,42 @@ pub fn push_origin(_root: &Path) -> Result<GitPushResult, String> {
 }
 
 #[tauri::command]
-pub fn git_status() -> Result<GitStatusResult, String> {
-    get_git_status(&crate::root_dir::default_root_dir())
+pub async fn git_status() -> Result<GitStatusResult, String> {
+    let root = crate::root_dir::default_root_dir();
+    let task = tauri::async_runtime::spawn_blocking(move || get_git_status(&root));
+    let joined = tokio::time::timeout(Duration::from_secs(15), task)
+        .await
+        .map_err(|_| "git_status timed out after 15s".to_string())?;
+    joined.map_err(|e| format!("Run git_status task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn git_commit(message: String) -> Result<GitCommitResult, String> {
-    commit_all(&crate::root_dir::default_root_dir(), &message)
+pub async fn git_commit(message: String) -> Result<GitCommitResult, String> {
+    let root = crate::root_dir::default_root_dir();
+    let task = tauri::async_runtime::spawn_blocking(move || commit_all(&root, &message));
+    let joined = tokio::time::timeout(Duration::from_secs(30), task)
+        .await
+        .map_err(|_| "git_commit timed out after 30s".to_string())?;
+    joined.map_err(|e| format!("Run git_commit task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn git_push() -> Result<GitPushResult, String> {
-    push_origin(&crate::root_dir::default_root_dir())
+pub async fn git_push() -> Result<GitPushResult, String> {
+    let root = crate::root_dir::default_root_dir();
+    let task = tauri::async_runtime::spawn_blocking(move || push_origin(&root));
+    let joined = tokio::time::timeout(Duration::from_secs(120), task)
+        .await
+        .map_err(|_| "git_push timed out after 120s".to_string())?;
+    joined.map_err(|e| format!("Run git_push task failed: {e}"))?
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::test_utils::temp_root;
     use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::path::Path;
 
     use super::*;
-
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    fn temp_root() -> PathBuf {
-        let mut root = std::env::temp_dir();
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock")
-            .as_nanos();
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        root.push(format!("myskills-tauri-git-test-{ts}-{n}"));
-        root
-    }
 
     fn init_repo(root: &Path) -> git2::Repository {
         fs::create_dir_all(root).expect("create root");
@@ -318,7 +320,7 @@ mod tests {
 
     #[test]
     fn get_git_status_returns_error_for_non_repo() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-git-test");
         fs::create_dir_all(&root).expect("create root");
 
         let err = get_git_status(&root).expect_err("expected non-repo error");
@@ -327,7 +329,7 @@ mod tests {
 
     #[test]
     fn get_git_status_reads_untracked_and_staged_files() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-git-test");
         let repo = init_repo(&root);
 
         fs::write(root.join("untracked.md"), "hello").expect("write untracked");
@@ -346,7 +348,7 @@ mod tests {
 
     #[test]
     fn commit_all_creates_commit_and_returns_hash() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-git-test");
         init_repo(&root);
         fs::write(root.join("note.md"), "hello").expect("write file");
 
@@ -357,9 +359,9 @@ mod tests {
 
     #[test]
     fn push_origin_pushes_current_branch_to_remote() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-git-test");
         let local = init_repo(&root);
-        let remote_root = temp_root();
+        let remote_root = temp_root("myskills-tauri-git-test");
         init_bare_repo(&remote_root);
 
         let remote_path = remote_root
@@ -395,7 +397,7 @@ mod tests {
 
     #[test]
     fn push_origin_fails_with_clear_message_when_origin_missing() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-git-test");
         init_repo(&root);
         fs::write(root.join("note.md"), "hello").expect("write file");
         commit_all(&root, "feat: init").expect("create commit");

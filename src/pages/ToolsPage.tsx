@@ -66,6 +66,44 @@ export default function ToolsPage() {
     setShowCustomForm,
   });
 
+  const sectionItems = useMemo(
+    () => [
+      {
+        key: "installed",
+        title: t("tools.section.installed", { count: installedTools.length }),
+        tools: installedTools,
+        installed: true,
+      },
+      {
+        key: "uninstalled",
+        title: t("tools.section.uninstalled", { count: uninstalledTools.length }),
+        tools: uninstalledTools,
+        installed: false,
+      },
+    ],
+    [installedTools, t, uninstalledTools],
+  );
+
+  const commonSectionProps = {
+    routerHealthByTool,
+    pathDrafts,
+    busy,
+    savingPathToolId,
+    syncingToolId,
+    togglingAutoToolId,
+    togglingTrackingToolId,
+    locale,
+    t,
+    onDraftChange: (toolId: string, nextDraft: ToolPathDraft) =>
+      setPathDrafts((prev) => ({ ...prev, [toolId]: nextDraft })),
+    onPickToolPath: (toolId: string, target: "skills" | "rules") => void handlePickToolPath(toolId, target),
+    onManualSync: (tool: ToolStatus) => void handleManualSync(tool),
+    onToggleAutoSync: (tool: ToolStatus) => void handleToggleAutoSync(tool),
+    onToggleTracking: (tool: ToolStatus) => void handleToggleTracking(tool),
+    onSaveToolPaths: (tool: ToolStatus) => void handleSaveToolPaths(tool),
+    onRemoveCustomTool: (toolId: string) => void handleRemoveCustomTool(toolId),
+  };
+
   useEffect(() => {
     void loadStatus();
   }, [loadStatus]);
@@ -107,53 +145,15 @@ export default function ToolsPage() {
       </header>
 
       <div className="tools-sections">
-        <ToolSection
-          title={t("tools.section.installed", { count: installedTools.length })}
-          tools={installedTools}
-          installed
-          routerHealthByTool={routerHealthByTool}
-          pathDrafts={pathDrafts}
-          busy={busy}
-          savingPathToolId={savingPathToolId}
-          syncingToolId={syncingToolId}
-          togglingAutoToolId={togglingAutoToolId}
-          togglingTrackingToolId={togglingTrackingToolId}
-          locale={locale}
-          t={t}
-          onDraftChange={(toolId, nextDraft) =>
-            setPathDrafts((prev) => ({ ...prev, [toolId]: nextDraft }))
-          }
-          onPickToolPath={(toolId, target) => void handlePickToolPath(toolId, target)}
-          onManualSync={(tool) => void handleManualSync(tool)}
-          onToggleAutoSync={(tool) => void handleToggleAutoSync(tool)}
-          onToggleTracking={(tool) => void handleToggleTracking(tool)}
-          onSaveToolPaths={(tool) => void handleSaveToolPaths(tool)}
-          onRemoveCustomTool={(toolId) => void handleRemoveCustomTool(toolId)}
-        />
-
-        <ToolSection
-          title={t("tools.section.uninstalled", { count: uninstalledTools.length })}
-          tools={uninstalledTools}
-          installed={false}
-          routerHealthByTool={routerHealthByTool}
-          pathDrafts={pathDrafts}
-          busy={busy}
-          savingPathToolId={savingPathToolId}
-          syncingToolId={syncingToolId}
-          togglingAutoToolId={togglingAutoToolId}
-          togglingTrackingToolId={togglingTrackingToolId}
-          locale={locale}
-          t={t}
-          onDraftChange={(toolId, nextDraft) =>
-            setPathDrafts((prev) => ({ ...prev, [toolId]: nextDraft }))
-          }
-          onPickToolPath={(toolId, target) => void handlePickToolPath(toolId, target)}
-          onManualSync={(tool) => void handleManualSync(tool)}
-          onToggleAutoSync={(tool) => void handleToggleAutoSync(tool)}
-          onToggleTracking={(tool) => void handleToggleTracking(tool)}
-          onSaveToolPaths={(tool) => void handleSaveToolPaths(tool)}
-          onRemoveCustomTool={(toolId) => void handleRemoveCustomTool(toolId)}
-        />
+        {sectionItems.map((section) => (
+          <ToolSection
+            key={section.key}
+            title={section.title}
+            tools={section.tools}
+            installed={section.installed}
+            {...commonSectionProps}
+          />
+        ))}
       </div>
 
       {showCustomForm && (

@@ -35,10 +35,10 @@ export default function OnboardingWizard({
   function formatStatusError(error: unknown): string {
     const raw = String(error);
     if (raw.includes("skills dir does not exist")) {
-      return "目录不存在。请点击“选择路径”或确认创建目录。";
+      return t("onboard.error.dirMissing");
     }
     if (raw.includes("skills dir is required")) {
-      return "请先填写技能目录。";
+      return t("onboard.error.dirRequired");
     }
     return raw;
   }
@@ -104,14 +104,18 @@ export default function OnboardingWizard({
 
   async function handleImportInstalledSkills() {
     setBusy(true);
-    setStatus("正在识别并导入已安装技能...");
+    setStatus(t("onboard.import.start"));
     try {
       await onboardingSetSkillsDir(skillsDir, true);
       const imported = await onboardingImportInstalledSkills();
       const refreshed = await onboardingSetSkillsDir(skillsDir, true);
       setSkillsCount(refreshed.skills.length);
       setStatus(
-        `已导入 ${imported.importedTotal}/${imported.detectedTotal}，跳过已存在 ${imported.skippedExistingTotal}`,
+        t("onboard.import.done", {
+          imported: imported.importedTotal,
+          detected: imported.detectedTotal,
+          skipped: imported.skippedExistingTotal,
+        }),
       );
     } catch (e: unknown) {
       setStatus(formatStatusError(e));
@@ -148,7 +152,7 @@ export default function OnboardingWizard({
                 onClick={() => void handleImportInstalledSkills()}
                 disabled={busy || skillsDir.trim().length === 0}
               >
-                导入已安装技能
+                {t("onboard.import.button")}
               </button>
               <button
                 type="button"

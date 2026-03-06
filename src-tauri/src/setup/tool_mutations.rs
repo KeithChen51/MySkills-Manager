@@ -2,15 +2,12 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use super::config_store::{
-    read_custom_tools, read_sync_config, read_tool_path_overrides, write_custom_tools,
-    write_sync_config_file, write_tool_path_overrides,
+    read_custom_tools, read_sync_config, read_tool_path_overrides, with_sync_config_lock,
+    write_custom_tools, write_sync_config_file, write_tool_path_overrides,
 };
 use super::rule_hook_ops::{apply_hook_configuration, apply_instruction_gate};
 use super::tool_catalog::is_built_in_tool_id;
-use super::{
-    all_tools, default_sync_mode, normalize_tool_ids, CustomTool, SetupMutationResult, SyncConfigFile,
-    ToolPathOverride,
-};
+use super::{all_tools, normalize_tool_ids, CustomTool, SetupMutationResult, ToolPathOverride};
 
 fn validate_tool_id(id: &str) -> Result<String, String> {
     let normalized = id.trim().to_lowercase();
@@ -140,23 +137,19 @@ pub(super) fn set_tool_auto_sync_with_home(
         return Err("Tool id not supported".to_string());
     }
 
-    let mut config = read_sync_config(home)?.unwrap_or(SyncConfigFile {
-        sync_mode: default_sync_mode(),
-        import_mode: super::default_import_mode(),
-        skills: Vec::new(),
-        auto_tools: Vec::new(),
-        tracking_disabled_tools: Vec::new(),
-    });
+    with_sync_config_lock(|| {
+        let mut config = read_sync_config(home)?.unwrap_or_default();
 
-    let mut auto_tools = config.auto_tools.into_iter().collect::<HashSet<_>>();
-    if enabled {
-        auto_tools.insert(tool_id.clone());
-    } else {
-        auto_tools.remove(tool_id.as_str());
-    }
+        let mut auto_tools = config.auto_tools.into_iter().collect::<HashSet<_>>();
+        if enabled {
+            auto_tools.insert(tool_id.clone());
+        } else {
+            auto_tools.remove(tool_id.as_str());
+        }
 
-    config.auto_tools = normalize_tool_ids(auto_tools.into_iter().collect());
-    write_sync_config_file(home, &config)?;
+        config.auto_tools = normalize_tool_ids(auto_tools.into_iter().collect());
+        write_sync_config_file(home, &config)
+    })?;
     Ok(SetupMutationResult { success: true })
 }
 
@@ -171,26 +164,22 @@ pub(super) fn set_tool_tracking_enabled_with_home(
         return Err("Tool id not supported".to_string());
     };
 
-    let mut config = read_sync_config(home)?.unwrap_or(SyncConfigFile {
-        sync_mode: default_sync_mode(),
-        import_mode: super::default_import_mode(),
-        skills: Vec::new(),
-        auto_tools: Vec::new(),
-        tracking_disabled_tools: Vec::new(),
-    });
+    with_sync_config_lock(|| {
+        let mut config = read_sync_config(home)?.unwrap_or_default();
 
-    let mut disabled_tools = config
-        .tracking_disabled_tools
-        .into_iter()
-        .collect::<HashSet<_>>();
-    if enabled {
-        disabled_tools.remove(tool_id.as_str());
-    } else {
-        disabled_tools.insert(tool_id.clone());
-    }
+        let mut disabled_tools = config
+            .tracking_disabled_tools
+            .into_iter()
+            .collect::<HashSet<_>>();
+        if enabled {
+            disabled_tools.remove(tool_id.as_str());
+        } else {
+            disabled_tools.insert(tool_id.clone());
+        }
 
-    config.tracking_disabled_tools = normalize_tool_ids(disabled_tools.into_iter().collect());
-    write_sync_config_file(home, &config)?;
+        config.tracking_disabled_tools = normalize_tool_ids(disabled_tools.into_iter().collect());
+        write_sync_config_file(home, &config)
+    })?;
 
     if tool.capabilities.instruction_chain_supported {
         if let Some(rules_path) = tool.rules_path.as_ref() {

@@ -202,7 +202,10 @@ fn setup_status_prefers_codex_agents_skills_when_available() {
 
     let list = setup_status_with_home(&home).expect("setup status");
     let codex = find_tool(&list, "codex");
-    assert_eq!(codex.skills_dir, agents_skills.to_string_lossy().to_string());
+    assert_eq!(
+        codex.skills_dir,
+        agents_skills.to_string_lossy().to_string()
+    );
     assert_eq!(codex.path_source, "auto-detected");
 }
 
@@ -306,9 +309,7 @@ fn setup_status_prefers_cursor_skills_path_when_both_rules_and_skills_exist() {
     fs::create_dir_all(cursor_rules.join("legacy-rule-as-skill"))
         .expect("create cursor rules legacy dir");
     fs::write(
-        cursor_rules
-            .join("legacy-rule-as-skill")
-            .join("SKILL.md"),
+        cursor_rules.join("legacy-rule-as-skill").join("SKILL.md"),
         "---\nname: legacy-rule-as-skill\n---\n",
     )
     .expect("write legacy skill under rules");
@@ -677,6 +678,71 @@ fn setup_apply_syncs_skills_to_codex() {
         .join("myskills-router")
         .join("SKILL.md")
         .exists());
+}
+
+#[test]
+fn setup_apply_honors_copy_sync_mode_from_config() {
+    let home = temp_home();
+    let skills_root = temp_home();
+    fs::create_dir_all(home.join(".codex")).expect("create codex parent");
+    fs::create_dir_all(home.join(".myskills-manager")).expect("create app config dir");
+    fs::create_dir_all(skills_root.join("code-review")).expect("create skill dir");
+    fs::write(
+        skills_root.join("code-review").join("SKILL.md"),
+        "---\nname: code-review\n---\n",
+    )
+    .expect("write skill");
+
+    let sync_config = serde_json::json!({
+      "syncMode": "copy",
+      "skills": [],
+      "autoTools": [],
+      "trackingDisabledTools": []
+    });
+    fs::write(
+        home.join(".myskills-manager").join("sync-config.json"),
+        serde_json::to_string(&sync_config).expect("serialize sync config"),
+    )
+    .expect("write sync config");
+
+    let result = apply_setup_with_paths(&home, &skills_root, &["codex".to_string()], None)
+        .expect("apply setup");
+    assert!(result[0].success);
+    assert_eq!(result[0].sync_mode, "copy");
+}
+
+#[test]
+fn setup_apply_reports_symlink_fallback_when_symlink_mode_cannot_be_used() {
+    let home = temp_home();
+    let skills_root = temp_home();
+    fs::create_dir_all(home.join(".codex")).expect("create codex parent");
+    fs::create_dir_all(home.join(".myskills-manager")).expect("create app config dir");
+    fs::create_dir_all(skills_root.join("code-review")).expect("create skill dir");
+    fs::write(
+        skills_root.join("code-review").join("SKILL.md"),
+        "---\nname: code-review\n---\n",
+    )
+    .expect("write skill");
+
+    let sync_config = serde_json::json!({
+      "syncMode": "symlink",
+      "skills": [],
+      "autoTools": [],
+      "trackingDisabledTools": []
+    });
+    fs::write(
+        home.join(".myskills-manager").join("sync-config.json"),
+        serde_json::to_string(&sync_config).expect("serialize sync config"),
+    )
+    .expect("write sync config");
+
+    let result = apply_setup_with_paths(&home, &skills_root, &["codex".to_string()], None)
+        .expect("apply setup");
+    assert!(result[0].success);
+    assert!(result[0].sync_mode == "symlink" || result[0].sync_mode == "copy");
+    if result[0].sync_mode == "copy" {
+        assert!(result[0].action.contains("symlink fallback to copy"));
+    }
 }
 
 #[test]
@@ -1495,6 +1561,44 @@ fn setup_tracking_toggle_persists_in_status() {
     let after_enable = setup_status_with_home(&home).expect("setup status after enable");
     let codex_enabled = find_tool(&after_enable, "codex");
     assert!(codex_enabled.tracking_enabled);
+}
+
+#[test]
+fn sync_config_mutations_are_serialized_under_concurrency() {
+    let home = std::sync::Arc::new(temp_home());
+    let mut tasks = Vec::new();
+    for worker in 0..6usize {
+        let home = home.clone();
+        tasks.push(std::thread::spawn(move || {
+            for round in 0..24usize {
+                let auto_sync = (worker + round) % 2 == 0;
+                set_tool_auto_sync_with_home(&home, "codex", auto_sync).expect("toggle auto sync");
+
+                let mode = match (worker + round) % 3 {
+                    0 => "manual",
+                    1 => "prompt",
+                    _ => "auto",
+                };
+                set_import_mode_with_home(&home, mode).expect("set import mode");
+            }
+        }));
+    }
+
+    for task in tasks {
+        task.join().expect("join worker");
+    }
+
+    let raw = fs::read_to_string(home.join(".myskills-manager").join("sync-config.json"))
+        .expect("read sync config");
+    let parsed = serde_json::from_str::<serde_json::Value>(&raw).expect("parse sync config");
+    assert!(parsed.get("syncMode").is_some());
+    assert!(parsed.get("importMode").is_some());
+    assert!(parsed.get("autoTools").is_some());
+    assert!(parsed.get("trackingDisabledTools").is_some());
+
+    let status = setup_status_with_home(&home).expect("setup status");
+    let codex = find_tool(&status, "codex");
+    assert!(codex.id == "codex");
 }
 
 #[test]

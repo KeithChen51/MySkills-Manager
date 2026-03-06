@@ -92,7 +92,11 @@ pub(super) fn built_in_tool_resolutions(
             } else {
                 "auto-detected"
             };
-            (candidate.skills_dir, candidate.rules_path, source.to_string())
+            (
+                candidate.skills_dir,
+                candidate.rules_path,
+                source.to_string(),
+            )
         } else {
             (
                 defaults.default_skills_dir.clone(),

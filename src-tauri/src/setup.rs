@@ -1,23 +1,27 @@
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
 use config_store::{
-    read_custom_tools, read_sync_config, read_tool_path_overrides, write_sync_config_file,
+    read_custom_tools, read_sync_config, read_tool_path_overrides, with_sync_config_lock,
+    write_sync_config_file,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tool_catalog::{built_in_tools, custom_tool_to_descriptor, ToolDescriptor};
 
-mod config_store;
 mod apply_engine;
-mod rule_hook_ops;
-mod sync_ops;
-mod status_probe;
-mod tool_registry;
-mod tool_catalog;
-mod skills_overview;
-mod tool_mutations;
-mod status_aggregation;
-mod path_validation;
+mod config_store;
 mod conflict_resolution;
+mod path_validation;
+mod paths;
 mod router_health;
+mod rule_hook_ops;
+mod skills_overview;
+mod status_aggregation;
+mod status_probe;
+mod sync_ops;
+mod tool_catalog;
+mod tool_mutations;
+mod tool_registry;
 mod types;
 
 pub use types::{
@@ -43,6 +47,18 @@ struct SyncConfigFile {
     auto_tools: Vec<String>,
     #[serde(default)]
     tracking_disabled_tools: Vec<String>,
+}
+
+impl Default for SyncConfigFile {
+    fn default() -> Self {
+        Self {
+            sync_mode: default_sync_mode(),
+            import_mode: default_import_mode(),
+            skills: Vec::new(),
+            auto_tools: Vec::new(),
+            tracking_disabled_tools: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -83,33 +99,35 @@ fn normalize_tool_ids(ids: Vec<String>) -> Vec<String> {
 }
 
 fn write_sync_config(home: &Path, skills: &[SkillSyncConfig]) -> Result<(), String> {
-    let existing = read_sync_config(home)?;
+    with_sync_config_lock(|| {
+        let existing = read_sync_config(home)?;
 
-    let sync_mode = existing
-        .as_ref()
-        .map(|cfg| cfg.sync_mode.clone())
-        .unwrap_or_else(default_sync_mode);
-    let import_mode = existing
-        .as_ref()
-        .map(|cfg| cfg.import_mode.clone())
-        .unwrap_or_else(default_import_mode);
-    let auto_tools = existing
-        .as_ref()
-        .map(|cfg| cfg.auto_tools.clone())
-        .unwrap_or_default();
-    let tracking_disabled_tools = existing
-        .map(|cfg| cfg.tracking_disabled_tools)
-        .unwrap_or_default();
-    write_sync_config_file(
-        home,
-        &SyncConfigFile {
-            sync_mode,
-            import_mode,
-            skills: skills.to_vec(),
-            auto_tools,
-            tracking_disabled_tools,
-        },
-    )
+        let sync_mode = existing
+            .as_ref()
+            .map(|cfg| cfg.sync_mode.clone())
+            .unwrap_or_else(default_sync_mode);
+        let import_mode = existing
+            .as_ref()
+            .map(|cfg| cfg.import_mode.clone())
+            .unwrap_or_else(default_import_mode);
+        let auto_tools = existing
+            .as_ref()
+            .map(|cfg| cfg.auto_tools.clone())
+            .unwrap_or_default();
+        let tracking_disabled_tools = existing
+            .map(|cfg| cfg.tracking_disabled_tools)
+            .unwrap_or_default();
+        write_sync_config_file(
+            home,
+            &SyncConfigFile {
+                sync_mode,
+                import_mode,
+                skills: skills.to_vec(),
+                auto_tools,
+                tracking_disabled_tools,
+            },
+        )
+    })
 }
 
 fn all_tools(home: &Path) -> Result<Vec<ToolDescriptor>, String> {
@@ -119,6 +137,32 @@ fn all_tools(home: &Path) -> Result<Vec<ToolDescriptor>, String> {
         tools.push(custom_tool_to_descriptor(custom));
     }
     Ok(tools)
+}
+
+pub fn all_tool_skill_dirs_with_home(home: &Path) -> Result<Vec<PathBuf>, String> {
+    let overrides = read_tool_path_overrides(home)?;
+    let built_in = tool_catalog::built_in_tool_resolutions(home, &overrides);
+    let mut dirs = BTreeSet::<PathBuf>::new();
+
+    for tool in built_in {
+        dirs.insert(tool.descriptor.skills_dir);
+        for candidate in tool.candidates {
+            dirs.insert(candidate.skills_dir);
+        }
+    }
+
+    for custom in read_custom_tools(home)? {
+        let skills_dir = custom.skills_dir.trim();
+        if !skills_dir.is_empty() {
+            dirs.insert(PathBuf::from(skills_dir));
+        }
+    }
+
+    Ok(dirs.into_iter().collect())
+}
+
+pub(crate) fn copy_skill_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {
+    sync_ops::copy_dir_recursive(source, target)
 }
 
 pub fn setup_skill_source_dirs_with_home(
@@ -160,41 +204,74 @@ pub fn setup_resolve_skill_conflict_with_home(
     conflict_resolution::setup_resolve_skill_conflict_with_home(home, skill_name, source_id)
 }
 
-#[tauri::command]
-pub fn setup_status() -> Result<Vec<ToolStatus>, String> {
-    setup_status_with_home(&crate::root_dir::default_home_dir())
+const SETUP_BLOCKING_TIMEOUT_SECS: u64 = 60;
+
+async fn run_setup_blocking<T, F>(task_name: &'static str, task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    let task = tauri::async_runtime::spawn_blocking(task);
+    let joined = tokio::time::timeout(Duration::from_secs(SETUP_BLOCKING_TIMEOUT_SECS), task)
+        .await
+        .map_err(|_| format!("{task_name} timed out after {SETUP_BLOCKING_TIMEOUT_SECS}s"))?;
+    joined.map_err(|e| format!("Run {task_name} task failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn setup_path_validation_matrix() -> Result<Vec<BuiltInToolPathAudit>, String> {
-    setup_path_validation_matrix_with_home(&crate::root_dir::default_home_dir())
+pub async fn setup_status() -> Result<Vec<ToolStatus>, String> {
+    let home = crate::root_dir::default_home_dir();
+    run_setup_blocking("setup_status", move || setup_status_with_home(&home)).await
 }
 
 #[tauri::command]
-pub fn setup_router_health() -> Result<Vec<ToolRouterHealthStatus>, String> {
-    setup_router_health_with_home(&crate::root_dir::default_home_dir())
+pub async fn setup_path_validation_matrix() -> Result<Vec<BuiltInToolPathAudit>, String> {
+    let home = crate::root_dir::default_home_dir();
+    run_setup_blocking("setup_path_validation_matrix", move || {
+        setup_path_validation_matrix_with_home(&home)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn setup_get_skill_conflict_detail(skill_name: String) -> Result<SkillConflictDetail, String> {
-    setup_get_skill_conflict_detail_with_home(&crate::root_dir::default_home_dir(), &skill_name)
+pub async fn setup_router_health() -> Result<Vec<ToolRouterHealthStatus>, String> {
+    let home = crate::root_dir::default_home_dir();
+    run_setup_blocking("setup_router_health", move || {
+        setup_router_health_with_home(&home)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn setup_resolve_skill_conflict(
+pub async fn setup_get_skill_conflict_detail(
+    skill_name: String,
+) -> Result<SkillConflictDetail, String> {
+    let home = crate::root_dir::default_home_dir();
+    run_setup_blocking("setup_get_skill_conflict_detail", move || {
+        setup_get_skill_conflict_detail_with_home(&home, &skill_name)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn setup_resolve_skill_conflict(
     skill_name: String,
     source_id: String,
 ) -> Result<SetupMutationResult, String> {
-    setup_resolve_skill_conflict_with_home(
-        &crate::root_dir::default_home_dir(),
-        &skill_name,
-        &source_id,
-    )
+    let home = crate::root_dir::default_home_dir();
+    run_setup_blocking("setup_resolve_skill_conflict", move || {
+        setup_resolve_skill_conflict_with_home(&home, &skill_name, &source_id)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn setup_local_skills_overview() -> Result<LocalSkillsOverview, String> {
-    local_skills_overview_with_home(&crate::root_dir::default_home_dir())
+pub async fn setup_local_skills_overview() -> Result<LocalSkillsOverview, String> {
+    let home = crate::root_dir::default_home_dir();
+    run_setup_blocking("setup_local_skills_overview", move || {
+        local_skills_overview_with_home(&home)
+    })
+    .await
 }
 
 pub fn get_custom_tools_with_home(home: &Path) -> Result<Vec<CustomTool>, String> {
@@ -312,13 +389,16 @@ pub fn apply_setup_with_paths(
 }
 
 #[tauri::command]
-pub fn setup_apply(
+pub async fn setup_apply(
     tools: Vec<String>,
     skills: Option<Vec<SkillSyncConfig>>,
 ) -> Result<Vec<ApplyResult>, String> {
     let home = crate::root_dir::default_home_dir();
     let skills_root = crate::root_dir::default_skills_root(&home);
-    apply_setup_with_paths(&home, &skills_root, &tools, skills.as_deref())
+    run_setup_blocking("setup_apply", move || {
+        apply_setup_with_paths(&home, &skills_root, &tools, skills.as_deref())
+    })
+    .await
 }
 
 fn get_import_mode_with_home(home: &Path) -> Result<String, String> {
@@ -331,18 +411,16 @@ fn get_import_mode_with_home(home: &Path) -> Result<String, String> {
 fn set_import_mode_with_home(home: &Path, mode: &str) -> Result<SetupMutationResult, String> {
     let valid_modes = ["manual", "prompt", "auto"];
     if !valid_modes.contains(&mode) {
-        return Err(format!("Invalid import mode: {mode}. Valid modes: manual, prompt, auto"));
+        return Err(format!(
+            "Invalid import mode: {mode}. Valid modes: manual, prompt, auto"
+        ));
     }
 
-    let mut config = read_sync_config(home)?.unwrap_or(SyncConfigFile {
-        sync_mode: default_sync_mode(),
-        import_mode: default_import_mode(),
-        skills: Vec::new(),
-        auto_tools: Vec::new(),
-        tracking_disabled_tools: Vec::new(),
-    });
-    config.import_mode = mode.to_string();
-    write_sync_config_file(home, &config)?;
+    with_sync_config_lock(|| {
+        let mut config = read_sync_config(home)?.unwrap_or_default();
+        config.import_mode = mode.to_string();
+        write_sync_config_file(home, &config)
+    })?;
     Ok(SetupMutationResult { success: true })
 }
 
@@ -358,4 +436,3 @@ pub fn setup_set_import_mode(mode: String) -> Result<SetupMutationResult, String
 
 #[cfg(test)]
 mod tests;
-

@@ -1,10 +1,12 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use crate::log_parse::{parse_log_line, parse_ts_utc};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LogEntry {
@@ -31,35 +33,11 @@ pub struct LogsQuery {
     pub limit: usize,
 }
 
-fn parse_ts(ts: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(ts)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
 fn logs_file(root: &Path) -> PathBuf {
     root.join(".logs").join("skill-usage.jsonl")
 }
 
-fn parse_log_line(line: &str) -> Option<LogEntry> {
-    if let Ok(log) = serde_json::from_str::<LogEntry>(line) {
-        return Some(log);
-    }
-
-    if line.contains('\\') {
-        let escaped = line.replace('\\', "\\\\");
-        if let Ok(log) = serde_json::from_str::<LogEntry>(&escaped) {
-            return Some(log);
-        }
-    }
-
-    None
-}
-
-pub(crate) fn for_each_log(
-    root: &Path,
-    mut handler: impl FnMut(LogEntry),
-) -> Result<(), String> {
+pub(crate) fn for_each_log(root: &Path, mut handler: impl FnMut(LogEntry)) -> Result<(), String> {
     let file_path = logs_file(root);
     if !file_path.exists() {
         return Ok(());
@@ -94,7 +72,7 @@ pub(crate) fn for_each_log(
 }
 
 fn compare_ts_desc(a: &LogEntry, b: &LogEntry) -> Ordering {
-    match (parse_ts(&a.ts), parse_ts(&b.ts)) {
+    match (parse_ts_utc(&a.ts), parse_ts_utc(&b.ts)) {
         (Some(a_ts), Some(b_ts)) => b_ts.cmp(&a_ts),
         _ => b.ts.cmp(&a.ts),
     }
@@ -124,8 +102,8 @@ pub fn get_logs(root: &Path, query: &LogsQuery) -> Result<LogsResult, String> {
         return Ok(indexed);
     }
 
-    let from = query.from.as_deref().and_then(parse_ts);
-    let to = query.to.as_deref().and_then(parse_ts);
+    let from = query.from.as_deref().and_then(parse_ts_utc);
+    let to = query.to.as_deref().and_then(parse_ts_utc);
     let page = if query.page == 0 { 1 } else { query.page };
     let limit = if query.limit == 0 {
         100
@@ -151,7 +129,7 @@ pub fn get_logs(root: &Path, query: &LogsQuery) -> Result<LogsResult, String> {
         }
 
         if from.is_some() || to.is_some() {
-            let Some(ts) = parse_ts(&log.ts) else {
+            let Some(ts) = parse_ts_utc(&log.ts) else {
                 return;
             };
 
@@ -177,17 +155,14 @@ pub fn get_logs(root: &Path, query: &LogsQuery) -> Result<LogsResult, String> {
         }
 
         if let Some(oldest) = heap.peek() {
-            if compare_ts_desc(&log, &oldest.0.0) == Ordering::Less {
+            if compare_ts_desc(&log, &oldest.0 .0) == Ordering::Less {
                 let _ = heap.pop();
                 heap.push(Reverse(RankedLog(log)));
             }
         }
     })?;
 
-    let mut top_window = heap
-        .into_iter()
-        .map(|entry| entry.0.0)
-        .collect::<Vec<_>>();
+    let mut top_window = heap.into_iter().map(|entry| entry.0 .0).collect::<Vec<_>>();
     top_window.sort_by(compare_ts_desc);
     let rows = top_window
         .into_iter()
@@ -199,7 +174,7 @@ pub fn get_logs(root: &Path, query: &LogsQuery) -> Result<LogsResult, String> {
 }
 
 #[tauri::command]
-pub fn logs_get(
+pub async fn logs_get(
     skill: Option<String>,
     tool: Option<String>,
     from: Option<String>,
@@ -215,30 +190,21 @@ pub fn logs_get(
         page: page.unwrap_or(1),
         limit: limit.unwrap_or(100),
     };
-    get_logs(&crate::root_dir::default_root_dir(), &query)
+    let root = crate::root_dir::default_root_dir();
+    let task = tauri::async_runtime::spawn_blocking(move || get_logs(&root, &query));
+    let joined = tokio::time::timeout(Duration::from_secs(30), task)
+        .await
+        .map_err(|_| "logs_get timed out after 30s".to_string())?;
+    joined.map_err(|e| format!("Run logs_get task failed: {e}"))?
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::test_utils::temp_root;
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
-
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    fn temp_root() -> PathBuf {
-        let mut root = std::env::temp_dir();
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock")
-            .as_nanos();
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        root.push(format!("myskills-tauri-logs-test-{ts}-{n}"));
-        root
-    }
 
     fn seed_logs(root: &Path) {
         let logs_dir = root.join(".logs");
@@ -255,7 +221,7 @@ mod tests {
 
     #[test]
     fn get_logs_filters_by_skill_and_tool() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-logs-test");
         seed_logs(&root);
 
         let result = get_logs(
@@ -279,7 +245,7 @@ mod tests {
 
     #[test]
     fn get_logs_applies_time_range_and_pagination() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-logs-test");
         seed_logs(&root);
 
         let result = get_logs(
@@ -302,7 +268,7 @@ mod tests {
 
     #[test]
     fn read_logs_recovers_windows_style_unescaped_paths() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-logs-test");
         let logs_dir = root.join(".logs");
         fs::create_dir_all(&logs_dir).expect("create logs dir");
         fs::write(
@@ -321,7 +287,7 @@ mod tests {
 
     #[test]
     fn for_each_log_tolerates_non_utf8_lines() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-logs-test");
         let logs_dir = root.join(".logs");
         fs::create_dir_all(&logs_dir).expect("create logs dir");
 

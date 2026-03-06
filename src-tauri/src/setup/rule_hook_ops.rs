@@ -90,20 +90,22 @@ pub(super) fn tracking_rule_block(tool_id: &str) -> String {
         r#"{start}
 ## 1) Turn Gate (Hard Requirement)
 
-At the start of each turn, run skill routing first and prioritize `myskills-router`.
-Before completing this step, do not respond, ask clarifying questions, call tools, or read/write files.
+At the start of each turn, load `myskills-router` and follow its routing instructions.
+Use your platform's skill/file reading tool to read the `myskills-router` SKILL.md file.
+Do not respond, ask clarifying questions, or perform any other action until this step is complete.
 
 ## 2) Invocation Policy
 
-If any skill might apply, invoke it; when uncertain, invoke by default (conservative policy).
-If the user explicitly names a skill, invoke that skill.
+After reading `myskills-router`, follow its skill selection algorithm to identify applicable skills.
+If any skill might apply, load it; when uncertain, load by default (conservative policy).
+If the user explicitly names a skill, load that skill.
 
-## 3) Fallback (Skill Unavailable)
+## 3) Fallback
 
-If `myskills-router` is unavailable (missing, unreadable, or failed to load), you must:
-1. State the unavailability reason briefly.
-2. Run a simplified routing check using available skill descriptions.
-3. Continue the task; never skip routing silently.
+Only if `myskills-router` cannot be read after an actual read attempt (file missing or read error):
+1. State the read error briefly.
+2. Match user intent against available skill descriptions and load matching skills.
+Do NOT skip this step or declare the skill unavailable without first attempting to read it.
 
 ## 4) Auditability
 
@@ -356,8 +358,8 @@ pub(super) fn ensure_claude_hook_removed(home: &Path) -> Result<(), String> {
         return Ok(());
     }
     super::sync_ops::backup_if_exists(&settings_path)?;
-    let raw =
-        fs::read_to_string(&settings_path).map_err(|e| format!("Read claude settings failed: {e}"))?;
+    let raw = fs::read_to_string(&settings_path)
+        .map_err(|e| format!("Read claude settings failed: {e}"))?;
     let mut settings = serde_json::from_str::<JsonValue>(&raw)
         .map_err(|e| format!("Parse claude settings failed: {e}"))?;
 

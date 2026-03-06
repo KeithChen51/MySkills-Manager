@@ -47,35 +47,20 @@ pub fn rules_save(content: String) -> Result<RulesSaveResult, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use crate::test_utils::temp_root;
 
     use super::*;
 
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    fn temp_root() -> PathBuf {
-        let mut root = std::env::temp_dir();
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock")
-            .as_nanos();
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        root.push(format!("myskills-tauri-rules-test-{ts}-{n}"));
-        root
-    }
-
     #[test]
     fn get_rules_returns_empty_if_missing() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-rules-test");
         let content = get_rules(&root).expect("get rules");
         assert_eq!(content.content, "");
     }
 
     #[test]
     fn save_rules_writes_agents_file() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-rules-test");
         let next = "## Team Rules\nBe precise.\n";
 
         let result = save_rules(&root, next).expect("save rules");

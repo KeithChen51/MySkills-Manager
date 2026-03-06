@@ -18,30 +18,18 @@ fn detect_gate_present(tool: &super::tool_catalog::ToolDescriptor) -> bool {
         .unwrap_or(false)
 }
 
-fn antigravity_root_dir(home: &Path, skills_dir: &Path) -> PathBuf {
-    if let Some(parent) = skills_dir.parent() {
-        if parent
-            .file_name()
-            .map(|name| name.to_string_lossy().eq_ignore_ascii_case("antigravity"))
-            .unwrap_or(false)
-        {
-            return parent.to_path_buf();
-        }
-    }
-    home.join(".gemini").join("antigravity")
-}
-
 fn detect_startup_bootstrap_present(
     home: &Path,
     tool: &super::tool_catalog::ToolDescriptor,
 ) -> Option<bool> {
-    let supported = tool.capabilities.startup_injection_supported || tool.capabilities.hook_config_supported;
+    let supported =
+        tool.capabilities.startup_injection_supported || tool.capabilities.hook_config_supported;
     if !supported {
         return None;
     }
 
     let present = match tool.id.as_str() {
-        "antigravity" => antigravity_root_dir(home, &tool.skills_dir)
+        "antigravity" => super::paths::antigravity_root_dir(home, &tool.skills_dir)
             .join("global_workflows")
             .join(format!("{ROUTER_SKILL_NAME}.md"))
             .exists(),

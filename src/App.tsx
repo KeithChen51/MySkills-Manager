@@ -32,12 +32,23 @@ export default function App() {
   const [onboardingCompleted, setOnboardingCompleted] = useState(true);
   const [initialSkillsDir, setInitialSkillsDir] = useState("");
   const [initialAutoSync, setInitialAutoSync] = useState(false);
-  const [globalErrors, setGlobalErrors] = useState<{ id: number; message: string }[]>([]);
+  const [globalErrors, setGlobalErrors] = useState<
+    { id: number; message: string; at: number }[]
+  >([]);
   const [importStatus, setImportStatus] = useState("");
 
   function pushGlobalError(message: string) {
+    const now = Date.now();
     const id = Date.now() + Math.floor(Math.random() * 1000);
-    setGlobalErrors((prev) => [...prev, { id, message }].slice(-4));
+    setGlobalErrors((prev) => {
+      const duplicate = prev.some(
+        (item) => item.message === message && now - item.at < 2000,
+      );
+      if (duplicate) {
+        return prev;
+      }
+      return [...prev, { id, message, at: now }].slice(-4);
+    });
     setTimeout(() => {
       setGlobalErrors((prev) => prev.filter((item) => item.id !== id));
     }, 6000);
@@ -77,7 +88,7 @@ export default function App() {
       const mode = await setupGetImportMode();
       if (mode === "manual") return;
 
-      setImportStatus("正在扫描工具中的新 skills...");
+      setImportStatus(t("app.import.scan"));
       const overview = await setupLocalSkillsOverview();
       if (overview.missingInMySkills === 0) {
         setImportStatus("");
@@ -85,20 +96,18 @@ export default function App() {
       }
 
       if (mode === "auto") {
-        setImportStatus(`正在自动导入 ${overview.missingInMySkills} 个新 skills...`);
+        setImportStatus(t("app.import.auto.start", { count: overview.missingInMySkills }));
         const result = await onboardingImportInstalledSkills();
-        setImportStatus(`已自动导入 ${result.importedTotal} 个新 skills`);
+        setImportStatus(t("app.import.auto.done", { count: result.importedTotal }));
         loadSkills();
         setTimeout(() => setImportStatus(""), 5000);
       } else if (mode === "prompt") {
-        setImportStatus(`发现 ${overview.missingInMySkills} 个新 skills`);
-        const confirmed = window.confirm(
-          `发现 ${overview.missingInMySkills} 个未收录的 skills，是否立即导入到基准目录？`,
-        );
+        setImportStatus(t("app.import.prompt.found", { count: overview.missingInMySkills }));
+        const confirmed = window.confirm(t("app.import.prompt.confirm", { count: overview.missingInMySkills }));
         if (confirmed) {
-          setImportStatus(`正在导入 ${overview.missingInMySkills} 个新 skills...`);
+          setImportStatus(t("app.import.manual.start", { count: overview.missingInMySkills }));
           const result = await onboardingImportInstalledSkills();
-          setImportStatus(`已导入 ${result.importedTotal} 个新 skills`);
+          setImportStatus(t("app.import.manual.done", { count: result.importedTotal }));
           loadSkills();
           setTimeout(() => setImportStatus(""), 5000);
         } else {
@@ -174,7 +183,11 @@ export default function App() {
   }
 
   return (
-    <AppErrorBoundary onError={pushGlobalError}>
+    <AppErrorBoundary
+      onError={pushGlobalError}
+      fallbackTitle={t("app.fallback.title")}
+      fallbackDescription={t("app.fallback.desc")}
+    >
       <div className="app-shell">
         <Sidebar active={view} onChange={setView} />
         <div className="app-content">

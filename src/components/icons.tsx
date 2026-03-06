@@ -149,6 +149,22 @@ export function IconEdit(p: IconProps = {}) {
     ]);
 }
 
+/** MoreHorizontal / Ellipsis */
+export function IconMoreHorizontal(p: IconProps = {}) {
+    return svgMulti(p, ["M5 12h.01", "M12 12h.01", "M19 12h.01"]);
+}
+
+/** Trash2 */
+export function IconTrash(p: IconProps = {}) {
+    return svgMulti(p, [
+        "M3 6h18",
+        "M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2",
+        "M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14",
+        "M10 11v6",
+        "M14 11v6",
+    ]);
+}
+
 /** X / Close */
 export function IconClose(p: IconProps = {}) {
     return svgMulti(p, ["M18 6 6 18", "M6 6l12 12"]);

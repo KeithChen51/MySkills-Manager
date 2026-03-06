@@ -1,12 +1,16 @@
 mod git;
 mod log_index;
+mod log_parse;
 mod logs;
 mod onboarding;
 mod root_dir;
+mod router_seed;
 mod rules;
 mod setup;
 mod skills;
 mod stats;
+#[cfg(test)]
+mod test_utils;
 
 #[tauri::command]
 fn app_ping() -> String {
@@ -18,6 +22,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_process::init())?;
+
             if let Err(err) = onboarding::apply_bootstrap_env() {
                 eprintln!("onboarding bootstrap failed: {err}");
             }
@@ -36,6 +46,7 @@ pub fn run() {
             skills::skills_get_content,
             skills::skills_save_content,
             skills::skills_list_files,
+            skills::skills_delete_everywhere,
             logs::logs_get,
             stats::stats_get,
             rules::rules_get,

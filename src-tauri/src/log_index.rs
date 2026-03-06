@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
+use crate::log_parse::{parse_log_line, parse_ts_epoch};
 use crate::logs::{LogEntry, LogsQuery, LogsResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,27 +15,6 @@ pub(crate) struct IndexedStatsRows {
     pub by_tool: Vec<(String, usize)>,
     pub by_day: Vec<(String, usize)>,
     pub recent: Vec<LogEntry>,
-}
-
-fn parse_ts_epoch(ts: &str) -> Option<i64> {
-    DateTime::parse_from_rfc3339(ts)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc).timestamp())
-}
-
-fn parse_log_line(line: &str) -> Option<LogEntry> {
-    if let Ok(log) = serde_json::from_str::<LogEntry>(line) {
-        return Some(log);
-    }
-
-    if line.contains('\\') {
-        let escaped = line.replace('\\', "\\\\");
-        if let Ok(log) = serde_json::from_str::<LogEntry>(&escaped) {
-            return Some(log);
-        }
-    }
-
-    None
 }
 
 fn logs_file(root: &Path) -> PathBuf {
@@ -72,9 +52,11 @@ CREATE TABLE IF NOT EXISTS meta (
 }
 
 fn read_meta_i64(conn: &Connection, key: &str) -> Result<Option<i64>, String> {
-    conn.query_row("SELECT value FROM meta WHERE key = ?1", [key], |row| row.get(0))
-        .optional()
-        .map_err(|e| format!("Read log index meta failed: {e}"))
+    conn.query_row("SELECT value FROM meta WHERE key = ?1", [key], |row| {
+        row.get(0)
+    })
+    .optional()
+    .map_err(|e| format!("Read log index meta failed: {e}"))
 }
 
 fn write_meta_i64(conn: &Connection, key: &str, value: i64) -> Result<(), String> {
@@ -102,7 +84,8 @@ fn file_signature(path: &Path) -> (i64, i64) {
 }
 
 fn import_logs(conn: &mut Connection, file_path: &Path, start_line: usize) -> Result<(), String> {
-    let file = File::open(file_path).map_err(|e| format!("Open source logs for index failed: {e}"))?;
+    let file =
+        File::open(file_path).map_err(|e| format!("Open source logs for index failed: {e}"))?;
     let reader = BufReader::new(file);
     let mut reader = reader;
     let tx = conn
@@ -178,7 +161,9 @@ fn sync_index(conn: &mut Connection, root: &Path) -> Result<(), String> {
             .map_err(|e| format!("Reset log index failed: {e}"))?;
     } else {
         let max_line = conn
-            .query_row("SELECT COALESCE(MAX(line_no), 0) FROM logs", [], |row| row.get::<_, i64>(0))
+            .query_row("SELECT COALESCE(MAX(line_no), 0) FROM logs", [], |row| {
+                row.get::<_, i64>(0)
+            })
             .map_err(|e| format!("Read indexed max line failed: {e}"))?;
         start_line = (max_line as usize).saturating_add(1);
     }
@@ -246,7 +231,14 @@ pub(crate) fn query_logs_index(root: &Path, query: &LogsQuery) -> Result<LogsRes
     let mut logs = Vec::<LogEntry>::new();
     let rows = stmt
         .query_map(
-            params![skill, tool, from_epoch, to_epoch, limit as i64, offset as i64],
+            params![
+                skill,
+                tool,
+                from_epoch,
+                to_epoch,
+                limit as i64,
+                offset as i64
+            ],
             |row| {
                 Ok(LogEntry {
                     ts: row.get(0)?,
@@ -350,7 +342,11 @@ pub(crate) fn query_stats_index(
     })
 }
 
-fn query_named_counts(conn: &Connection, sql: &str, cutoff_epoch: i64) -> Result<Vec<(String, usize)>, String> {
+fn query_named_counts(
+    conn: &Connection,
+    sql: &str,
+    cutoff_epoch: i64,
+) -> Result<Vec<(String, usize)>, String> {
     let mut stmt = conn
         .prepare(sql)
         .map_err(|e| format!("Prepare indexed aggregate query failed: {e}"))?;
@@ -370,24 +366,10 @@ fn query_named_counts(conn: &Connection, sql: &str, cutoff_epoch: i64) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::temp_root;
     use chrono::TimeZone;
     use std::fs::OpenOptions;
     use std::io::Write;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::SystemTime;
-
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    fn temp_root() -> PathBuf {
-        let mut root = std::env::temp_dir();
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock")
-            .as_nanos();
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        root.push(format!("myskills-tauri-log-index-test-{ts}-{n}"));
-        root
-    }
 
     fn seed(root: &Path) {
         fs::create_dir_all(root.join(".logs")).expect("create logs dir");
@@ -402,7 +384,7 @@ mod tests {
 
     #[test]
     fn indexed_logs_query_supports_filter_and_pagination() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-log-index-test");
         seed(&root);
         let result = query_logs_index(
             &root,
@@ -423,7 +405,7 @@ mod tests {
 
     #[test]
     fn indexed_stats_refreshes_after_log_append() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-log-index-test");
         seed(&root);
         let now = Utc.with_ymd_and_hms(2026, 2, 27, 12, 0, 0).unwrap();
 
@@ -448,7 +430,7 @@ mod tests {
 
     #[test]
     fn indexed_queries_tolerate_non_utf8_lines() {
-        let root = temp_root();
+        let root = temp_root("myskills-tauri-log-index-test");
         fs::create_dir_all(root.join(".logs")).expect("create logs dir");
 
         let mut raw = Vec::<u8>::new();

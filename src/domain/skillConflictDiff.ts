@@ -5,6 +5,9 @@ export type SkillDiffLine = {
   text: string;
 };
 
+export type SkillDiffMode = "lcs" | "degraded";
+export type SkillDiffDegradeReason = "input_limit" | "complexity_limit";
+
 export type SkillDiffResult = {
   hasChanges: boolean;
   added: number;
@@ -12,7 +15,15 @@ export type SkillDiffResult = {
   lines: SkillDiffLine[];
   truncated: boolean;
   hiddenLineCount: number;
+  mode: SkillDiffMode;
+  degraded: boolean;
+  degradeReason?: SkillDiffDegradeReason;
 };
+
+const DEFAULT_MAX_LINES = 280;
+const MAX_INPUT_CHARS = 160_000;
+const MAX_INPUT_LINES = 6_000;
+const MAX_LCS_COMPLEXITY = 2_000_000;
 
 function normalizeLines(content: string): string[] {
   const normalized = content.replace(/\r\n/g, "\n");
@@ -21,6 +32,41 @@ function normalizeLines(content: string): string[] {
     lines.pop();
   }
   return lines;
+}
+
+function applyLineLimit(
+  allLines: SkillDiffLine[],
+  added: number,
+  removed: number,
+  maxLines: number,
+  mode: SkillDiffMode,
+  degradeReason?: SkillDiffDegradeReason,
+): SkillDiffResult {
+  if (maxLines <= 0 || allLines.length <= maxLines) {
+    return {
+      hasChanges: added + removed > 0,
+      added,
+      removed,
+      lines: allLines,
+      truncated: false,
+      hiddenLineCount: 0,
+      mode,
+      degraded: mode === "degraded",
+      degradeReason,
+    };
+  }
+
+  return {
+    hasChanges: added + removed > 0,
+    added,
+    removed,
+    lines: allLines.slice(0, maxLines),
+    truncated: true,
+    hiddenLineCount: allLines.length - maxLines,
+    mode,
+    degraded: mode === "degraded",
+    degradeReason,
+  };
 }
 
 function lcsTable(baseLines: string[], incomingLines: string[]): number[][] {
@@ -40,13 +86,7 @@ function lcsTable(baseLines: string[], incomingLines: string[]): number[][] {
   return table;
 }
 
-export function buildSkillDiff(
-  baseContent: string,
-  incomingContent: string,
-  maxLines = 280,
-): SkillDiffResult {
-  const baseLines = normalizeLines(baseContent);
-  const incomingLines = normalizeLines(incomingContent);
+function buildLcsDiff(baseLines: string[], incomingLines: string[], maxLines: number): SkillDiffResult {
   const table = lcsTable(baseLines, incomingLines);
 
   const allLines: SkillDiffLine[] = [];
@@ -84,23 +124,75 @@ export function buildSkillDiff(
     j += 1;
   }
 
-  if (maxLines <= 0 || allLines.length <= maxLines) {
-    return {
-      hasChanges: added + removed > 0,
-      added,
-      removed,
-      lines: allLines,
-      truncated: false,
-      hiddenLineCount: 0,
-    };
+  return applyLineLimit(allLines, added, removed, maxLines, "lcs");
+}
+
+function buildDegradedDiff(
+  baseLines: string[],
+  incomingLines: string[],
+  maxLines: number,
+  degradeReason: SkillDiffDegradeReason,
+): SkillDiffResult {
+  const allLines: SkillDiffLine[] = [];
+  let added = 0;
+  let removed = 0;
+  let i = 0;
+  let j = 0;
+
+  while (i < baseLines.length || j < incomingLines.length) {
+    const left = i < baseLines.length ? baseLines[i] : undefined;
+    const right = j < incomingLines.length ? incomingLines[j] : undefined;
+
+    if (left !== undefined && right !== undefined) {
+      if (left === right) {
+        allLines.push({ kind: "context", text: left });
+      } else {
+        allLines.push({ kind: "removed", text: left });
+        allLines.push({ kind: "added", text: right });
+        removed += 1;
+        added += 1;
+      }
+      i += 1;
+      j += 1;
+      continue;
+    }
+
+    if (left !== undefined) {
+      allLines.push({ kind: "removed", text: left });
+      removed += 1;
+      i += 1;
+      continue;
+    }
+
+    if (right !== undefined) {
+      allLines.push({ kind: "added", text: right });
+      added += 1;
+      j += 1;
+    }
   }
 
-  return {
-    hasChanges: added + removed > 0,
-    added,
-    removed,
-    lines: allLines.slice(0, maxLines),
-    truncated: true,
-    hiddenLineCount: allLines.length - maxLines,
-  };
+  return applyLineLimit(allLines, added, removed, maxLines, "degraded", degradeReason);
+}
+
+export function buildSkillDiff(
+  baseContent: string,
+  incomingContent: string,
+  maxLines = DEFAULT_MAX_LINES,
+): SkillDiffResult {
+  const baseLines = normalizeLines(baseContent);
+  const incomingLines = normalizeLines(incomingContent);
+
+  const totalChars = baseContent.length + incomingContent.length;
+  const totalLines = baseLines.length + incomingLines.length;
+  const complexity = baseLines.length * incomingLines.length;
+
+  if (totalChars > MAX_INPUT_CHARS || totalLines > MAX_INPUT_LINES) {
+    return buildDegradedDiff(baseLines, incomingLines, maxLines, "input_limit");
+  }
+
+  if (complexity > MAX_LCS_COMPLEXITY) {
+    return buildDegradedDiff(baseLines, incomingLines, maxLines, "complexity_limit");
+  }
+
+  return buildLcsDiff(baseLines, incomingLines, maxLines);
 }

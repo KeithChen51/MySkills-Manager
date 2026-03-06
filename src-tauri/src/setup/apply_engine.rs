@@ -3,9 +3,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const ANTIGRAVITY_MANAGED_WORKFLOW_MANIFEST: &str = ".myskills-managed-workflows.json";
-const MYSKILLS_ROUTER_SKILL_NAME: &str = "myskills-router";
-const MYSKILLS_ROUTER_SKILL_MD: &str =
-    include_str!("../../../builtin-skills/myskills-router/SKILL.md");
 
 fn is_skill_enabled_for_tool(
     skill_name: &str,
@@ -45,21 +42,8 @@ fn is_tracking_enabled_for_tool(tool_id: &str, tracking_disabled_tools: &HashSet
     !tracking_disabled_tools.contains(tool_id)
 }
 
-fn antigravity_root_dir(home: &Path, skills_dir: &Path) -> PathBuf {
-    if let Some(parent) = skills_dir.parent() {
-        if parent
-            .file_name()
-            .map(|name| name.to_string_lossy().eq_ignore_ascii_case("antigravity"))
-            .unwrap_or(false)
-        {
-            return parent.to_path_buf();
-        }
-    }
-    home.join(".gemini").join("antigravity")
-}
-
 fn antigravity_workflows_dir(home: &Path, skills_dir: &Path) -> PathBuf {
-    antigravity_root_dir(home, skills_dir).join("global_workflows")
+    super::paths::antigravity_root_dir(home, skills_dir).join("global_workflows")
 }
 
 fn antigravity_workflow_alias_file_name(skill_name: &str) -> String {
@@ -151,32 +135,13 @@ fn sync_antigravity_workflow_aliases(
     Ok(current_managed.len())
 }
 
-fn ensure_router_skill_source(skills_root: &Path) -> Result<PathBuf, String> {
-    let source_dir = skills_root.join(MYSKILLS_ROUTER_SKILL_NAME);
-    let source_file = source_dir.join("SKILL.md");
-    fs::create_dir_all(&source_dir)
-        .map_err(|e| format!("Create myskills-router source dir failed: {e}"))?;
-
-    let should_write = match fs::read_to_string(&source_file) {
-        Ok(existing) => existing != MYSKILLS_ROUTER_SKILL_MD,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
-        Err(err) => return Err(format!("Read myskills-router source failed: {err}")),
-    };
-    if should_write {
-        fs::write(&source_file, MYSKILLS_ROUTER_SKILL_MD)
-            .map_err(|e| format!("Write myskills-router source failed: {e}"))?;
-    }
-
-    Ok(source_dir)
-}
-
 fn ensure_codex_router_seeded(skills_root: &Path, codex_skills_dir: &Path) -> Result<bool, String> {
-    let target_dir = codex_skills_dir.join(MYSKILLS_ROUTER_SKILL_NAME);
+    let target_dir = codex_skills_dir.join(crate::router_seed::ROUTER_SKILL_NAME);
     if target_dir.join("SKILL.md").exists() {
         return Ok(false);
     }
 
-    let source_dir = ensure_router_skill_source(skills_root)?;
+    let source_dir = crate::router_seed::ensure_router_skill_seeded(skills_root)?;
     super::sync_ops::copy_dir_recursive(&source_dir, &target_dir)?;
     Ok(true)
 }
@@ -249,6 +214,11 @@ pub(super) fn apply_setup_with_paths(
         super::write_sync_config(home, configs)?;
     }
     let stored_sync_config = super::read_sync_config(home)?;
+    let desired_sync_mode = stored_sync_config
+        .as_ref()
+        .map(|cfg| cfg.sync_mode.trim().to_ascii_lowercase())
+        .filter(|mode| mode == "copy" || mode == "symlink")
+        .unwrap_or_else(|| "copy".to_string());
     let config_ref = configured_skills(stored_sync_config.as_ref());
     let tracking_disabled_tools = stored_sync_config
         .as_ref()
@@ -295,8 +265,10 @@ pub(super) fn apply_setup_with_paths(
 
         let mut synced_count = 0usize;
         let mut removed_count = 0usize;
-        let sync_mode = "copy".to_string();
+        let mut effective_sync_mode = desired_sync_mode.clone();
         let mut failure: Option<String> = None;
+        let mut symlink_fallback_count = 0usize;
+        let mut first_symlink_fallback = None::<String>;
         let mut antigravity_aliases = BTreeMap::<String, PathBuf>::new();
         let should_manage_antigravity_workflows =
             tool.capabilities.startup_injection_supported && tool.id == "antigravity";
@@ -318,8 +290,18 @@ pub(super) fn apply_setup_with_paths(
                 continue;
             }
 
-            match super::sync_ops::copy_dir_recursive(&source_dir, &target_dir) {
-                Ok(()) => {
+            match super::sync_ops::sync_skill_dir_with_mode(
+                &source_dir,
+                &target_dir,
+                &desired_sync_mode,
+            ) {
+                Ok(sync_result) => {
+                    if desired_sync_mode == "symlink" && sync_result.mode != "symlink" {
+                        symlink_fallback_count += 1;
+                        if first_symlink_fallback.is_none() {
+                            first_symlink_fallback = sync_result.fallback_reason;
+                        }
+                    }
                     if should_manage_antigravity_workflows {
                         antigravity_aliases.insert(
                             antigravity_workflow_alias_file_name(&skill.name),
@@ -343,7 +325,7 @@ pub(super) fn apply_setup_with_paths(
                 sync_mode: if synced_count == 0 {
                     "none".to_string()
                 } else {
-                    sync_mode
+                    effective_sync_mode
                 },
                 synced_count,
                 error: Some(error),
@@ -353,6 +335,10 @@ pub(super) fn apply_setup_with_paths(
                 failure_result,
                 &rollback_paths,
             ));
+        }
+
+        if desired_sync_mode == "symlink" && symlink_fallback_count > 0 {
+            effective_sync_mode = "copy".to_string();
         }
 
         let mut router_seeded = false;
@@ -372,7 +358,7 @@ pub(super) fn apply_setup_with_paths(
                         sync_mode: if synced_count == 0 {
                             "none".to_string()
                         } else {
-                            sync_mode.clone()
+                            effective_sync_mode.clone()
                         },
                         synced_count,
                         error: Some(err),
@@ -390,6 +376,13 @@ pub(super) fn apply_setup_with_paths(
             "synced {synced_count} skills to {} (removed {removed_count})",
             tool.skills_dir.to_string_lossy()
         )];
+        if symlink_fallback_count > 0 {
+            let fallback_reason = first_symlink_fallback
+                .unwrap_or_else(|| "symlink is not supported in current environment".to_string());
+            action_parts.push(format!(
+                "symlink fallback to copy for {symlink_fallback_count} skills ({fallback_reason})"
+            ));
+        }
         if router_seeded {
             action_parts.push("seeded myskills-router".to_string());
         }
@@ -414,7 +407,7 @@ pub(super) fn apply_setup_with_paths(
                             sync_mode: if synced_count == 0 {
                                 "none".to_string()
                             } else {
-                                sync_mode.clone()
+                                effective_sync_mode.clone()
                             },
                             synced_count,
                             error: Some(err),
@@ -460,7 +453,7 @@ pub(super) fn apply_setup_with_paths(
             sync_mode: if synced_count == 0 {
                 "none".to_string()
             } else {
-                sync_mode
+                effective_sync_mode
             },
             synced_count,
             error: None,

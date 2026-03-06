@@ -3,6 +3,8 @@ import { Component, type ReactNode } from "react";
 type Props = {
   children: ReactNode;
   onError: (message: string) => void;
+  fallbackTitle?: string;
+  fallbackDescription?: string;
 };
 
 type State = {
@@ -24,11 +26,12 @@ export default class AppErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       return (
         <div className="app-fallback">
-          <h2>发生错误</h2>
-          <p>请重新加载应用以恢复。</p>
+          <h2>{this.props.fallbackTitle ?? "Something went wrong."}</h2>
+          <p>{this.props.fallbackDescription ?? "Reload the app to recover from this error."}</p>
         </div>
       );
     }
     return this.props.children;
   }
 }
+

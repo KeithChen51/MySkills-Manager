@@ -18,6 +18,12 @@
   margin: 0;
 }
 
+.skills-action-status {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  margin: 0;
+}
+
 .skills-header-actions {
   align-items: center;
   display: flex;

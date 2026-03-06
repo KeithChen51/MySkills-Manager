@@ -18,8 +18,8 @@ pub(super) fn setup_path_validation_matrix_with_home(
         let mut candidates = Vec::<PathCandidateAudit>::new();
         for candidate in resolution.candidates {
             let skills_dir_exists = candidate.skills_dir.is_dir();
-            let selected =
-                candidate.skills_dir == selected_skills_dir && candidate.rules_path == selected_rules_path;
+            let selected = candidate.skills_dir == selected_skills_dir
+                && candidate.rules_path == selected_rules_path;
             if selected && skills_dir_exists {
                 selected_candidate_exists = true;
             }
@@ -32,7 +32,9 @@ pub(super) fn setup_path_validation_matrix_with_home(
                     .map(|path| path.to_string_lossy().to_string())
                     .unwrap_or_default(),
                 skills_dir_exists,
-                skills_dir_writable: super::status_aggregation::path_writable(&candidate.skills_dir),
+                skills_dir_writable: super::status_aggregation::path_writable(
+                    &candidate.skills_dir,
+                ),
                 rules_path_exists: candidate
                     .rules_path
                     .as_ref()

@@ -12,7 +12,9 @@ pub(super) fn file_contains_marker(path: &Path) -> bool {
     }
 }
 
-pub(super) fn detect_sync_stats(skills_dir: &Path) -> Result<(usize, String, Option<String>), String> {
+pub(super) fn detect_sync_stats(
+    skills_dir: &Path,
+) -> Result<(usize, String, Option<String>), String> {
     if !skills_dir.exists() {
         return Ok((0, "none".to_string(), None));
     }
@@ -28,8 +30,8 @@ pub(super) fn detect_sync_stats(skills_dir: &Path) -> Result<(usize, String, Opt
             continue;
         }
         count += 1;
-        let metadata =
-            fs::symlink_metadata(&skill_file).map_err(|e| format!("Read skills metadata failed: {e}"))?;
+        let metadata = fs::symlink_metadata(&skill_file)
+            .map_err(|e| format!("Read skills metadata failed: {e}"))?;
         if metadata.file_type().is_symlink() {
             has_symlink = true;
         }
@@ -67,7 +69,9 @@ pub(super) fn detect_claude_hook(home: &Path) -> bool {
         return false;
     }
     match fs::read_to_string(settings) {
-        Ok(content) => content.contains("skill-tracker.sh") || content.contains("skill-tracker.ps1"),
+        Ok(content) => {
+            content.contains("skill-tracker.sh") || content.contains("skill-tracker.ps1")
+        }
         Err(_) => false,
     }
 }

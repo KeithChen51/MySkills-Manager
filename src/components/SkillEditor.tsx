@@ -184,7 +184,7 @@ export default function SkillEditor({ skill, onClose, onSaved }: Props) {
             />
           </div>
           <div className="meta-field">
-            <span className="meta-label">更新日期</span>
+            <span className="meta-label">{t("editor.updatedAt")}</span>
             <span className="meta-value">{meta?.last_updated || "—"}</span>
           </div>
           {extraKeys.map((key) => (
@@ -213,7 +213,7 @@ export default function SkillEditor({ skill, onClose, onSaved }: Props) {
           {/* Left: file tree */}
           <aside className="modal-files">
             <div className="modal-files-header">
-              <span className="modal-files-title">文件 ({fileList.length})</span>
+              <span className="modal-files-title">{t("editor.files", { count: fileList.length })}</span>
               <span className="modal-files-size">{formatSize(totalSize)}</span>
             </div>
             <ul className="modal-files-list">
@@ -252,7 +252,7 @@ export default function SkillEditor({ skill, onClose, onSaved }: Props) {
               <div className="modal-editor-placeholder">
                 <p className="modal-editor-placeholder-file">{selectedFile}</p>
                 <p className="modal-editor-placeholder-hint">
-                  此文件仅在目录级同步时一并复制，不支持在线编辑
+                  {t("editor.readonlyHint")}
                 </p>
               </div>
             )}

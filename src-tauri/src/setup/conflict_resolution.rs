@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{setup_skill_source_dirs_with_home, SetupMutationResult, SkillConflictDetail, SkillConflictVariant};
-
-
+use super::{
+    setup_skill_source_dirs_with_home, SetupMutationResult, SkillConflictDetail,
+    SkillConflictVariant,
+};
 
 fn my_skill_dir(root: &Path, skill_name: &str) -> Option<PathBuf> {
     crate::skills::list_skills(root)
@@ -37,8 +38,6 @@ fn first_tool_skill_dir(source_dirs: &[PathBuf], skill_name: &str) -> Option<Pat
 }
 
 fn list_skill_files(dir: &Path) -> Vec<String> {
-    super::sync_ops::dir_content_hash(dir)
-        .ok();
     // Collect relative file paths for display
     fn collect(dir: &Path, prefix: &Path) -> Vec<String> {
         let mut out = Vec::new();
@@ -60,10 +59,11 @@ fn list_skill_files(dir: &Path) -> Vec<String> {
                 }
             }
         }
-        out.sort();
         out
     }
-    collect(dir, dir)
+    let mut files = collect(dir, dir);
+    files.sort();
+    files
 }
 
 pub(super) fn setup_get_skill_conflict_detail_with_home(
@@ -80,7 +80,8 @@ pub(super) fn setup_get_skill_conflict_detail_with_home(
 
     let mut my_hash = None::<String>;
     if let Some(dir) = my_skill_dir(&skills_root, skill_name) {
-        let content = fs::read_to_string(dir.join("SKILL.md")).map_err(|e| format!("Read my skill failed: {e}"))?;
+        let content = fs::read_to_string(dir.join("SKILL.md"))
+            .map_err(|e| format!("Read my skill failed: {e}"))?;
         let hash = super::sync_ops::dir_content_hash(&dir)?;
         let file_list = list_skill_files(&dir);
         my_hash = Some(hash.clone());
@@ -100,8 +101,8 @@ pub(super) fn setup_get_skill_conflict_detail_with_home(
     tool_sources.sort_by(|a, b| a.1.cmp(&b.1));
     for (tool_id, tool_name, source_dirs) in tool_sources {
         if let Some(dir) = first_tool_skill_dir(&source_dirs, skill_name) {
-            let content =
-                fs::read_to_string(dir.join("SKILL.md")).map_err(|e| format!("Read skill from {tool_name} failed: {e}"))?;
+            let content = fs::read_to_string(dir.join("SKILL.md"))
+                .map_err(|e| format!("Read skill from {tool_name} failed: {e}"))?;
             let hash = super::sync_ops::dir_content_hash(&dir)?;
             let file_list = list_skill_files(&dir);
             variants.push(SkillConflictVariant {
@@ -109,7 +110,10 @@ pub(super) fn setup_get_skill_conflict_detail_with_home(
                 source_name: tool_name,
                 content_hash: hash.clone(),
                 in_my_skills: my_hash.is_some(),
-                hash_matches_my_skills: my_hash.as_ref().map(|value| value == &hash).unwrap_or(false),
+                hash_matches_my_skills: my_hash
+                    .as_ref()
+                    .map(|value| value == &hash)
+                    .unwrap_or(false),
                 content,
                 file_list,
                 source_dir: dir.to_string_lossy().to_string(),
