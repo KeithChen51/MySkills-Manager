@@ -1,5 +1,6 @@
 import {
     IconDashboard,
+    IconEval,
     IconGit,
     IconLogs,
     IconSettings,
@@ -12,7 +13,7 @@ import brandLogoTransparent from "../../skillar-design-pack/logo/skillar-logo-tr
 import brandLogoWhiteBg from "../../skillar-design-pack/logo/skillar-logo-white-bg.png";
 import "./Sidebar.css";
 
-export type ViewName = "skills" | "dashboard" | "logs" | "tools" | "git" | "settings";
+export type ViewName = "skills" | "dashboard" | "logs" | "tools" | "eval" | "git" | "settings";
 
 type Props = {
     active: ViewName;
@@ -28,6 +29,7 @@ export default function Sidebar({ active, onChange }: Props) {
         { view: "tools", icon: <IconTools size={20} />, label: t("nav.tools") },
         { view: "dashboard", icon: <IconDashboard size={20} />, label: t("nav.dashboard") },
         { view: "logs", icon: <IconLogs size={20} />, label: t("nav.logs") },
+        { view: "eval", icon: <IconEval size={20} />, label: t("nav.eval") },
         { view: "git", icon: <IconGit size={20} />, label: "Git" },
     ];
 
