@@ -1,0 +1,22 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Trigger Evaluation Input Set",
+    "description": "A set of queries to test the trigger accuracy of a skill.",
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "description": "The user prompt to test.",
+                "type": "string"
+            },
+            "should_trigger": {
+                "description": "Whether the skill is expected to trigger for this query.",
+                "type": "boolean"
+            }
+        },
+        "required": ["query", "should_trigger"]
+    }
+}
+}
+}

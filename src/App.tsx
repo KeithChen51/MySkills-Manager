@@ -21,6 +21,7 @@ import LogsPage from "./pages/LogsPage";
 import SkillsPage from "./pages/SkillsPage";
 import SettingsPage from "./pages/SettingsPage";
 import ToolsPage from "./pages/ToolsPage";
+import EvalPage from "./pages/EvalPage";
 import "./App.css";
 
 export default function App() {
@@ -175,6 +176,8 @@ export default function App() {
         return <LogsPage skills={skills} />;
       case "tools":
         return <ToolsPage />;
+      case "eval":
+        return <EvalPage skills={skills} />;
       case "git":
         return <GitPage />;
       case "settings":

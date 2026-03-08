@@ -1,0 +1,45 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Trigger Evaluation Output",
+    "description": "The results of a trigger accuracy evaluation for a skill.",
+    "type": "object",
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": ["success", "error"]
+        },
+        "skill_name": {
+            "type": "string"
+        },
+        "summary": {
+            "type": "object",
+            "properties": {
+                "total": {"type": "integer"},
+                "passed": {"type": "integer"},
+                "failed": {"type": "integer"},
+                "pass_rate": {"type": "number", "minimum": 0, "maximum": 1}
+            },
+            "required": ["total", "passed", "failed", "pass_rate"]
+        },
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "should_trigger": {"type": "boolean"},
+                    "triggered": {"type": "boolean"},
+                    "triggered_skill_name": {"type": ["string", "null"]},
+                    "pass": {"type": "boolean"},
+                    "error": {"type": "string"}
+                },
+                "required": ["query", "should_trigger", "triggered", "triggered_skill_name", "pass"]
+            }
+        },
+        "message": {
+            "description": "Error message if status is 'error'",
+            "type": "string"
+        }
+    },
+    "required": ["status", "summary", "results"]
+}
