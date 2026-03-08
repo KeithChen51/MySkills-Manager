@@ -9,6 +9,7 @@ mod rules;
 mod setup;
 mod skills;
 mod stats;
+mod evals;
 #[cfg(test)]
 mod test_utils;
 
@@ -72,7 +73,9 @@ pub fn run() {
             onboarding::onboarding_get_state,
             onboarding::onboarding_set_skills_dir,
             onboarding::onboarding_import_installed_skills,
-            onboarding::onboarding_complete
+            onboarding::onboarding_complete,
+            evals::run_trigger_eval,
+            evals::run_functional_eval
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

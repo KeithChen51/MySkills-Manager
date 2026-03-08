@@ -1,0 +1,27 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Functional Evaluation Input Set",
+    "description": "A set of test cases to test the functional correctness of a skill.",
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "id": {
+                "description": "A unique identifier for the test case.",
+                "type": "string"
+            },
+            "prompt": {
+                "description": "The user prompt to test.",
+                "type": "string"
+            },
+            "assertions": {
+                "description": "A list of expected outcomes (assertions) for this test case.",
+                "type": "array",
+                "items": {
+                    "type": "string"
+                }
+            }
+        },
+        "required": ["id", "prompt", "assertions"]
+    }
+}
