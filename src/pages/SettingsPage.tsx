@@ -5,6 +5,9 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
 
 import {
+  evalGetConfig,
+  evalSaveConfig,
+  type EvalConfig,
   onboardingGetState,
   onboardingSetSkillsDir,
   setupGetImportMode,
@@ -52,7 +55,13 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
   const { themeMode, setThemeMode } = useTheme();
   const [skillsDir, setSkillsDir] = useState("");
   const [importMode, setImportMode] = useState("manual");
+  const [apiConfig, setApiConfig] = useState<EvalConfig>({
+    apiKey: "",
+    provider: "openai-compatible",
+    defaultModel: "gpt-4o-mini",
+  });
   const [busy, setBusy] = useState(false);
+  const [apiBusy, setApiBusy] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [appVersion, setAppVersion] = useState("-");
   const [status, setStatus] = useState("");
@@ -62,11 +71,18 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
     void Promise.all([
       onboardingGetState(),
       setupGetImportMode(),
+      evalGetConfig(),
       getVersion().catch(() => "-"),
     ])
-      .then(([state, mode, version]) => {
+      .then(([state, mode, evalConfig, version]) => {
         setSkillsDir(state.skillsDir);
         setImportMode(mode);
+        setApiConfig({
+          apiKey: evalConfig.apiKey,
+          provider: evalConfig.provider || "openai-compatible",
+          baseUrl: evalConfig.baseUrl,
+          defaultModel: evalConfig.defaultModel || "gpt-4o-mini",
+        });
         setAppVersion(version);
         setStatus("");
       })
@@ -182,6 +198,26 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
     }
   }
 
+  async function handleSaveApiConfig() {
+    setApiBusy(true);
+    setStatus(t("settings.evalConfig.saving"));
+    try {
+      const normalized: EvalConfig = {
+        apiKey: apiConfig.apiKey.trim(),
+        provider: "openai-compatible",
+        baseUrl: apiConfig.baseUrl?.trim() || undefined,
+        defaultModel: apiConfig.defaultModel.trim() || "gpt-4o-mini",
+      };
+      await evalSaveConfig(normalized);
+      setApiConfig(normalized);
+      setStatus(t("settings.evalConfig.saved"));
+    } catch (error: unknown) {
+      setStatus(`${t("settings.evalConfig.failed")}: ${String(error)}`);
+    } finally {
+      setApiBusy(false);
+    }
+  }
+
   return (
     <div className="page animate-fadein settings-page">
       <header className="page-header">
@@ -281,6 +317,70 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
             <option value="prompt">{t("settings.importMode.prompt")}</option>
             <option value="auto">{t("settings.importMode.auto")}</option>
           </select>
+        </div>
+      </section>
+
+      <section className="chart-card settings-card">
+        <h2 className="chart-title">{t("settings.evalConfig.title")}</h2>
+        <p className="settings-help">{t("settings.evalConfig.help")}</p>
+        <div className="field">
+          <label className="field-label">{t("settings.evalConfig.apiKey")}</label>
+          <input
+            className="field-input"
+            type="password"
+            value={apiConfig.apiKey}
+            onChange={(e) =>
+              setApiConfig((prev) => ({
+                ...prev,
+                apiKey: e.target.value,
+              }))
+            }
+            placeholder="sk-..."
+            autoComplete="off"
+            disabled={busy || apiBusy}
+          />
+        </div>
+        <div className="field">
+          <label className="field-label">{t("settings.evalConfig.baseUrl")}</label>
+          <input
+            className="field-input"
+            value={apiConfig.baseUrl ?? ""}
+            onChange={(e) =>
+              setApiConfig((prev) => ({
+                ...prev,
+                baseUrl: e.target.value,
+              }))
+            }
+            placeholder="https://api.openai.com/v1"
+            autoComplete="off"
+            disabled={busy || apiBusy}
+          />
+        </div>
+        <div className="field">
+          <label className="field-label">{t("settings.evalConfig.defaultModel")}</label>
+          <input
+            className="field-input"
+            value={apiConfig.defaultModel}
+            onChange={(e) =>
+              setApiConfig((prev) => ({
+                ...prev,
+                defaultModel: e.target.value,
+              }))
+            }
+            placeholder="gpt-4o-mini"
+            autoComplete="off"
+            disabled={busy || apiBusy}
+          />
+        </div>
+        <div className="settings-row">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => void handleSaveApiConfig()}
+            disabled={busy || apiBusy}
+          >
+            {apiBusy ? t("settings.evalConfig.savingButton") : t("settings.evalConfig.saveButton")}
+          </button>
         </div>
       </section>
 

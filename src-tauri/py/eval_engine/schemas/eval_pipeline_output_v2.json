@@ -1,0 +1,155 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Eval Pipeline Output V2",
+  "description": "Unified pipeline output that keeps trigger/functional payloads and adds dimension/cost/run metadata.",
+  "type": "object",
+  "properties": {
+    "status": { "type": "string", "enum": ["success", "error"] },
+    "mode": { "type": "string", "enum": ["quick", "standard", "full"] },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "totalCases": { "type": "integer" },
+        "totalPassed": { "type": "integer" },
+        "totalFailed": { "type": "integer" },
+        "passRate": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "required": ["totalCases", "totalPassed", "totalFailed", "passRate"]
+    },
+    "triggerClean": { "type": "object" },
+    "triggerComplex": { "type": ["object", "null"] },
+    "functional": { "type": "object" },
+    "functionalWithoutSkill": { "type": ["object", "null"] },
+    "dimensionScores": {
+      "type": "object",
+      "properties": {
+        "triggerAccuracy": { "type": "number" },
+        "functionalCorrectness": { "type": "number" },
+        "robustness": { "type": "number" },
+        "efficiency": { "type": "number" },
+        "valueAdded": { "type": "number" }
+      },
+      "required": [
+        "triggerAccuracy",
+        "functionalCorrectness",
+        "robustness",
+        "efficiency",
+        "valueAdded"
+      ]
+    },
+    "triggerMetrics": {
+      "type": "object",
+      "properties": {
+        "precision": { "type": "number" },
+        "recall": { "type": "number" },
+        "fpr": { "type": "number" }
+      },
+      "required": ["precision", "recall", "fpr"]
+    },
+    "costEstimate": {
+      "type": "object",
+      "properties": {
+        "estimatedUsd": { "type": "number" },
+        "actualUsdEstimate": { "type": "number" },
+        "budgetExceeded": { "type": "boolean" }
+      },
+      "required": ["estimatedUsd", "actualUsdEstimate", "budgetExceeded"]
+    },
+    "deltaVsNoSkill": {
+      "type": ["object", "null"],
+      "properties": {
+        "withSkillPassRate": { "type": "number" },
+        "withoutSkillPassRate": { "type": "number" },
+        "functionalPassRateDelta": { "type": "number" }
+      }
+    },
+    "repeatStats": {
+      "type": "object",
+      "properties": {
+        "overallPassRate": {
+          "type": "object",
+          "properties": {
+            "mean": { "type": "number" },
+            "median": { "type": "number" },
+            "stdDev": { "type": "number" }
+          },
+          "required": ["mean", "median", "stdDev"]
+        },
+        "triggerPassRate": {
+          "type": "object",
+          "properties": {
+            "mean": { "type": "number" },
+            "median": { "type": "number" },
+            "stdDev": { "type": "number" }
+          },
+          "required": ["mean", "median", "stdDev"]
+        },
+        "functionalPassRate": {
+          "type": ["object", "null"],
+          "properties": {
+            "mean": { "type": "number" },
+            "median": { "type": "number" },
+            "stdDev": { "type": "number" }
+          }
+        },
+        "robustness": {
+          "type": "object",
+          "properties": {
+            "mean": { "type": "number" },
+            "median": { "type": "number" },
+            "stdDev": { "type": "number" }
+          },
+          "required": ["mean", "median", "stdDev"]
+        },
+        "valueAdded": {
+          "type": ["object", "null"],
+          "properties": {
+            "mean": { "type": "number" },
+            "median": { "type": "number" },
+            "stdDev": { "type": "number" }
+          }
+        }
+      },
+      "required": ["overallPassRate", "triggerPassRate", "robustness"]
+    },
+    "runMeta": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string" },
+        "model": { "type": "string" },
+        "judgeModels": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "repeats": { "type": "integer" },
+        "seed": { "type": ["integer", "null"] },
+        "temperature": { "type": "number" },
+        "executedSteps": { "type": "integer" },
+        "elapsedMs": { "type": "integer" }
+      },
+      "required": [
+        "mode",
+        "model",
+        "judgeModels",
+        "repeats",
+        "temperature",
+        "executedSteps",
+        "elapsedMs"
+      ]
+    },
+    "historyPath": { "type": ["string", "null"] },
+    "message": { "type": ["string", "null"] }
+  },
+  "required": [
+    "status",
+    "mode",
+    "summary",
+    "triggerClean",
+    "functional",
+    "dimensionScores",
+    "triggerMetrics",
+    "costEstimate",
+    "repeatStats",
+    "runMeta"
+  ]
+}

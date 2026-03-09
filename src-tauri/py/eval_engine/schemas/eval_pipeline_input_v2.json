@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Eval Pipeline Input V2",
+  "description": "Unified eval pipeline input. V1 trigger/functional inputs remain compatible.",
+  "type": "object",
+  "properties": {
+    "skill_name": { "type": "string" },
+    "skill_path": { "type": "string" },
+    "trigger_eval_set_path": { "type": "string" },
+    "functional_eval_set_path": { "type": "string" },
+    "mode": { "type": "string", "enum": ["quick", "standard", "full"] },
+    "model": { "type": "string" },
+    "judge_models": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "repeats": { "type": "integer", "minimum": 1 },
+    "seed": { "type": "integer", "minimum": 0 },
+    "temperature": { "type": "number", "minimum": 0 },
+    "max_cost_usd": { "type": "number", "minimum": 0 }
+  },
+  "required": [
+    "skill_name",
+    "skill_path",
+    "trigger_eval_set_path",
+    "functional_eval_set_path",
+    "mode",
+    "model"
+  ]
+}

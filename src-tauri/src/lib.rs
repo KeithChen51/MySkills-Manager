@@ -1,4 +1,5 @@
 mod git;
+mod evals;
 mod log_index;
 mod log_parse;
 mod logs;
@@ -9,7 +10,6 @@ mod rules;
 mod setup;
 mod skills;
 mod stats;
-mod evals;
 #[cfg(test)]
 mod test_utils;
 
@@ -74,8 +74,17 @@ pub fn run() {
             onboarding::onboarding_set_skills_dir,
             onboarding::onboarding_import_installed_skills,
             onboarding::onboarding_complete,
+            evals::eval_get_config,
+            evals::eval_get_storage_paths,
+            evals::eval_list_history,
+            evals::eval_load_history,
+            evals::eval_save_config,
+            evals::eval_control,
             evals::run_trigger_eval,
-            evals::run_functional_eval
+            evals::run_functional_eval,
+            evals::run_eval_pipeline,
+            evals::eval_generate_samples,
+            evals::eval_save_dataset
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

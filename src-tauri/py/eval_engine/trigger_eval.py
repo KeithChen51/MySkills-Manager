@@ -5,12 +5,55 @@ Core module for running trigger accuracy evaluations.
 
 import argparse
 import json
-import os
-import subprocess
-import time
-import uuid
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+READ_ENCODINGS = ("utf-8", "utf-8-sig", "gb18030")
+
+
+def read_text_file(path: Path) -> str:
+    last_error: UnicodeDecodeError | None = None
+    for encoding in READ_ENCODINGS:
+        try:
+            return path.read_text(encoding=encoding)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+    raise ValueError(f"Failed to decode file '{path}'. Please save it as UTF-8.") from last_error
+
+
+def validate_trigger_eval_set(payload: object) -> list[dict]:
+    if not isinstance(payload, list):
+        raise ValueError("Invalid trigger eval set: expected top-level JSON array.")
+
+    validated: list[dict] = []
+    required = ("query", "should_trigger")
+    for index, item in enumerate(payload, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"Invalid trigger eval set: item #{index} must be an object with required keys: query, should_trigger."
+            )
+
+        missing = [key for key in required if key not in item]
+        if missing:
+            raise ValueError(
+                f"Invalid trigger eval set: item #{index} missing required keys: query, should_trigger."
+            )
+
+        query = item.get("query")
+        should_trigger = item.get("should_trigger")
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError(
+                f"Invalid trigger eval set: item #{index} field 'query' must be a non-empty string."
+            )
+        if not isinstance(should_trigger, bool):
+            raise ValueError(
+                f"Invalid trigger eval set: item #{index} field 'should_trigger' must be boolean."
+            )
+
+        validated.append({"query": query, "should_trigger": should_trigger})
+
+    return validated
 
 # A simple placeholder for a generic LLM API client
 # In a real implementation, this would be a more robust client
@@ -20,26 +63,47 @@ class LLMClient:
         self.api_key = api_key
         self.model = model
 
-    def check_trigger(self, prompt: str, available_skills: list[dict]) -> tuple[bool, str | None]:
+    @staticmethod
+    def _tokenize(text: str) -> set[str]:
+        lowered = text.lower()
+        latin_tokens = re.findall(r"[a-z0-9_]{3,}", lowered)
+        cjk_chars = re.findall(r"[\u4e00-\u9fff]", text)
+        cjk_bigrams = [f"{cjk_chars[i]}{cjk_chars[i + 1]}" for i in range(len(cjk_chars) - 1)]
+        return set(latin_tokens + cjk_bigrams)
+
+    def _skill_score(self, prompt: str, skill: dict) -> int:
+        prompt_tokens = self._tokenize(prompt)
+        if not prompt_tokens:
+            return 0
+        profile = f"{skill.get('name', '')} {skill.get('description', '')}"
+        profile_tokens = self._tokenize(profile)
+        return len(prompt_tokens & profile_tokens)
+
+    def check_trigger(
+        self,
+        prompt: str,
+        available_skills: list[dict],
+        env_type: str,
+    ) -> tuple[bool, str | None]:
         """
         Simulates an LLM call and checks if the target skill is triggered.
         Returns (triggered, triggered_skill_name).
         """
-        # This is a mock implementation. A real implementation would:
-        # 1. Format the prompt and available_skills for the specific LLM API.
-        # 2. Make a streaming API call.
-        # 3. Parse the streaming response to detect a tool_call for the skill.
-        # 4. For this placeholder, we'll use a simple heuristic.
-        
-        target_skill_name = available_skills[0]['name'] # Assuming target is always first
+        target_skill_name = available_skills[0]['name']  # Assuming target is always first
         if target_skill_name.lower() in prompt.lower():
             return (True, target_skill_name)
-        
-        # Simulate a competing skill stealing the trigger in a complex environment
-        if len(available_skills) > 1 and "complex" in prompt.lower():
-             # a random skill from the list of available skills steals the trigger
-            if len(available_skills) > 1:
-                return (True, available_skills[1]['name'])
+
+        if env_type == "complex" and len(available_skills) > 1:
+            scored = [(self._skill_score(prompt, skill), skill["name"]) for skill in available_skills]
+            best_score, best_skill_name = max(scored, key=lambda item: item[0])
+            if best_score > 0:
+                return (True, best_skill_name)
+
+            # Deterministic fallback noise to simulate multi-skill competition.
+            checksum = sum(ord(ch) for ch in prompt)
+            if checksum % 5 == 0:
+                distractor_index = (checksum % (len(available_skills) - 1)) + 1
+                return (True, available_skills[distractor_index]["name"])
 
         return (False, None)
 
@@ -56,22 +120,22 @@ def run_single_query(query: str, skill_name: str, skill_description: str, env_ty
         for skill_file in installed_skills_dir.glob('*/SKILL.md'):
             if skill_file.parent.name != skill_name:
                 # Simplified parsing of SKILL.md for description
-                with open(skill_file, 'r') as f:
-                    content = f.read()
-                    # crude description extraction
-                    desc = content.split("---")[1].split("description:")[1].strip()
-                    available_skills.append({
-                        "name": skill_file.parent.name,
-                        "description": desc
-                    })
+                content = read_text_file(skill_file)
+                desc = "No description"
+                if "description:" in content:
+                    desc = content.split("description:", 1)[1].splitlines()[0].strip().strip('"').strip("'")
+                available_skills.append({
+                    "name": skill_file.parent.name,
+                    "description": desc
+                })
 
-    return client.check_trigger(query, available_skills)
+    return client.check_trigger(query, available_skills, env_type)
 
 def run(args: argparse.Namespace) -> dict:
     """Runs the full trigger evaluation set."""
     try:
-        eval_set = json.loads(args.eval_set_path.read_text())
-    except (json.JSONDecodeError, FileNotFoundError) as e:
+        eval_set = validate_trigger_eval_set(json.loads(read_text_file(args.eval_set_path)))
+    except (json.JSONDecodeError, FileNotFoundError, OSError, ValueError) as e:
         return {
             "status": "error",
             "message": f"Failed to read or parse eval set file: {e}"

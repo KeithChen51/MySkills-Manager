@@ -1,44 +1,155 @@
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 import ReactECharts from "echarts-for-react";
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { type SkillMeta } from "../api/tauri";
+import {
+  evalGenerateSamples,
+  evalControl,
+  evalGetConfig,
+  evalGetStoragePaths,
+  evalListHistory,
+  evalLoadHistory,
+  evalSaveDataset,
+  onboardingGetState,
+  runEvalPipeline,
+  type EvalHistoryEntry,
+  type EvalPipelineOutput,
+  type EvalStoragePaths,
+  type SkillMeta,
+} from "../api/tauri";
 import KpiCard from "../components/KpiCard";
 import { useI18n } from "../i18n/I18nProvider";
 import { useTheme } from "../theme/ThemeProvider";
 import "./EvalPage.css";
 
 type Props = { skills: SkillMeta[] };
+type EvalMode = "quick" | "standard" | "full";
+type EvalControlAction = "pause" | "resume" | "cancel";
+type EvalDraftKind = "trigger" | "functional";
 
-/* ---- Mock data structures (will be replaced by real Tauri API calls) ---- */
-
-type TriggerResult = {
+type TriggerDraftRow = {
   query: string;
   shouldTrigger: boolean;
-  triggered: boolean;
-  triggeredSkillName: string | null;
-  pass: boolean;
 };
 
-type FunctionalResult = {
-  caseId: string;
-  passed: boolean;
-  passRate: number;
+type FunctionalDraftRow = {
+  id: string;
+  prompt: string;
+  assertionsText: string;
 };
 
-type EvalSummary = {
-  total: number;
-  passed: number;
-  failed: number;
-  passRate: number;
+type KpiHelpMeta = {
+  dimension: string;
+  description: string;
 };
 
-type EvalReport = {
-  triggerClean: { summary: EvalSummary; results: TriggerResult[] } | null;
-  triggerComplex: { summary: EvalSummary; results: TriggerResult[] } | null;
-  functional: { summary: EvalSummary; results: FunctionalResult[] } | null;
+type EvalProgressEvent = {
+  runId: string;
+  status: "running" | "paused" | "completed" | "cancelled" | "error" | string;
+  currentRepeat: number;
+  totalRepeats: number;
+  stepIndex: number;
+  totalSteps: number;
+  stepName: string;
+  message: string;
+  elapsedMs: number;
 };
 
-/* ---- Component ---- */
+const MODEL_PRESETS = [
+  "gpt-4o-mini",
+  "gpt-4.1-mini",
+  "gpt-4.1",
+  "gpt-4o",
+];
+
+function toSinglePath(value: string | string[] | null): string | null {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  if (Array.isArray(value) && value.length === 1 && typeof value[0] === "string" && value[0].trim()) {
+    return value[0];
+  }
+  return null;
+}
+
+function skillDocPath(skill: SkillMeta | undefined): string | undefined {
+  if (!skill) return undefined;
+  return `${skill.directory.replace(/[\\/]+$/, "")}/SKILL.md`;
+}
+
+function parseTriggerDraftRows(raw: string): TriggerDraftRow[] {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new Error("Trigger draft must be a JSON array.");
+  }
+  return parsed.map((item) => {
+    const row = item as Record<string, unknown>;
+    if (typeof row.query !== "string" || typeof row.should_trigger !== "boolean") {
+      throw new Error("Trigger draft row must include query(string) and should_trigger(boolean).");
+    }
+    return {
+      query: row.query.trim(),
+      shouldTrigger: row.should_trigger,
+    };
+  });
+}
+
+function parseFunctionalDraftRows(raw: string): FunctionalDraftRow[] {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new Error("Functional draft must be a JSON array.");
+  }
+  return parsed.map((item) => {
+    const row = item as Record<string, unknown>;
+    if (
+      typeof row.id !== "string" ||
+      typeof row.prompt !== "string" ||
+      !Array.isArray(row.assertions)
+    ) {
+      throw new Error("Functional draft row must include id, prompt, assertions.");
+    }
+    return {
+      id: row.id.trim(),
+      prompt: row.prompt.trim(),
+      assertionsText: row.assertions
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .join("\n"),
+    };
+  });
+}
+
+function serializeTriggerDraftRows(rows: TriggerDraftRow[]): string {
+  return JSON.stringify(
+    rows
+      .map((row) => ({
+        query: row.query.trim(),
+        should_trigger: row.shouldTrigger,
+      }))
+      .filter((row) => row.query.length > 0),
+    null,
+    2,
+  );
+}
+
+function serializeFunctionalDraftRows(rows: FunctionalDraftRow[]): string {
+  return JSON.stringify(
+    rows
+      .map((row) => ({
+        id: row.id.trim(),
+        prompt: row.prompt.trim(),
+        assertions: row.assertionsText
+          .split(/\r?\n/)
+          .map((entry) => entry.trim())
+          .filter(Boolean),
+      }))
+      .filter((row) => row.id.length > 0 && row.prompt.length > 0 && row.assertions.length > 0),
+    null,
+    2,
+  );
+}
 
 export default function EvalPage({ skills }: Props) {
   const { t } = useI18n();
@@ -47,95 +158,515 @@ export default function EvalPage({ skills }: Props) {
     resolvedTheme === "dark" ? "myskills-soft-dark" : "myskills-soft-light";
 
   const [selectedSkill, setSelectedSkill] = useState("");
-  const [evalMode, setEvalMode] = useState<"quick" | "standard" | "full">(
-    "standard"
-  );
+  const [evalMode, setEvalMode] = useState<EvalMode>("standard");
+  const [model, setModel] = useState("gpt-4o-mini");
+  const [repeatsInput, setRepeatsInput] = useState("1");
+  const [maxCostUsdInput, setMaxCostUsdInput] = useState("");
   const [running, setRunning] = useState(false);
-  const [report, setReport] = useState<EvalReport | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
+  const [progressEvent, setProgressEvent] = useState<EvalProgressEvent | null>(null);
+  const [progressStartedAtMs, setProgressStartedAtMs] = useState<number | null>(null);
+  const [progressElapsedMs, setProgressElapsedMs] = useState(0);
+  const [controlBusy, setControlBusy] = useState(false);
+  const [pauseRequested, setPauseRequested] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [savingDraft, setSavingDraft] = useState<EvalDraftKind | null>(null);
+  const [status, setStatus] = useState("");
+  const [report, setReport] = useState<EvalPipelineOutput | null>(null);
+  const [skillsRootDir, setSkillsRootDir] = useState<string | undefined>(undefined);
+  const [storagePaths, setStoragePaths] = useState<EvalStoragePaths | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyEntries, setHistoryEntries] = useState<EvalHistoryEntry[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [triggerSetPath, setTriggerSetPath] = useState("");
+  const [functionalSetPath, setFunctionalSetPath] = useState("");
+  const [triggerDraftRows, setTriggerDraftRows] = useState<TriggerDraftRow[]>([]);
+  const [functionalDraftRows, setFunctionalDraftRows] = useState<FunctionalDraftRow[]>([]);
 
-  /* ---- Mock run function ---- */
-  async function handleRunEval() {
-    if (!selectedSkill) return;
-    setRunning(true);
-    setReport(null);
+  const selectedSkillMeta = useMemo(
+    () => skills.find((item) => item.name === selectedSkill),
+    [skills, selectedSkill],
+  );
+  const triggerDraftCount = triggerDraftRows.length;
+  const functionalDraftCount = functionalDraftRows.length;
+  const kpiHelp = useMemo<Record<string, KpiHelpMeta>>(
+    () => ({
+      triggerPassRate: {
+        dimension: t("eval.dimension.triggerCore"),
+        description: t("eval.kpi.help.triggerPassRate"),
+      },
+      functionalPassRate: {
+        dimension: t("eval.dimension.functionalCore"),
+        description: t("eval.kpi.help.functionalPassRate"),
+      },
+      totalCases: {
+        dimension: t("eval.dimension.coverage"),
+        description: t("eval.kpi.help.totalCases"),
+      },
+      totalPassed: {
+        dimension: t("eval.dimension.coverage"),
+        description: t("eval.kpi.help.totalPassed"),
+      },
+      precision: {
+        dimension: t("eval.dimension.triggerCore"),
+        description: t("eval.kpi.help.precision"),
+      },
+      recall: {
+        dimension: t("eval.dimension.triggerCore"),
+        description: t("eval.kpi.help.recall"),
+      },
+      fpr: {
+        dimension: t("eval.dimension.triggerCore"),
+        description: t("eval.kpi.help.fpr"),
+      },
+      costEstimate: {
+        dimension: t("eval.dimension.efficiency"),
+        description: t("eval.kpi.help.costEstimate"),
+      },
+      repeatStats: {
+        dimension: t("eval.dimension.robustness"),
+        description: t("eval.kpi.help.repeatStats"),
+      },
+      valueAdded: {
+        dimension: t("eval.dimension.valueAdded"),
+        description: t("eval.kpi.help.valueAdded"),
+      },
+      executedSteps: {
+        dimension: t("eval.dimension.pipeline"),
+        description: t("eval.kpi.help.executedSteps"),
+      },
+    }),
+    [t],
+  );
 
-    // Simulate async evaluation (will be replaced by real Tauri invoke calls)
-    await new Promise((r) => setTimeout(r, 1500));
+  useEffect(() => {
+    void evalGetConfig()
+      .then((config) => {
+        if (config.defaultModel?.trim()) {
+          setModel(config.defaultModel.trim());
+        }
+      })
+      .catch(() => {
+        // keep defaults
+      });
+    void onboardingGetState()
+      .then((state) => {
+        if (state.skillsDir?.trim()) {
+          setSkillsRootDir(state.skillsDir.trim());
+        }
+      })
+      .catch(() => {
+        // keep undefined
+      });
+  }, []);
 
-    const mockTriggerResults: TriggerResult[] = [
-      { query: "Write a blog post about AI", shouldTrigger: true, triggered: true, triggeredSkillName: selectedSkill, pass: true },
-      { query: "Help me debug this Python code", shouldTrigger: false, triggered: false, triggeredSkillName: null, pass: true },
-      { query: "Create a landing page", shouldTrigger: true, triggered: false, triggeredSkillName: null, pass: false },
-      { query: "Summarize this document", shouldTrigger: false, triggered: true, triggeredSkillName: "another-skill", pass: false },
-      { query: "Generate marketing copy", shouldTrigger: true, triggered: true, triggeredSkillName: selectedSkill, pass: true },
-    ];
+  useEffect(() => {
+    if (!selectedSkill) {
+      setStoragePaths(null);
+      setHistoryEntries([]);
+      setShowHistory(false);
+      return;
+    }
+    void refreshHistory(selectedSkill);
+  }, [selectedSkill]);
 
-    const mockFunctionalResults: FunctionalResult[] = [
-      { caseId: "case-001", passed: true, passRate: 1.0 },
-      { caseId: "case-002", passed: true, passRate: 0.8 },
-      { caseId: "case-003", passed: false, passRate: 0.4 },
-    ];
+  useEffect(() => {
+    activeRunIdRef.current = activeRunId;
+  }, [activeRunId]);
 
-    const triggerSummary = {
-      total: mockTriggerResults.length,
-      passed: mockTriggerResults.filter((r) => r.pass).length,
-      failed: mockTriggerResults.filter((r) => !r.pass).length,
-      passRate:
-        mockTriggerResults.filter((r) => r.pass).length /
-        mockTriggerResults.length,
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<EvalProgressEvent>("eval://pipeline-progress", (event) => {
+      const payload = event.payload;
+      if (!activeRunIdRef.current || payload.runId !== activeRunIdRef.current) {
+        return;
+      }
+      setProgressEvent(payload);
+      setProgressStartedAtMs(Date.now() - payload.elapsedMs);
+      if (payload.status === "cancelled") {
+        setStatus(t("eval.status.cancelled"));
+      }
+    })
+      .then((dispose) => {
+        unlisten = dispose;
+      })
+      .catch(() => {
+        // keep polling-free fallback
+      });
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
     };
+  }, [t]);
 
-    const funcSummary = {
-      total: mockFunctionalResults.length,
-      passed: mockFunctionalResults.filter((r) => r.passed).length,
-      failed: mockFunctionalResults.filter((r) => !r.passed).length,
-      passRate:
-        mockFunctionalResults.filter((r) => r.passed).length /
-        mockFunctionalResults.length,
+  useEffect(() => {
+    if (!running || progressStartedAtMs === null) {
+      setProgressElapsedMs(0);
+      return;
+    }
+    const updateElapsed = () => {
+      setProgressElapsedMs(Math.max(0, Date.now() - progressStartedAtMs));
     };
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [running, progressStartedAtMs]);
 
-    setReport({
-      triggerClean: { summary: triggerSummary, results: mockTriggerResults },
-      triggerComplex: null,
-      functional: { summary: funcSummary, results: mockFunctionalResults },
+  async function pickEvalSet(kind: "trigger" | "functional") {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+      title: kind === "trigger" ? t("eval.dataset.trigger") : t("eval.dataset.functional"),
     });
-    setRunning(false);
+    const next = toSinglePath(selected);
+    if (!next) return;
+    if (kind === "trigger") {
+      setTriggerSetPath(next);
+    } else {
+      setFunctionalSetPath(next);
+    }
   }
 
-  /* ---- Render helpers ---- */
+  async function refreshHistory(skillName: string) {
+    if (!skillName.trim()) {
+      setHistoryEntries([]);
+      return;
+    }
+    setHistoryLoading(true);
+    try {
+      const [paths, items] = await Promise.all([
+        evalGetStoragePaths(skillName),
+        evalListHistory(skillName, 30),
+      ]);
+      setStoragePaths(paths);
+      setHistoryEntries(items);
+    } catch {
+      setHistoryEntries([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function handleLoadHistory(path: string) {
+    setHistoryLoading(true);
+    try {
+      const loaded = await evalLoadHistory(path);
+      setReport(loaded);
+      setStatus(t("eval.history.loaded", { path }));
+    } catch (error: unknown) {
+      setStatus(`${t("eval.error.runFailed")}: ${String(error)}`);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function handleGenerateSamples() {
+    if (!selectedSkill) {
+      setStatus(t("eval.error.selectSkill"));
+      return;
+    }
+    if (!model.trim()) {
+      setStatus(t("eval.error.modelRequired"));
+      return;
+    }
+    const docPath = skillDocPath(selectedSkillMeta);
+    if (!docPath) {
+      setStatus(t("eval.error.skillPathMissing"));
+      return;
+    }
+
+    setGenerating(true);
+    setStatus(t("eval.samples.generating"));
+    try {
+      const drafts = await evalGenerateSamples({
+        skillName: selectedSkill,
+        skillPath: docPath,
+        model: model.trim(),
+        triggerCount: 40,
+        functionalCount: 20,
+      });
+      const nextTriggerRows = parseTriggerDraftRows(drafts.triggerDraft);
+      const nextFunctionalRows = parseFunctionalDraftRows(drafts.functionalDraft);
+      setTriggerDraftRows(nextTriggerRows);
+      setFunctionalDraftRows(nextFunctionalRows);
+      setStatus(
+        t("eval.samples.generated", {
+          trigger: nextTriggerRows.length,
+          functional: nextFunctionalRows.length,
+        }),
+      );
+    } catch (error: unknown) {
+      setStatus(`${t("eval.error.generateFailed")}: ${String(error)}`);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function handleSaveDraft(kind: EvalDraftKind, saveMode: "default" | "choose") {
+    const content =
+      kind === "trigger"
+        ? serializeTriggerDraftRows(triggerDraftRows)
+        : serializeFunctionalDraftRows(functionalDraftRows);
+    const parsed = JSON.parse(content) as unknown;
+    const count = Array.isArray(parsed) ? parsed.length : 0;
+    if (count <= 0) {
+      const typeLabel =
+        kind === "trigger" ? t("eval.dataset.trigger") : t("eval.dataset.functional");
+      setStatus(t("eval.error.datasetRequired", { type: typeLabel }));
+      return;
+    }
+
+    let chosenPath: string | undefined;
+    if (saveMode === "choose") {
+      const chosen = await save({
+        defaultPath: `${selectedSkill || "skill"}-${kind}-eval.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+        title: kind === "trigger" ? t("eval.samples.saveTrigger") : t("eval.samples.saveFunctional"),
+      });
+      if (typeof chosen !== "string" || !chosen.trim()) {
+        return;
+      }
+      chosenPath = chosen;
+    }
+
+    setSavingDraft(kind);
+    try {
+      const saved = await evalSaveDataset({
+        path: chosenPath,
+        content,
+        kind,
+        skillName: selectedSkill || undefined,
+      });
+      if (kind === "trigger") {
+        setTriggerSetPath(saved.path);
+      } else {
+        setFunctionalSetPath(saved.path);
+      }
+      if (selectedSkill) {
+        await refreshHistory(selectedSkill);
+      }
+      setStatus(t("eval.samples.saved", { type: kind, path: saved.path }));
+    } catch (error: unknown) {
+      setStatus(`${t("eval.error.runFailed")}: ${String(error)}`);
+    } finally {
+      setSavingDraft(null);
+    }
+  }
+
+  async function handleEvalControl(action: EvalControlAction) {
+    if (!activeRunId) return;
+    setControlBusy(true);
+    try {
+      await evalControl(activeRunId, action);
+      if (action === "pause") {
+        setPauseRequested(true);
+        setStatus(t("eval.status.pauseRequested"));
+      } else if (action === "resume") {
+        setPauseRequested(false);
+        setStatus(t("eval.status.resumeRequested"));
+      } else {
+        setStatus(t("eval.status.cancelRequested"));
+      }
+    } catch (error: unknown) {
+      setStatus(`${t("eval.error.controlFailed")}: ${String(error)}`);
+    } finally {
+      setControlBusy(false);
+    }
+  }
+
+  async function handleRunEval() {
+    if (!selectedSkill) {
+      setStatus(t("eval.error.selectSkill"));
+      return;
+    }
+    if (!model.trim()) {
+      setStatus(t("eval.error.modelRequired"));
+      return;
+    }
+    if (!triggerSetPath.trim()) {
+      setStatus(t("eval.error.datasetRequired", { type: t("eval.dataset.trigger") }));
+      return;
+    }
+    if (evalMode !== "quick" && !functionalSetPath.trim()) {
+      setStatus(t("eval.error.datasetRequired", { type: t("eval.dataset.functional") }));
+      return;
+    }
+
+    const docPath = skillDocPath(selectedSkillMeta);
+    if (!docPath) {
+      setStatus(t("eval.error.skillPathMissing"));
+      return;
+    }
+    const repeats = Number.parseInt(repeatsInput, 10);
+    if (!Number.isFinite(repeats) || repeats < 1) {
+      setStatus(t("eval.error.repeatsInvalid"));
+      return;
+    }
+    const maxCostUsd = maxCostUsdInput.trim()
+      ? Number(maxCostUsdInput.trim())
+      : undefined;
+    if (maxCostUsd !== undefined && (!Number.isFinite(maxCostUsd) || maxCostUsd <= 0)) {
+      setStatus(t("eval.error.maxCostInvalid"));
+      return;
+    }
+    const runId = `eval-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+
+    setRunning(true);
+    setActiveRunId(runId);
+    setPauseRequested(false);
+    setControlBusy(false);
+    setReport(null);
+    setProgressEvent(null);
+    setProgressStartedAtMs(Date.now());
+    setStatus(t("eval.running"));
+
+    try {
+      const requestedModels =
+        evalMode === "full"
+          ? Array.from(new Set([model.trim(), "gpt-4.1-mini"].filter(Boolean)))
+          : [model.trim()];
+      const pipeline = await runEvalPipeline({
+        skillName: selectedSkill,
+        skillPath: docPath,
+        triggerEvalSetPath: triggerSetPath,
+        functionalEvalSetPath: functionalSetPath.trim() || triggerSetPath,
+        mode: evalMode,
+        model: model.trim(),
+        installedSkillsDir: skillsRootDir,
+        judgeModels: requestedModels,
+        repeats,
+        temperature: 0,
+        maxCostUsd,
+        runId,
+      });
+      if (pipeline.status !== "success") {
+        throw new Error(pipeline.message || "Evaluation failed");
+      }
+      setReport(pipeline);
+      if (selectedSkill) {
+        await refreshHistory(selectedSkill);
+      }
+      if (pipeline.historyPath) {
+        setStatus(t("eval.history.saved", { path: pipeline.historyPath }));
+      } else {
+        setStatus("");
+      }
+    } catch (error: unknown) {
+      setStatus(`${t("eval.error.runFailed")}: ${String(error)}`);
+    } finally {
+      setActiveRunId(null);
+      setPauseRequested(false);
+      setRunning(false);
+    }
+  }
 
   function renderSummaryKpis() {
     if (!report) return null;
-    const tc = report.triggerClean?.summary;
-    const fn = report.functional?.summary;
+    const functionalSummary = report.functional?.summary;
+    const functionalPassRate =
+      report.mode === "quick"
+        ? "--"
+        : functionalSummary
+          ? `${Math.round(functionalSummary.passRate * 100)}%`
+          : "--";
     return (
       <div className="kpi-row">
         <KpiCard
           label={t("eval.kpi.triggerPassRate")}
-          value={tc ? `${Math.round(tc.passRate * 100)}%` : "--"}
+          value={`${Math.round(report.dimensionScores.triggerAccuracy * 100)}%`}
+          dimension={kpiHelp.triggerPassRate.dimension}
+          description={kpiHelp.triggerPassRate.description}
         />
         <KpiCard
           label={t("eval.kpi.functionalPassRate")}
-          value={fn ? `${Math.round(fn.passRate * 100)}%` : "--"}
+          value={functionalPassRate}
+          dimension={kpiHelp.functionalPassRate.dimension}
+          description={kpiHelp.functionalPassRate.description}
         />
         <KpiCard
           label={t("eval.kpi.totalCases")}
-          value={(tc?.total ?? 0) + (fn?.total ?? 0)}
+          value={report.summary.totalCases}
+          dimension={kpiHelp.totalCases.dimension}
+          description={kpiHelp.totalCases.description}
         />
         <KpiCard
           label={t("eval.kpi.totalPassed")}
-          value={(tc?.passed ?? 0) + (fn?.passed ?? 0)}
+          value={report.summary.totalPassed}
+          dimension={kpiHelp.totalPassed.dimension}
+          description={kpiHelp.totalPassed.description}
         />
       </div>
     );
   }
 
-  function renderTriggerChart() {
-    if (!report?.triggerClean) return null;
-    const results = report.triggerClean.results;
+  function renderModeKpis() {
+    if (!report) return null;
+    const overallStats = report.repeatStats?.overallPassRate;
+    const overallStatsLabel = overallStats
+      ? `${Math.round(overallStats.mean * 100)}% +/- ${Math.round(overallStats.stdDev * 100)}%`
+      : "--";
+    const valueAddedLabel = report.deltaVsNoSkill
+      ? `${Math.round(report.deltaVsNoSkill.functionalPassRateDelta * 100)}%`
+      : "--";
+    return (
+      <div className="kpi-row">
+        <KpiCard
+          label={t("eval.kpi.precision")}
+          value={`${Math.round(report.triggerMetrics.precision * 100)}%`}
+          dimension={kpiHelp.precision.dimension}
+          description={kpiHelp.precision.description}
+        />
+        <KpiCard
+          label={t("eval.kpi.recall")}
+          value={`${Math.round(report.triggerMetrics.recall * 100)}%`}
+          dimension={kpiHelp.recall.dimension}
+          description={kpiHelp.recall.description}
+        />
+        <KpiCard
+          label={t("eval.kpi.fpr")}
+          value={`${Math.round(report.triggerMetrics.fpr * 100)}%`}
+          dimension={kpiHelp.fpr.dimension}
+          description={kpiHelp.fpr.description}
+        />
+        <KpiCard
+          label={t("eval.kpi.costEstimate")}
+          value={`$${report.costEstimate.estimatedUsd.toFixed(4)}`}
+          dimension={kpiHelp.costEstimate.dimension}
+          description={kpiHelp.costEstimate.description}
+        />
+        <KpiCard
+          label={t("eval.kpi.repeatStats")}
+          value={overallStatsLabel}
+          dimension={kpiHelp.repeatStats.dimension}
+          description={kpiHelp.repeatStats.description}
+        />
+        <KpiCard
+          label={t("eval.kpi.valueAdded")}
+          value={valueAddedLabel}
+          dimension={kpiHelp.valueAdded.dimension}
+          description={kpiHelp.valueAdded.description}
+        />
+        <KpiCard
+          label={t("eval.kpi.executedSteps")}
+          value={report.runMeta.executedSteps}
+          dimension={kpiHelp.executedSteps.dimension}
+          description={kpiHelp.executedSteps.description}
+        />
+      </div>
+    );
+  }
+
+  function renderTriggerChart(triggerReport: EvalPipelineOutput["triggerClean"] | undefined, title: string) {
+    const results = triggerReport?.results;
+    if (!results || results.length === 0) return null;
+
     return (
       <article className="chart-card">
-        <h3 className="chart-title">{t("eval.trigger.title")}</h3>
+        <h3 className="chart-title">{title}</h3>
         <ReactECharts
           className="eval-chart"
           theme={chartThemeName}
@@ -151,14 +682,14 @@ export default function EvalPage({ skills }: Props) {
               {
                 name: t("eval.trigger.expected"),
                 type: "bar",
-                data: results.map((r) => (r.shouldTrigger ? 1 : 0)),
+                data: results.map((item) => (item.shouldTrigger ? 1 : 0)),
                 itemStyle: { color: "var(--chart-2)" },
                 barMaxWidth: 20,
               },
               {
                 name: t("eval.trigger.actual"),
                 type: "bar",
-                data: results.map((r) => (r.triggered ? 1 : 0)),
+                data: results.map((item) => (item.triggered ? 1 : 0)),
                 itemStyle: { color: "var(--chart-1)" },
                 barMaxWidth: 20,
               },
@@ -179,15 +710,15 @@ export default function EvalPage({ skills }: Props) {
               </tr>
             </thead>
             <tbody>
-              {results.map((r, i) => (
-                <tr key={i} className={r.pass ? "" : "eval-row-fail"}>
-                  <td className="eval-query-cell">{r.query}</td>
-                  <td>{r.shouldTrigger ? "Yes" : "No"}</td>
-                  <td>{r.triggered ? "Yes" : "No"}</td>
-                  <td>{r.triggeredSkillName ?? "-"}</td>
+              {results.map((item, index) => (
+                <tr key={`${item.query}-${index}`} className={item.pass ? "" : "eval-row-fail"}>
+                  <td className="eval-query-cell">{item.query}</td>
+                  <td>{item.shouldTrigger ? "Yes" : "No"}</td>
+                  <td>{item.triggered ? "Yes" : "No"}</td>
+                  <td>{item.triggeredSkillName ?? "-"}</td>
                   <td>
-                    <span className={`eval-badge ${r.pass ? "eval-badge-pass" : "eval-badge-fail"}`}>
-                      {r.pass ? "PASS" : "FAIL"}
+                    <span className={`eval-badge ${item.pass ? "eval-badge-pass" : "eval-badge-fail"}`}>
+                      {item.pass ? "PASS" : "FAIL"}
                     </span>
                   </td>
                 </tr>
@@ -200,8 +731,10 @@ export default function EvalPage({ skills }: Props) {
   }
 
   function renderFunctionalChart() {
-    if (!report?.functional) return null;
-    const results = report.functional.results;
+    if (report?.mode === "quick") return null;
+    const results = report?.functional?.results;
+    if (!results || results.length === 0) return null;
+
     return (
       <article className="chart-card">
         <h3 className="chart-title">{t("eval.functional.title")}</h3>
@@ -210,10 +743,7 @@ export default function EvalPage({ skills }: Props) {
           theme={chartThemeName}
           option={{
             tooltip: { trigger: "axis" },
-            xAxis: {
-              type: "category",
-              data: results.map((r) => r.caseId),
-            },
+            xAxis: { type: "category", data: results.map((item) => item.caseId) },
             yAxis: {
               type: "value",
               max: 1,
@@ -223,12 +753,10 @@ export default function EvalPage({ skills }: Props) {
               {
                 name: t("eval.functional.passRate"),
                 type: "bar",
-                data: results.map((r) => r.passRate),
+                data: results.map((item) => item.passRate),
                 itemStyle: {
                   color: (params: { dataIndex: number }) =>
-                    results[params.dataIndex].passed
-                      ? "var(--success)"
-                      : "var(--danger)",
+                    results[params.dataIndex].passed ? "var(--success)" : "var(--danger)",
                 },
                 barMaxWidth: 32,
               },
@@ -242,17 +770,27 @@ export default function EvalPage({ skills }: Props) {
               <tr>
                 <th>{t("eval.table.caseId")}</th>
                 <th>{t("eval.table.passRate")}</th>
+                <th>{t("eval.table.qualityScore")}</th>
+                <th>{t("eval.table.judgeRationale")}</th>
+                <th>{t("eval.table.judgeSuggestions")}</th>
                 <th>{t("eval.table.result")}</th>
               </tr>
             </thead>
             <tbody>
-              {results.map((r) => (
-                <tr key={r.caseId} className={r.passed ? "" : "eval-row-fail"}>
-                  <td>{r.caseId}</td>
-                  <td>{Math.round(r.passRate * 100)}%</td>
+              {results.map((item) => (
+                <tr key={item.caseId} className={item.passed ? "" : "eval-row-fail"}>
+                  <td>{item.caseId}</td>
+                  <td>{Math.round(item.passRate * 100)}%</td>
+                  <td>{typeof item.qualityScore === "number" ? `${Math.round(item.qualityScore * 100)}%` : "--"}</td>
+                  <td className="eval-query-cell">{item.judgeRationale || "-"}</td>
+                  <td className="eval-query-cell">
+                    {item.judgeSuggestions && item.judgeSuggestions.length > 0
+                      ? item.judgeSuggestions.join("; ")
+                      : "-"}
+                  </td>
                   <td>
-                    <span className={`eval-badge ${r.passed ? "eval-badge-pass" : "eval-badge-fail"}`}>
-                      {r.passed ? "PASS" : "FAIL"}
+                    <span className={`eval-badge ${item.passed ? "eval-badge-pass" : "eval-badge-fail"}`}>
+                      {item.passed ? "PASS" : "FAIL"}
                     </span>
                   </td>
                 </tr>
@@ -264,13 +802,19 @@ export default function EvalPage({ skills }: Props) {
     );
   }
 
+  const elapsedSeconds = Math.floor(progressElapsedMs / 1000);
+  const progressDetail = progressEvent
+    ? `${progressEvent.message} (${progressEvent.stepIndex}/${Math.max(progressEvent.totalSteps, 1)}, ${elapsedSeconds}s)`
+    : running
+      ? t("eval.running")
+      : "";
+
   return (
     <div className="page animate-fadein">
       <header className="page-header">
         <h1 className="page-title">{t("eval.title")}</h1>
       </header>
 
-      {/* ---- Configuration Panel ---- */}
       <article className="chart-card eval-config-card">
         <h3 className="chart-title">{t("eval.config.title")}</h3>
         <div className="eval-config-grid">
@@ -282,9 +826,9 @@ export default function EvalPage({ skills }: Props) {
               onChange={(e) => setSelectedSkill(e.target.value)}
             >
               <option value="">{t("eval.config.selectSkill")}</option>
-              {skills.map((s) => (
-                <option key={s.name} value={s.name}>
-                  {s.name}
+              {skills.map((skill) => (
+                <option key={skill.name} value={skill.name}>
+                  {skill.name}
                 </option>
               ))}
             </select>
@@ -295,9 +839,7 @@ export default function EvalPage({ skills }: Props) {
             <select
               className="filter-select"
               value={evalMode}
-              onChange={(e) =>
-                setEvalMode(e.target.value as "quick" | "standard" | "full")
-              }
+              onChange={(e) => setEvalMode(e.target.value as EvalMode)}
             >
               <option value="quick">{t("eval.config.mode.quick")}</option>
               <option value="standard">{t("eval.config.mode.standard")}</option>
@@ -305,32 +847,421 @@ export default function EvalPage({ skills }: Props) {
             </select>
           </div>
 
+          <div className="field">
+            <label className="field-label">{t("eval.config.modelPreset")}</label>
+            <select
+              className="filter-select"
+              value={MODEL_PRESETS.includes(model) ? model : ""}
+              onChange={(e) => {
+                if (e.target.value) {
+                  setModel(e.target.value);
+                }
+              }}
+            >
+              <option value="">{t("eval.config.modelPreset.custom")}</option>
+              {MODEL_PRESETS.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="field">
+            <label className="field-label">{t("eval.config.model")}</label>
+            <input
+              className="field-input"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder={t("eval.config.model.placeholder")}
+            />
+          </div>
+
+          <div className="field">
+            <label className="field-label">{t("eval.config.repeats")}</label>
+            <input
+              className="field-input"
+              type="number"
+              min={1}
+              step={1}
+              value={repeatsInput}
+              onChange={(e) => setRepeatsInput(e.target.value)}
+            />
+          </div>
+
+          <div className="field">
+            <label className="field-label">{t("eval.config.maxCostUsd")}</label>
+            <input
+              className="field-input"
+              type="number"
+              min={0}
+              step="0.01"
+              value={maxCostUsdInput}
+              onChange={(e) => setMaxCostUsdInput(e.target.value)}
+              placeholder={t("eval.config.maxCostUsd.placeholder")}
+            />
+          </div>
+
+          <div className="field">
+            <label className="field-label">{t("eval.dataset.trigger")}</label>
+            <div className="eval-path-row">
+              <input
+                className="field-input"
+                value={triggerSetPath}
+                onChange={(e) => setTriggerSetPath(e.target.value)}
+                placeholder="...trigger-eval.json"
+              />
+              <button className="btn btn-ghost" onClick={() => void pickEvalSet("trigger")}>
+                {t("eval.dataset.pick")}
+              </button>
+            </div>
+            <p className="eval-path-hint">
+              {t("eval.dataset.defaultPath", { path: storagePaths?.datasetDir ?? "--" })}
+            </p>
+          </div>
+
+          <div className="field">
+            <label className="field-label">{t("eval.dataset.functional")}</label>
+            <div className="eval-path-row">
+              <input
+                className="field-input"
+                value={functionalSetPath}
+                onChange={(e) => setFunctionalSetPath(e.target.value)}
+                placeholder="...functional-eval.json"
+                disabled={evalMode === "quick"}
+              />
+              <button
+                className="btn btn-ghost"
+                onClick={() => void pickEvalSet("functional")}
+                disabled={evalMode === "quick"}
+              >
+                {t("eval.dataset.pick")}
+              </button>
+            </div>
+            <p className="eval-path-hint">
+              {t("eval.history.path", { path: storagePaths?.historyDir ?? "--" })}
+            </p>
+          </div>
+
           <div className="field eval-config-actions">
             <button
+              className="btn btn-ghost"
+              onClick={() => void handleGenerateSamples()}
+              disabled={running || generating || !selectedSkill}
+            >
+              {generating ? t("eval.samples.generating") : t("eval.samples.generate")}
+            </button>
+            <button
               className="btn btn-primary"
-              disabled={!selectedSkill || running}
-              onClick={handleRunEval}
+              onClick={() => void handleRunEval()}
+              disabled={running || generating}
             >
               {running ? t("eval.running") : t("eval.run")}
             </button>
+            <button
+              className="btn btn-ghost"
+              onClick={() => setShowHistory((prev) => !prev)}
+              disabled={!selectedSkill}
+            >
+              {t("eval.history.view")} ({historyEntries.length})
+            </button>
+            {running && (
+              <>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => void handleEvalControl(pauseRequested ? "resume" : "pause")}
+                  disabled={controlBusy || !activeRunId}
+                >
+                  {pauseRequested ? t("eval.control.resume") : t("eval.control.pause")}
+                </button>
+                <button
+                  className="btn btn-danger"
+                  onClick={() => void handleEvalControl("cancel")}
+                  disabled={controlBusy || !activeRunId}
+                >
+                  {t("eval.control.stop")}
+                </button>
+              </>
+            )}
           </div>
         </div>
       </article>
 
-      {/* ---- Results ---- */}
+      {(triggerDraftRows.length > 0 || functionalDraftRows.length > 0) && (
+        <article className="chart-card eval-draft-card">
+          <h3 className="chart-title">{t("eval.samples.title")}</h3>
+          <div className="eval-draft-grid">
+            <div className="field">
+              <label className="field-label">
+                {t("eval.samples.triggerForm")} ({triggerDraftCount})
+              </label>
+              <div className="eval-draft-actions">
+                <button
+                  className="btn btn-ghost"
+                  onClick={() =>
+                    setTriggerDraftRows((prev) => [...prev, { query: "", shouldTrigger: true }])
+                  }
+                >
+                  {t("eval.samples.addRow")}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => void handleSaveDraft("trigger", "default")}
+                  disabled={savingDraft !== null}
+                >
+                  {savingDraft === "trigger"
+                    ? t("eval.samples.saving")
+                    : t("eval.samples.saveTriggerDefault")}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => void handleSaveDraft("trigger", "choose")}
+                  disabled={savingDraft !== null}
+                >
+                  {savingDraft === "trigger" ? t("eval.samples.saving") : t("eval.samples.saveTrigger")}
+                </button>
+              </div>
+              <div className="eval-draft-table-wrap">
+                <table className="eval-draft-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>{t("eval.table.query")}</th>
+                      <th>{t("eval.table.expected")}</th>
+                      <th>{t("eval.samples.actions")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {triggerDraftRows.map((row, index) => (
+                      <tr key={`trigger-draft-${index}`}>
+                        <td>{index + 1}</td>
+                        <td>
+                          <input
+                            className="field-input"
+                            value={row.query}
+                            onChange={(event) => {
+                              const query = event.target.value;
+                              setTriggerDraftRows((prev) =>
+                                prev.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, query } : item,
+                                ),
+                              );
+                            }}
+                          />
+                        </td>
+                        <td>
+                          <select
+                            className="filter-select"
+                            value={row.shouldTrigger ? "true" : "false"}
+                            onChange={(event) => {
+                              const shouldTrigger = event.target.value === "true";
+                              setTriggerDraftRows((prev) =>
+                                prev.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, shouldTrigger } : item,
+                                ),
+                              );
+                            }}
+                          >
+                            <option value="true">{t("eval.option.yes")}</option>
+                            <option value="false">{t("eval.option.no")}</option>
+                          </select>
+                        </td>
+                        <td>
+                          <button
+                            className="btn btn-danger eval-draft-inline-btn"
+                            onClick={() =>
+                              setTriggerDraftRows((prev) =>
+                                prev.filter((_, itemIndex) => itemIndex !== index),
+                              )
+                            }
+                          >
+                            {t("eval.samples.removeRow")}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="field">
+              <label className="field-label">
+                {t("eval.samples.functionalForm")} ({functionalDraftCount})
+              </label>
+              <div className="eval-draft-actions">
+                <button
+                  className="btn btn-ghost"
+                  onClick={() =>
+                    setFunctionalDraftRows((prev) => [
+                      ...prev,
+                      { id: "", prompt: "", assertionsText: "" },
+                    ])
+                  }
+                >
+                  {t("eval.samples.addRow")}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => void handleSaveDraft("functional", "default")}
+                  disabled={savingDraft !== null}
+                >
+                  {savingDraft === "functional"
+                    ? t("eval.samples.saving")
+                    : t("eval.samples.saveFunctionalDefault")}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => void handleSaveDraft("functional", "choose")}
+                  disabled={savingDraft !== null}
+                >
+                  {savingDraft === "functional"
+                    ? t("eval.samples.saving")
+                    : t("eval.samples.saveFunctional")}
+                </button>
+              </div>
+              <div className="eval-functional-draft-list">
+                {functionalDraftRows.map((row, index) => (
+                  <div className="eval-functional-draft-item" key={`functional-draft-${index}`}>
+                    <div className="eval-functional-draft-head">
+                      <span>#{index + 1}</span>
+                      <button
+                        className="btn btn-danger eval-draft-inline-btn"
+                        onClick={() =>
+                          setFunctionalDraftRows((prev) =>
+                            prev.filter((_, itemIndex) => itemIndex !== index),
+                          )
+                        }
+                      >
+                        {t("eval.samples.removeRow")}
+                      </button>
+                    </div>
+                    <label className="field-label">{t("eval.table.caseId")}</label>
+                    <input
+                      className="field-input"
+                      value={row.id}
+                      onChange={(event) => {
+                        const id = event.target.value;
+                        setFunctionalDraftRows((prev) =>
+                          prev.map((item, itemIndex) => (itemIndex === index ? { ...item, id } : item)),
+                        );
+                      }}
+                    />
+                    <label className="field-label">{t("eval.samples.prompt")}</label>
+                    <textarea
+                      className="eval-draft-textarea"
+                      value={row.prompt}
+                      onChange={(event) => {
+                        const prompt = event.target.value;
+                        setFunctionalDraftRows((prev) =>
+                          prev.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, prompt } : item,
+                          ),
+                        );
+                      }}
+                    />
+                    <label className="field-label">{t("eval.samples.assertions")}</label>
+                    <textarea
+                      className="eval-draft-textarea"
+                      value={row.assertionsText}
+                      onChange={(event) => {
+                        const assertionsText = event.target.value;
+                        setFunctionalDraftRows((prev) =>
+                          prev.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, assertionsText } : item,
+                          ),
+                        );
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </article>
+      )}
+
+      {status && (
+        <p className="settings-status" role="status" aria-live="polite">
+          {status}
+        </p>
+      )}
+
+      {running && progressDetail && (
+        <p className="settings-status" role="status" aria-live="polite">
+          {progressDetail}
+        </p>
+      )}
+
+      {showHistory && selectedSkill && (
+        <article className="chart-card eval-history-card">
+          <div className="eval-history-head">
+            <h3 className="chart-title">{t("eval.history.title", { skill: selectedSkill })}</h3>
+            <button
+              className="btn btn-ghost"
+              onClick={() => void refreshHistory(selectedSkill)}
+              disabled={historyLoading}
+            >
+              {historyLoading ? t("eval.history.loading") : t("eval.history.refresh")}
+            </button>
+          </div>
+          <p className="eval-path-hint">
+            {t("eval.history.path", { path: storagePaths?.historyDir ?? "--" })}
+          </p>
+          {historyEntries.length === 0 ? (
+            <p className="eval-path-hint">{t("eval.history.empty")}</p>
+          ) : (
+            <div className="eval-results-table-wrap">
+              <table className="eval-results-table">
+                <thead>
+                  <tr>
+                    <th>{t("eval.history.time")}</th>
+                    <th>{t("eval.config.mode")}</th>
+                    <th>{t("eval.kpi.totalCases")}</th>
+                    <th>{t("eval.table.passRate")}</th>
+                    <th>{t("eval.config.model")}</th>
+                    <th>{t("eval.samples.actions")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historyEntries.map((item) => (
+                    <tr key={item.path}>
+                      <td>{new Date(item.savedAtUnix * 1000).toLocaleString()}</td>
+                      <td>{item.mode}</td>
+                      <td>{item.totalCases}</td>
+                      <td>{Math.round(item.passRate * 100)}%</td>
+                      <td>{item.model}</td>
+                      <td>
+                        <button
+                          className="btn btn-ghost eval-draft-inline-btn"
+                          onClick={() => void handleLoadHistory(item.path)}
+                          disabled={historyLoading}
+                        >
+                          {t("eval.history.load")}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </article>
+      )}
+
       {report && (
         <>
           {renderSummaryKpis()}
+          {renderModeKpis()}
           <div className="chart-row">
-            {renderTriggerChart()}
+            {renderTriggerChart(report.triggerClean, t("eval.trigger.titleClean"))}
             {renderFunctionalChart()}
           </div>
+          {report.mode === "full" &&
+            renderTriggerChart(report.triggerComplex, t("eval.trigger.titleComplex"))}
         </>
       )}
 
-      {!report && !running && (
-        <div className="empty-state">{t("eval.empty")}</div>
-      )}
+      {!report && !running && !status && <div className="empty-state">{t("eval.empty")}</div>}
     </div>
   );
 }

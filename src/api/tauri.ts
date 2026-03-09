@@ -306,6 +306,356 @@ export type OnboardingImportSkillsResult = {
   tools: ToolImportSummary[];
 };
 
+export type EvalConfig = {
+  apiKey: string;
+  provider: string;
+  baseUrl?: string;
+  defaultModel: string;
+};
+
+type TriggerEvalResultItemRaw = {
+  query: string;
+  should_trigger: boolean;
+  triggered: boolean;
+  triggered_skill_name?: string | null;
+  pass: boolean;
+  error?: string;
+};
+
+type TriggerEvalSummaryRaw = {
+  total: number;
+  passed: number;
+  failed: number;
+  pass_rate: number;
+};
+
+type TriggerEvalOutputRaw = {
+  status: string;
+  skill_name?: string;
+  summary?: TriggerEvalSummaryRaw;
+  results?: TriggerEvalResultItemRaw[];
+  message?: string;
+};
+
+export type TriggerEvalResultItem = {
+  query: string;
+  shouldTrigger: boolean;
+  triggered: boolean;
+  triggeredSkillName: string | null;
+  pass: boolean;
+  error?: string;
+};
+
+export type TriggerEvalSummary = {
+  total: number;
+  passed: number;
+  failed: number;
+  passRate: number;
+};
+
+export type TriggerEvalOutput = {
+  status: string;
+  skillName?: string;
+  summary?: TriggerEvalSummary;
+  results?: TriggerEvalResultItem[];
+  message?: string;
+};
+
+type FunctionalEvalResultItemRaw = {
+  case_id: string;
+  passed: boolean;
+  pass_rate: number;
+  error?: string;
+  layer1_pass?: boolean;
+  quality_score?: number;
+  dimension_scores?: Record<string, number>;
+  judge_rationale?: string;
+  judge_suggestions?: string[];
+  judge_source?: string;
+};
+
+type FunctionalEvalSummaryRaw = {
+  total: number;
+  passed: number;
+  failed: number;
+  pass_rate: number;
+};
+
+type FunctionalEvalOutputRaw = {
+  status: string;
+  skill_name?: string;
+  summary?: FunctionalEvalSummaryRaw;
+  dimension_scores?: Record<string, number>;
+  results?: FunctionalEvalResultItemRaw[];
+  message?: string;
+};
+
+export type FunctionalEvalResultItem = {
+  caseId: string;
+  passed: boolean;
+  passRate: number;
+  error?: string;
+  layer1Pass?: boolean;
+  qualityScore?: number;
+  dimensionScores?: Record<string, number>;
+  judgeRationale?: string;
+  judgeSuggestions?: string[];
+  judgeSource?: string;
+};
+
+export type FunctionalEvalSummary = {
+  total: number;
+  passed: number;
+  failed: number;
+  passRate: number;
+};
+
+export type FunctionalEvalOutput = {
+  status: string;
+  skillName?: string;
+  summary?: FunctionalEvalSummary;
+  dimensionScores?: Record<string, number>;
+  results?: FunctionalEvalResultItem[];
+  message?: string;
+};
+
+export type EvalSampleDrafts = {
+  triggerDraft: string;
+  functionalDraft: string;
+  triggerCount: number;
+  functionalCount: number;
+};
+
+export type EvalDatasetKind = "trigger" | "functional";
+
+export type EvalDatasetSaveRequest = {
+  content: string;
+  path?: string;
+  kind?: "trigger" | "functional";
+  skillName?: string;
+};
+
+export type EvalDatasetSaveResult = {
+  success: boolean;
+  path: string;
+};
+
+export type EvalStoragePaths = {
+  datasetDir: string;
+  historyDir: string;
+};
+
+export type EvalHistoryEntry = {
+  path: string;
+  fileName: string;
+  savedAtUnix: number;
+  mode: string;
+  passRate: number;
+  totalCases: number;
+  model: string;
+  status: string;
+};
+
+export type EvalRunRequest = {
+  skillName: string;
+  model: string;
+  evalSetPath: string;
+  envType?: "clean" | "complex";
+  installedSkillsDir?: string;
+};
+
+export type FunctionalEvalRunRequest = {
+  skillName: string;
+  skillPath: string;
+  evalSetPath: string;
+  compareMode?: "none" | "no_skill" | "without_skill";
+  model: string;
+};
+
+export type EvalSampleGenerateRequest = {
+  skillName: string;
+  skillPath: string;
+  model: string;
+  triggerCount?: number;
+  functionalCount?: number;
+};
+
+export type EvalPipelineMode = "quick" | "standard" | "full";
+
+export type EvalPipelineSummary = {
+  totalCases: number;
+  totalPassed: number;
+  totalFailed: number;
+  passRate: number;
+};
+
+export type EvalTriggerMetrics = {
+  precision: number;
+  recall: number;
+  fpr: number;
+  truePositive: number;
+  trueNegative: number;
+  falsePositive: number;
+  falseNegative: number;
+};
+
+export type EvalDimensionScores = {
+  triggerAccuracy: number;
+  functionalCorrectness: number;
+  robustness: number;
+  efficiency: number;
+  valueAdded: number;
+};
+
+export type EvalCostEstimate = {
+  estimatedUsd: number;
+  actualUsdEstimate: number;
+  triggerCases: number;
+  functionalCases: number;
+  apiCallsEstimate: number;
+  budgetLimitUsd?: number;
+  budgetExceeded: boolean;
+};
+
+export type EvalDeltaVsNoSkill = {
+  withSkillPassRate: number;
+  withoutSkillPassRate: number;
+  functionalPassRateDelta: number;
+};
+
+export type EvalRunMeta = {
+  mode: EvalPipelineMode | string;
+  model: string;
+  judgeModels: string[];
+  repeats: number;
+  seed?: number;
+  temperature: number;
+  executedSteps: number;
+  elapsedMs: number;
+  skillHash?: string;
+};
+
+export type EvalRateStats = {
+  mean: number;
+  median: number;
+  stdDev: number;
+};
+
+export type EvalRepeatStats = {
+  overallPassRate: EvalRateStats;
+  triggerPassRate: EvalRateStats;
+  functionalPassRate?: EvalRateStats;
+  robustness: EvalRateStats;
+  valueAdded?: EvalRateStats;
+};
+
+export type EvalPipelineOutput = {
+  status: string;
+  mode: EvalPipelineMode | string;
+  summary: EvalPipelineSummary;
+  triggerClean: TriggerEvalOutput;
+  triggerComplex?: TriggerEvalOutput;
+  functional: FunctionalEvalOutput;
+  functionalWithoutSkill?: FunctionalEvalOutput;
+  dimensionScores: EvalDimensionScores;
+  triggerMetrics: EvalTriggerMetrics;
+  costEstimate: EvalCostEstimate;
+  deltaVsNoSkill?: EvalDeltaVsNoSkill;
+  repeatStats: EvalRepeatStats;
+  runMeta: EvalRunMeta;
+  historyPath?: string;
+  message?: string;
+};
+
+type EvalPipelineOutputRaw = {
+  status: string;
+  mode: EvalPipelineMode | string;
+  summary: EvalPipelineSummary;
+  triggerClean: TriggerEvalOutputRaw;
+  triggerComplex?: TriggerEvalOutputRaw;
+  functional: FunctionalEvalOutputRaw;
+  functionalWithoutSkill?: FunctionalEvalOutputRaw;
+  dimensionScores: EvalDimensionScores;
+  triggerMetrics: EvalTriggerMetrics;
+  costEstimate: EvalCostEstimate;
+  deltaVsNoSkill?: EvalDeltaVsNoSkill;
+  repeatStats: EvalRepeatStats;
+  runMeta: EvalRunMeta;
+  historyPath?: string;
+  message?: string;
+};
+
+export type EvalPipelineRequest = {
+  skillName: string;
+  skillPath: string;
+  triggerEvalSetPath: string;
+  functionalEvalSetPath: string;
+  mode: EvalPipelineMode;
+  model: string;
+  installedSkillsDir?: string;
+  judgeModels?: string[];
+  repeats?: number;
+  seed?: number;
+  temperature?: number;
+  maxCostUsd?: number;
+  runId?: string;
+};
+
+export type EvalControlAction = "pause" | "resume" | "cancel";
+
+function mapTriggerOutput(raw: TriggerEvalOutputRaw): TriggerEvalOutput {
+  return {
+    status: raw.status,
+    skillName: raw.skill_name,
+    message: raw.message,
+    summary: raw.summary
+      ? {
+          total: raw.summary.total,
+          passed: raw.summary.passed,
+          failed: raw.summary.failed,
+          passRate: raw.summary.pass_rate,
+        }
+      : undefined,
+    results: raw.results?.map((item) => ({
+      query: item.query,
+      shouldTrigger: item.should_trigger,
+      triggered: item.triggered,
+      triggeredSkillName: item.triggered_skill_name ?? null,
+      pass: item.pass,
+      error: item.error,
+    })),
+  };
+}
+
+function mapFunctionalOutput(raw: FunctionalEvalOutputRaw): FunctionalEvalOutput {
+  return {
+    status: raw.status,
+    skillName: raw.skill_name,
+    message: raw.message,
+    summary: raw.summary
+      ? {
+          total: raw.summary.total,
+          passed: raw.summary.passed,
+          failed: raw.summary.failed,
+          passRate: raw.summary.pass_rate,
+        }
+      : undefined,
+    dimensionScores: raw.dimension_scores,
+    results: raw.results?.map((item) => ({
+      caseId: item.case_id,
+      passed: item.passed,
+      passRate: item.pass_rate,
+      error: item.error,
+      layer1Pass: item.layer1_pass,
+      qualityScore: item.quality_score,
+      dimensionScores: item.dimension_scores,
+      judgeRationale: item.judge_rationale,
+      judgeSuggestions: item.judge_suggestions,
+      judgeSource: item.judge_source,
+    })),
+  };
+}
+
 export async function appPing(): Promise<string> {
   return invokeWithError<string>("app_ping");
 }
@@ -470,4 +820,154 @@ export async function setupGetImportMode(): Promise<string> {
 
 export async function setupSetImportMode(mode: string): Promise<SetupMutationResult> {
   return invokeWithError<SetupMutationResult>("setup_set_import_mode", { mode });
+}
+
+export async function evalGetConfig(): Promise<EvalConfig> {
+  return invokeWithError<EvalConfig>("eval_get_config");
+}
+
+export async function evalGetStoragePaths(skillName?: string): Promise<EvalStoragePaths> {
+  return invokeWithError<EvalStoragePaths>("eval_get_storage_paths", {
+    skillName,
+    skill_name: skillName,
+  });
+}
+
+export async function evalListHistory(
+  skillName: string,
+  limit = 20,
+): Promise<EvalHistoryEntry[]> {
+  return invokeWithError<EvalHistoryEntry[]>("eval_list_history", {
+    skillName,
+    skill_name: skillName,
+    limit,
+  });
+}
+
+export async function evalLoadHistory(path: string): Promise<EvalPipelineOutput> {
+  const raw = await invokeWithError<EvalPipelineOutputRaw>(
+    "eval_load_history",
+    { path },
+    { reportGlobal: true },
+  );
+  return {
+    ...raw,
+    triggerClean: mapTriggerOutput(raw.triggerClean),
+    triggerComplex: raw.triggerComplex ? mapTriggerOutput(raw.triggerComplex) : undefined,
+    functional: mapFunctionalOutput(raw.functional),
+    functionalWithoutSkill: raw.functionalWithoutSkill
+      ? mapFunctionalOutput(raw.functionalWithoutSkill)
+      : undefined,
+  };
+}
+
+export async function evalSaveConfig(config: EvalConfig): Promise<SetupMutationResult> {
+  return invokeWithError<SetupMutationResult>("eval_save_config", {
+    apiKey: config.apiKey,
+    api_key: config.apiKey,
+    provider: config.provider,
+    baseUrl: config.baseUrl,
+    base_url: config.baseUrl,
+    defaultModel: config.defaultModel,
+    default_model: config.defaultModel,
+  });
+}
+
+export async function runTriggerEval(request: EvalRunRequest): Promise<TriggerEvalOutput> {
+  const raw = await invokeWithError<TriggerEvalOutputRaw>(
+    "run_trigger_eval",
+    {
+      skillName: request.skillName,
+      evalSetPath: request.evalSetPath,
+      envType: request.envType ?? "clean",
+      installedSkillsDir: request.installedSkillsDir,
+      model: request.model,
+    },
+    { reportGlobal: true },
+  );
+  return mapTriggerOutput(raw);
+}
+
+export async function runFunctionalEval(
+  request: FunctionalEvalRunRequest,
+): Promise<FunctionalEvalOutput> {
+  const raw = await invokeWithError<FunctionalEvalOutputRaw>(
+    "run_functional_eval",
+    {
+      skillName: request.skillName,
+      skillPath: request.skillPath,
+      evalSetPath: request.evalSetPath,
+      compareMode: request.compareMode ?? "no_skill",
+      model: request.model,
+    },
+    { reportGlobal: true },
+  );
+  return mapFunctionalOutput(raw);
+}
+
+export async function runEvalPipeline(request: EvalPipelineRequest): Promise<EvalPipelineOutput> {
+  const raw = await invokeWithError<EvalPipelineOutputRaw>(
+    "run_eval_pipeline",
+    {
+      skillName: request.skillName,
+      skillPath: request.skillPath,
+      triggerEvalSetPath: request.triggerEvalSetPath,
+      functionalEvalSetPath: request.functionalEvalSetPath,
+      mode: request.mode,
+      model: request.model,
+      installedSkillsDir: request.installedSkillsDir,
+      judgeModels: request.judgeModels,
+      repeats: request.repeats,
+      seed: request.seed,
+      temperature: request.temperature,
+      maxCostUsd: request.maxCostUsd,
+      runId: request.runId,
+      run_id: request.runId,
+    },
+    { reportGlobal: true },
+  );
+  return {
+    ...raw,
+    triggerClean: mapTriggerOutput(raw.triggerClean),
+    triggerComplex: raw.triggerComplex ? mapTriggerOutput(raw.triggerComplex) : undefined,
+    functional: mapFunctionalOutput(raw.functional),
+    functionalWithoutSkill: raw.functionalWithoutSkill
+      ? mapFunctionalOutput(raw.functionalWithoutSkill)
+      : undefined,
+  };
+}
+
+export async function evalControl(runId: string, action: EvalControlAction): Promise<SetupMutationResult> {
+  return invokeWithError<SetupMutationResult>("eval_control", {
+    runId,
+    action,
+  });
+}
+
+export async function evalGenerateSamples(
+  request: EvalSampleGenerateRequest,
+): Promise<EvalSampleDrafts> {
+  return invokeWithError<EvalSampleDrafts>(
+    "eval_generate_samples",
+    {
+      skillName: request.skillName,
+      skillPath: request.skillPath,
+      model: request.model,
+      triggerCount: request.triggerCount,
+      functionalCount: request.functionalCount,
+    },
+    { reportGlobal: true },
+  );
+}
+
+export async function evalSaveDataset(
+  request: EvalDatasetSaveRequest,
+): Promise<EvalDatasetSaveResult> {
+  return invokeWithError<EvalDatasetSaveResult>("eval_save_dataset", {
+    path: request.path,
+    content: request.content,
+    kind: request.kind,
+    skillName: request.skillName,
+    skill_name: request.skillName,
+  });
 }
