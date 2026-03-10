@@ -1,5 +1,5 @@
-mod git;
 mod evals;
+mod git;
 mod log_index;
 mod log_parse;
 mod logs;
@@ -52,7 +52,20 @@ pub fn run() {
             stats::stats_get,
             rules::rules_get,
             rules::rules_save,
+            git::git_sync_source_path,
+            git::git_get_guide_markdown,
+            git::git_list_repositories,
+            git::git_add_repository,
+            git::git_remove_repository,
+            git::git_update_repository_alias,
+            git::git_update_repository_sync_path,
+            git::git_list_sync_tree,
+            git::git_update_repository_ignored_paths,
+            git::git_open_directory,
+            git::git_open_url,
+            git::git_sync_skills_to_repo,
             git::git_status,
+            git::git_list_commit_history,
             git::git_commit,
             git::git_push,
             setup::setup_status,

@@ -129,6 +129,29 @@ export type GitStatus = {
   not_added: string[];
   ahead: number;
   behind: number;
+  recent_commits: GitRecentCommit[];
+  latest_commit_hash?: string;
+  latest_pushed_hash?: string;
+};
+
+export type GitRecentCommit = {
+  hash: string;
+  short_hash: string;
+  summary: string;
+  author_name: string;
+  authored_at: string;
+  is_pushed: boolean;
+};
+
+export type GitGraphCommit = {
+  hash: string;
+  short_hash: string;
+  summary: string;
+  author_name: string;
+  authored_at: string;
+  is_pushed: boolean;
+  refs: string[];
+  parent_hashes: string[];
 };
 
 export type GitCommitResult = {
@@ -139,6 +162,50 @@ export type GitCommitResult = {
 export type GitPushResult = {
   success: boolean;
   error?: string;
+};
+
+export type GitProvider = "github" | "gitlab" | "gitee" | "other";
+export type GitSyncMode = "direct" | "mirror";
+
+export type GitManagedRepository = {
+  id: string;
+  name: string;
+  alias?: string;
+  url: string;
+  provider: GitProvider;
+  syncMode: GitSyncMode;
+  sourcePath: string;
+  localPath: string;
+  isSyncing: boolean;
+  lastSyncAt?: string;
+  lastSyncError?: string;
+  scriptAfterAdd?: string;
+  ignorePaths: string[];
+};
+
+export type GitSkillsSyncResult = {
+  sourcePath: string;
+  targetPath: string;
+  copiedFiles: number;
+  removedEntries: number;
+};
+
+export type GitSyncTreeEntry = {
+  relativePath: string;
+  name: string;
+  entryType: "file" | "dir";
+  hasChildren: boolean;
+  ignored: boolean;
+};
+
+export type GitUpdateIgnoreResult = {
+  repository: GitManagedRepository;
+  syncResult?: GitSkillsSyncResult;
+};
+
+export type GitGuideDocument = {
+  path: string;
+  content: string;
 };
 
 export type ToolStatus = {
@@ -699,16 +766,150 @@ export async function rulesSave(content: string): Promise<RulesSaveResult> {
   return invokeWithError<RulesSaveResult>("rules_save", { content });
 }
 
-export async function gitStatus(): Promise<GitStatus> {
-  return invokeWithError<GitStatus>("git_status");
+export async function gitListRepositories(): Promise<GitManagedRepository[]> {
+  return invokeWithError<GitManagedRepository[]>("git_list_repositories");
 }
 
-export async function gitCommit(message: string): Promise<GitCommitResult> {
-  return invokeWithError<GitCommitResult>("git_commit", { message });
+export async function gitSyncSourcePath(): Promise<string> {
+  return invokeWithError<string>("git_sync_source_path");
 }
 
-export async function gitPush(): Promise<GitPushResult> {
-  return invokeWithError<GitPushResult>("git_push");
+export async function gitGetGuideMarkdown(): Promise<GitGuideDocument> {
+  return invokeWithError<GitGuideDocument>("git_get_guide_markdown");
+}
+
+export type GitAddRepositoryOptions = {
+  alias?: string;
+  scriptAfterAdd?: string;
+  syncMode?: GitSyncMode;
+  sourcePath?: string;
+  localPath?: string;
+};
+
+export async function gitAddRepository(
+  url: string,
+  options: GitAddRepositoryOptions = {},
+): Promise<GitManagedRepository> {
+  const { alias, scriptAfterAdd, syncMode, sourcePath, localPath } = options;
+  return invokeWithError<GitManagedRepository>("git_add_repository", {
+    url,
+    alias,
+    scriptAfterAdd,
+    script_after_add: scriptAfterAdd,
+    syncMode,
+    sync_mode: syncMode,
+    sourcePath,
+    source_path: sourcePath,
+    localPath,
+    local_path: localPath,
+  });
+}
+
+export async function gitRemoveRepository(repositoryId: string): Promise<boolean> {
+  return invokeWithError<boolean>("git_remove_repository", {
+    repositoryId,
+    repository_id: repositoryId,
+  });
+}
+
+export async function gitUpdateRepositoryAlias(
+  repositoryId: string,
+  alias?: string,
+): Promise<GitManagedRepository> {
+  return invokeWithError<GitManagedRepository>("git_update_repository_alias", {
+    repositoryId,
+    repository_id: repositoryId,
+    alias,
+  });
+}
+
+export async function gitUpdateRepositorySyncPath(
+  repositoryId: string,
+  syncPath?: string,
+): Promise<GitManagedRepository> {
+  return invokeWithError<GitManagedRepository>("git_update_repository_sync_path", {
+    repositoryId,
+    repository_id: repositoryId,
+    syncPath,
+    sync_path: syncPath,
+  });
+}
+
+export async function gitListSyncTree(
+  repositoryId: string,
+  parentRelativePath?: string,
+): Promise<GitSyncTreeEntry[]> {
+  return invokeWithError<GitSyncTreeEntry[]>("git_list_sync_tree", {
+    repositoryId,
+    repository_id: repositoryId,
+    parentRelativePath,
+    parent_relative_path: parentRelativePath,
+  });
+}
+
+export async function gitUpdateRepositoryIgnoredPaths(
+  repositoryId: string,
+  ignorePaths: string[],
+): Promise<GitUpdateIgnoreResult> {
+  return invokeWithError<GitUpdateIgnoreResult>("git_update_repository_ignored_paths", {
+    repositoryId,
+    repository_id: repositoryId,
+    ignorePaths,
+    ignore_paths: ignorePaths,
+  });
+}
+
+export async function gitOpenDirectory(path: string): Promise<boolean> {
+  return invokeWithError<boolean>("git_open_directory", { path });
+}
+
+export async function gitOpenUrl(url: string): Promise<boolean> {
+  return invokeWithError<boolean>("git_open_url", { url });
+}
+
+export async function gitSyncSkillsToRepo(
+  repoPath: string,
+  sourcePath?: string,
+): Promise<GitSkillsSyncResult> {
+  return invokeWithError<GitSkillsSyncResult>("git_sync_skills_to_repo", {
+    repoPath,
+    repo_path: repoPath,
+    sourcePath,
+    source_path: sourcePath,
+  });
+}
+
+export async function gitStatus(repoPath?: string): Promise<GitStatus> {
+  return invokeWithError<GitStatus>("git_status", {
+    repoPath,
+    repo_path: repoPath,
+  });
+}
+
+export async function gitListCommitHistory(
+  repoPath?: string,
+  limit = 80,
+): Promise<GitGraphCommit[]> {
+  return invokeWithError<GitGraphCommit[]>("git_list_commit_history", {
+    repoPath,
+    repo_path: repoPath,
+    limit,
+  });
+}
+
+export async function gitCommit(message: string, repoPath?: string): Promise<GitCommitResult> {
+  return invokeWithError<GitCommitResult>("git_commit", {
+    message,
+    repoPath,
+    repo_path: repoPath,
+  });
+}
+
+export async function gitPush(repoPath?: string): Promise<GitPushResult> {
+  return invokeWithError<GitPushResult>("git_push", {
+    repoPath,
+    repo_path: repoPath,
+  });
 }
 
 export async function setupStatus(): Promise<ToolStatus[]> {
