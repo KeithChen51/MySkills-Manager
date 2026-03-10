@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
 
 import {
   evalGetConfig,
   evalSaveConfig,
   type EvalConfig,
+  type UpdateSettings,
   onboardingGetState,
   onboardingSetSkillsDir,
   setupGetImportMode,
@@ -20,21 +19,13 @@ import "./SettingsPage.css";
 
 type Props = {
   onSkillsDirChanged: () => void;
+  updaterSettings: UpdateSettings;
+  updaterSettingsLoading: boolean;
+  updaterSettingsSaving: boolean;
+  updateCheckBusy: boolean;
+  onUpdateSettingsPatch: (patch: Partial<UpdateSettings>) => void;
+  onOpenUpdateDialog: () => void;
 };
-
-function formatSize(bytes: number): string {
-  if (bytes <= 0 || !Number.isFinite(bytes)) {
-    return "0 B";
-  }
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
-}
 
 function formatStatusError(
   error: unknown,
@@ -50,7 +41,15 @@ function formatStatusError(
   return raw;
 }
 
-export default function SettingsPage({ onSkillsDirChanged }: Props) {
+export default function SettingsPage({
+  onSkillsDirChanged,
+  updaterSettings,
+  updaterSettingsLoading,
+  updaterSettingsSaving,
+  updateCheckBusy,
+  onUpdateSettingsPatch,
+  onOpenUpdateDialog,
+}: Props) {
   const { t, locale, setLocale } = useI18n();
   const { themeMode, setThemeMode } = useTheme();
   const [skillsDir, setSkillsDir] = useState("");
@@ -62,7 +61,6 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
   });
   const [busy, setBusy] = useState(false);
   const [apiBusy, setApiBusy] = useState(false);
-  const [updateBusy, setUpdateBusy] = useState(false);
   const [appVersion, setAppVersion] = useState("-");
   const [status, setStatus] = useState("");
 
@@ -136,68 +134,6 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
     }
   }
 
-  async function handleCheckForUpdates() {
-    setUpdateBusy(true);
-    setStatus(t("settings.update.checking"));
-
-    try {
-      const update = await check();
-      if (!update) {
-        setStatus(t("settings.update.none"));
-        return;
-      }
-
-      const installNow = window.confirm(
-        t("settings.update.available", {
-          version: update.version,
-          current: update.currentVersion,
-        }),
-      );
-      if (!installNow) {
-        setStatus(t("settings.update.declined", { version: update.version }));
-        return;
-      }
-
-      let downloaded = 0;
-      let contentLength: number | undefined;
-      setStatus(t("settings.update.downloading"));
-
-      await update.downloadAndInstall((event: DownloadEvent) => {
-        if (event.event === "Started") {
-          contentLength = event.data.contentLength;
-          return;
-        }
-
-        if (event.event === "Progress") {
-          downloaded += event.data.chunkLength;
-          if (contentLength && contentLength > 0) {
-            setStatus(
-              t("settings.update.downloading.progress", {
-                downloaded: formatSize(downloaded),
-                total: formatSize(contentLength),
-              }),
-            );
-          }
-          return;
-        }
-
-        setStatus(t("settings.update.installing"));
-      });
-
-      const restartNow = window.confirm(t("settings.update.restartNow"));
-      if (restartNow) {
-        setStatus(t("settings.update.relaunching"));
-        await relaunch();
-        return;
-      }
-      setStatus(t("settings.update.restartLater"));
-    } catch (error: unknown) {
-      setStatus(`${t("settings.update.failed")}: ${String(error)}`);
-    } finally {
-      setUpdateBusy(false);
-    }
-  }
-
   async function handleSaveApiConfig() {
     setApiBusy(true);
     setStatus(t("settings.evalConfig.saving"));
@@ -252,6 +188,49 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
       <section className="chart-card settings-card">
         <h2 className="chart-title">{t("settings.update.title")}</h2>
         <p className="settings-help">{t("settings.update.help")}</p>
+        <div className="settings-row settings-update-policy-row">
+          <label className="settings-toggle">
+            <input
+              type="checkbox"
+              checked={updaterSettings.auto_check}
+              disabled={updaterSettingsLoading || updaterSettingsSaving}
+              onChange={(e) => onUpdateSettingsPatch({ auto_check: e.target.checked })}
+            />
+            <span>{t("settings.update.autoCheck.label")}</span>
+          </label>
+          <label className="settings-toggle">
+            <input
+              type="checkbox"
+              checked={updaterSettings.auto_install}
+              disabled={updaterSettingsLoading || updaterSettingsSaving}
+              onChange={(e) => onUpdateSettingsPatch({ auto_install: e.target.checked })}
+            />
+            <span>{t("settings.update.autoInstall.label")}</span>
+          </label>
+        </div>
+        <p className="settings-help">{t("settings.update.autoCheck.help")}</p>
+        <p className="settings-help">{t("settings.update.autoInstall.help")}</p>
+        <div className="settings-row">
+          <label className="field-label settings-inline-label" htmlFor="update-interval-select">
+            {t("settings.update.interval.label")}
+          </label>
+          <select
+            id="update-interval-select"
+            className="filter-select settings-update-interval-select"
+            value={String(updaterSettings.check_interval_hours)}
+            disabled={updaterSettingsLoading || updaterSettingsSaving}
+            onChange={(e) => {
+              const value = Number.parseInt(e.target.value, 10);
+              if (Number.isFinite(value) && value > 0) {
+                onUpdateSettingsPatch({ check_interval_hours: value });
+              }
+            }}
+          >
+            <option value="1">{t("settings.update.interval.1h")}</option>
+            <option value="6">{t("settings.update.interval.6h")}</option>
+            <option value="24">{t("settings.update.interval.24h")}</option>
+          </select>
+        </div>
         <div className="settings-row settings-update-row">
           <span className="settings-version-chip">
             {t("settings.update.current", { version: appVersion })}
@@ -259,10 +238,10 @@ export default function SettingsPage({ onSkillsDirChanged }: Props) {
           <button
             type="button"
             className="btn btn-primary"
-            onClick={() => void handleCheckForUpdates()}
-            disabled={busy || updateBusy}
+            onClick={() => onOpenUpdateDialog()}
+            disabled={busy || updateCheckBusy}
           >
-            {updateBusy ? t("settings.update.checkingButton") : t("settings.update.checkButton")}
+            {updateCheckBusy ? t("settings.update.checkingButton") : t("settings.update.checkButton")}
           </button>
         </div>
       </section>

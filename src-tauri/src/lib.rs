@@ -10,6 +10,7 @@ mod rules;
 mod setup;
 mod skills;
 mod stats;
+mod update_checker;
 #[cfg(test)]
 mod test_utils;
 
@@ -83,6 +84,13 @@ pub fn run() {
             setup::setup_set_tool_tracking_enabled,
             setup::setup_get_import_mode,
             setup::setup_set_import_mode,
+            update_checker::should_check_updates,
+            update_checker::get_update_settings,
+            update_checker::save_update_settings,
+            update_checker::update_last_check_time,
+            update_checker::save_pending_update_notes,
+            update_checker::check_version_jump,
+            update_checker::update_log,
             onboarding::onboarding_get_state,
             onboarding::onboarding_set_skills_dir,
             onboarding::onboarding_import_installed_skills,

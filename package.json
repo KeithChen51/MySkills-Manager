@@ -12,6 +12,9 @@
     "build:desktop:windows:update": "node scripts/assert-updater-signing-env.mjs && npm run sync:tauri-icons && cargo tauri build --config src-tauri/tauri.updater.conf.json && node scripts/expose-skillar-exe.mjs && node scripts/prepare-gitee-package.mjs",
     "expose:exe": "node scripts/expose-skillar-exe.mjs",
     "pack:gitee": "node scripts/prepare-gitee-package.mjs",
+    "release:sync:github": "node scripts/sync-github-release.mjs",
+    "release:sync:github-and-pack:gitee": "npm run release:sync:github && node scripts/prepare-gitee-package.mjs",
+    "release:windows:update:all": "npm run build:desktop:windows:update && npm run release:sync:github-and-pack:gitee",
     "lint": "eslint .",
     "preview": "vite preview"
   },

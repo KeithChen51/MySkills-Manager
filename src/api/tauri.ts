@@ -373,6 +373,21 @@ export type OnboardingImportSkillsResult = {
   tools: ToolImportSummary[];
 };
 
+export type UpdateSettings = {
+  auto_check: boolean;
+  last_check_time: number;
+  check_interval_hours: number;
+  auto_install: boolean;
+  last_run_version: string;
+};
+
+export type VersionJumpInfo = {
+  previous_version: string;
+  current_version: string;
+  release_notes: string;
+  release_notes_zh: string;
+};
+
 export type EvalConfig = {
   apiKey: string;
   provider: string;
@@ -1022,6 +1037,50 @@ export async function setupGetImportMode(): Promise<string> {
 
 export async function setupSetImportMode(mode: string): Promise<SetupMutationResult> {
   return invokeWithError<SetupMutationResult>("setup_set_import_mode", { mode });
+}
+
+export async function shouldCheckUpdates(): Promise<boolean> {
+  return invokeWithError<boolean>("should_check_updates");
+}
+
+export async function getUpdateSettings(): Promise<UpdateSettings> {
+  return invokeWithError<UpdateSettings>("get_update_settings");
+}
+
+export async function saveUpdateSettings(settings: UpdateSettings): Promise<void> {
+  await invokeWithError<void>("save_update_settings", { settings });
+}
+
+export async function updateLastCheckTime(): Promise<void> {
+  await invokeWithError<void>("update_last_check_time");
+}
+
+export async function savePendingUpdateNotes(
+  version: string,
+  releaseNotes: string,
+  releaseNotesZh: string,
+): Promise<void> {
+  await invokeWithError<void>("save_pending_update_notes", {
+    version,
+    releaseNotes,
+    release_notes: releaseNotes,
+    releaseNotesZh,
+    release_notes_zh: releaseNotesZh,
+  });
+}
+
+export async function checkVersionJump(): Promise<VersionJumpInfo | null> {
+  return invokeWithError<VersionJumpInfo | null>("check_version_jump");
+}
+
+export async function updateLog(
+  level: "info" | "warn" | "error",
+  message: string,
+): Promise<void> {
+  await invokeWithError<void>("update_log", {
+    level,
+    message,
+  });
 }
 
 export async function evalGetConfig(): Promise<EvalConfig> {

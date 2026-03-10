@@ -21,7 +21,12 @@ function readSettingsPageSource() {
   return fs.readFileSync(pagePath, "utf8");
 }
 
-test("tauri config defines updater endpoint and public key", () => {
+function readAppSource() {
+  const appPath = path.resolve(process.cwd(), "src/App.tsx");
+  return fs.readFileSync(appPath, "utf8");
+}
+
+test("tauri config defines GitHub updater endpoint and public key", () => {
   const config = readTauriConfig();
   const updater = config.plugins?.updater;
 
@@ -42,27 +47,40 @@ test("tauri config defines updater endpoint and public key", () => {
   );
 });
 
-test("Settings page wires updater check and relaunch flow", () => {
+test("App wires shared updater hook and update dialogs", () => {
+  const source = readAppSource();
+
+  assert.ok(
+    source.includes("useAppUpdater"),
+    "App should use shared updater hook",
+  );
+  assert.ok(
+    source.includes("UpdateNotification"),
+    "App should render update notification dialog",
+  );
+  assert.ok(
+    source.includes("VersionJumpNotification"),
+    "App should render version jump dialog",
+  );
+});
+
+test("Settings page exposes updater policy controls and manual check trigger", () => {
   const source = readSettingsPageSource();
 
   assert.ok(
-    source.includes("@tauri-apps/plugin-updater"),
-    "Settings page should import updater plugin bindings",
+    source.includes("settings.update.autoCheck.label"),
+    "Settings page should render auto-check control",
   );
   assert.ok(
-    source.includes("check("),
-    "Settings page should call updater check",
+    source.includes("settings.update.autoInstall.label"),
+    "Settings page should render auto-install control",
   );
   assert.ok(
-    source.includes("downloadAndInstall"),
-    "Settings page should trigger download and install when update exists",
+    source.includes("settings.update.interval.24h"),
+    "Settings page should render update interval options",
   );
   assert.ok(
-    source.includes("@tauri-apps/plugin-process"),
-    "Settings page should import process plugin bindings",
-  );
-  assert.ok(
-    source.includes("relaunch("),
-    "Settings page should relaunch app after installing update",
+    source.includes("onOpenUpdateDialog"),
+    "Settings page should delegate manual check to shared updater flow",
   );
 });

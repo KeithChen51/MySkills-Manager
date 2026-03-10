@@ -14,6 +14,9 @@ import {
 import AppErrorBoundary from "./components/AppErrorBoundary";
 import OnboardingWizard from "./components/OnboardingWizard";
 import Sidebar, { type ViewName } from "./components/Sidebar";
+import SilentUpdateToast from "./components/SilentUpdateToast";
+import UpdateNotification from "./components/UpdateNotification";
+import VersionJumpNotification from "./components/VersionJumpNotification";
 import { useI18n } from "./i18n/I18nProvider";
 import DashboardPage from "./pages/DashboardPage";
 import GitPage from "./pages/GitPage";
@@ -22,6 +25,7 @@ import SkillsPage from "./pages/SkillsPage";
 import SettingsPage from "./pages/SettingsPage";
 import ToolsPage from "./pages/ToolsPage";
 import EvalPage from "./pages/EvalPage";
+import { useAppUpdater } from "./updater/useAppUpdater";
 import "./App.css";
 
 export default function App() {
@@ -37,6 +41,9 @@ export default function App() {
     { id: number; message: string; at: number }[]
   >([]);
   const [importStatus, setImportStatus] = useState("");
+  const updater = useAppUpdater({
+    enabled: !booting && onboardingCompleted,
+  });
 
   function pushGlobalError(message: string) {
     const now = Date.now();
@@ -181,7 +188,21 @@ export default function App() {
       case "git":
         return <GitPage />;
       case "settings":
-        return <SettingsPage onSkillsDirChanged={loadSkills} />;
+        return (
+          <SettingsPage
+            onSkillsDirChanged={loadSkills}
+            updaterSettings={updater.settings}
+            updaterSettingsLoading={updater.settingsLoading}
+            updaterSettingsSaving={updater.settingsSaving}
+            updateCheckBusy={updater.dialog.checking || updater.action.state === "downloading"}
+            onUpdateSettingsPatch={(patch) => {
+              void updater.setUpdaterSettings(patch);
+            }}
+            onOpenUpdateDialog={() => {
+              void updater.openManualCheckDialog();
+            }}
+          />
+        );
     }
   }
 
@@ -191,6 +212,28 @@ export default function App() {
       fallbackTitle={t("app.fallback.title")}
       fallbackDescription={t("app.fallback.desc")}
     >
+      <UpdateNotification
+        open={updater.dialog.open}
+        checking={updater.dialog.checking}
+        noUpdate={updater.dialog.noUpdate}
+        checkError={updater.dialog.checkError}
+        updateInfo={updater.dialog.updateInfo}
+        action={updater.action}
+        retryStatus={updater.retryStatus}
+        actionError={updater.actionError}
+        actionErrorDetails={updater.actionErrorDetails}
+        restarting={updater.restarting}
+        onClose={updater.closeDialog}
+        onPrimaryAction={() => updater.handlePrimaryAction()}
+        onRetryCheck={() => updater.openManualCheckDialog()}
+        onCancelDownload={() => updater.cancelDownload()}
+      />
+      {updater.versionJumpInfo && (
+        <VersionJumpNotification
+          info={updater.versionJumpInfo}
+          onClose={updater.dismissVersionJump}
+        />
+      )}
       <div className="app-shell">
         <Sidebar active={view} onChange={setView} />
         <div className="app-content">
@@ -203,6 +246,13 @@ export default function App() {
               <span className="status-import">{importStatus}</span>
             )}
           </div>
+          {updater.silentReadyVersion && (
+            <SilentUpdateToast
+              version={updater.silentReadyVersion}
+              onRestart={() => updater.restartAndApply()}
+              onDismiss={updater.dismissSilentReady}
+            />
+          )}
           {renderPage()}
         </div>
         <div className="app-error-toast-wrap">

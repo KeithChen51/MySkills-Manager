@@ -24,6 +24,30 @@
   justify-content: space-between;
 }
 
+.settings-update-policy-row {
+  justify-content: flex-start;
+}
+
+.settings-toggle {
+  align-items: center;
+  color: var(--text-secondary);
+  display: inline-flex;
+  font-size: var(--text-sm);
+  gap: var(--sp-xs);
+}
+
+.settings-toggle input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.settings-inline-label {
+  margin-right: var(--sp-xs);
+}
+
+.settings-update-interval-select {
+  min-width: 180px;
+}
+
 .settings-version-chip {
   background: var(--bg-panel);
   border: 1px solid var(--border-card);
@@ -66,7 +90,8 @@
 
   .settings-path-input,
   .settings-language-select,
-  .settings-theme-select {
+  .settings-theme-select,
+  .settings-update-interval-select {
     min-width: 0;
     width: 100%;
   }
