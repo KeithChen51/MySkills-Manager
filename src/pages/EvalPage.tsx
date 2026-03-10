@@ -178,7 +178,12 @@ export default function EvalPage({ skills }: Props) {
   const [storagePaths, setStoragePaths] = useState<EvalStoragePaths | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyEntries, setHistoryEntries] = useState<EvalHistoryEntry[]>([]);
+  const [showSamples, setShowSamples] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [expandedHistoryPath, setExpandedHistoryPath] = useState<string | null>(null);
+  const [historyDetails, setHistoryDetails] = useState<Record<string, EvalPipelineOutput>>({});
+  const [historyDetailLoadingPath, setHistoryDetailLoadingPath] = useState<string | null>(null);
+  const [historyDetailErrors, setHistoryDetailErrors] = useState<Record<string, string>>({});
   const [triggerSetPath, setTriggerSetPath] = useState("");
   const [functionalSetPath, setFunctionalSetPath] = useState("");
   const [triggerDraftRows, setTriggerDraftRows] = useState<TriggerDraftRow[]>([]);
@@ -265,11 +270,36 @@ export default function EvalPage({ skills }: Props) {
     if (!selectedSkill) {
       setStoragePaths(null);
       setHistoryEntries([]);
+      setShowSamples(false);
       setShowHistory(false);
+      setExpandedHistoryPath(null);
+      setHistoryDetails({});
+      setHistoryDetailErrors({});
+      setHistoryDetailLoadingPath(null);
       return;
     }
     void refreshHistory(selectedSkill);
   }, [selectedSkill]);
+
+  useEffect(() => {
+    if (!showHistory && !showSamples) return;
+    const onKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setShowHistory(false);
+        setShowSamples(false);
+      }
+    };
+    window.addEventListener("keydown", onKeydown);
+    return () => {
+      window.removeEventListener("keydown", onKeydown);
+    };
+  }, [showHistory, showSamples]);
+
+  useEffect(() => {
+    if (!showHistory) {
+      setExpandedHistoryPath(null);
+    }
+  }, [showHistory]);
 
   useEffect(() => {
     activeRunIdRef.current = activeRunId;
@@ -357,10 +387,36 @@ export default function EvalPage({ skills }: Props) {
       const loaded = await evalLoadHistory(path);
       setReport(loaded);
       setStatus(t("eval.history.loaded", { path }));
+      setShowHistory(false);
     } catch (error: unknown) {
       setStatus(`${t("eval.error.runFailed")}: ${String(error)}`);
     } finally {
       setHistoryLoading(false);
+    }
+  }
+
+  async function handleToggleHistoryExpand(path: string) {
+    if (expandedHistoryPath === path) {
+      setExpandedHistoryPath(null);
+      return;
+    }
+    setExpandedHistoryPath(path);
+    if (historyDetails[path] || historyDetailLoadingPath === path) {
+      return;
+    }
+    setHistoryDetailLoadingPath(path);
+    setHistoryDetailErrors((prev) => {
+      const next = { ...prev };
+      delete next[path];
+      return next;
+    });
+    try {
+      const loaded = await evalLoadHistory(path);
+      setHistoryDetails((prev) => ({ ...prev, [path]: loaded }));
+    } catch (error: unknown) {
+      setHistoryDetailErrors((prev) => ({ ...prev, [path]: String(error) }));
+    } finally {
+      setHistoryDetailLoadingPath((current) => (current === path ? null : current));
     }
   }
 
@@ -393,6 +449,8 @@ export default function EvalPage({ skills }: Props) {
       const nextFunctionalRows = parseFunctionalDraftRows(drafts.functionalDraft);
       setTriggerDraftRows(nextTriggerRows);
       setFunctionalDraftRows(nextFunctionalRows);
+      setShowSamples(true);
+      setShowHistory(false);
       setStatus(
         t("eval.samples.generated", {
           trigger: nextTriggerRows.length,
@@ -522,6 +580,8 @@ export default function EvalPage({ skills }: Props) {
     setReport(null);
     setProgressEvent(null);
     setProgressStartedAtMs(Date.now());
+    setShowSamples(false);
+    setShowHistory(false);
     setStatus(t("eval.running"));
 
     try {
@@ -803,6 +863,11 @@ export default function EvalPage({ skills }: Props) {
   }
 
   const elapsedSeconds = Math.floor(progressElapsedMs / 1000);
+  const parsedRepeats = Number.parseInt(repeatsInput, 10);
+  const configuredRepeats = Number.isFinite(parsedRepeats) && parsedRepeats > 0 ? parsedRepeats : 1;
+  const totalSteps = Math.max(progressEvent?.totalSteps ?? 1, 1);
+  const currentStep = Math.min(progressEvent?.stepIndex ?? 0, totalSteps);
+  const progressPercent = running ? Math.round((currentStep / totalSteps) * 100) : report ? 100 : 0;
   const progressDetail = progressEvent
     ? `${progressEvent.message} (${progressEvent.stepIndex}/${Math.max(progressEvent.totalSteps, 1)}, ${elapsedSeconds}s)`
     : running
@@ -812,7 +877,10 @@ export default function EvalPage({ skills }: Props) {
   return (
     <div className="page animate-fadein">
       <header className="page-header">
-        <h1 className="page-title">{t("eval.title")}</h1>
+        <h1 className="page-title eval-page-title">
+          <span>{t("eval.title")}</span>
+          <span className="eval-beta-badge">BETA</span>
+        </h1>
       </header>
 
       <article className="chart-card eval-config-card">
@@ -943,29 +1011,68 @@ export default function EvalPage({ skills }: Props) {
             </p>
           </div>
 
-          <div className="field eval-config-actions">
-            <button
-              className="btn btn-ghost"
-              onClick={() => void handleGenerateSamples()}
-              disabled={running || generating || !selectedSkill}
-            >
-              {generating ? t("eval.samples.generating") : t("eval.samples.generate")}
-            </button>
-            <button
-              className="btn btn-primary"
-              onClick={() => void handleRunEval()}
-              disabled={running || generating}
-            >
-              {running ? t("eval.running") : t("eval.run")}
-            </button>
-            <button
-              className="btn btn-ghost"
-              onClick={() => setShowHistory((prev) => !prev)}
-              disabled={!selectedSkill}
-            >
-              {t("eval.history.view")} ({historyEntries.length})
-            </button>
-            {running && (
+          <div className="eval-config-actions">
+            <section className="eval-action-group" aria-label={t("eval.actions.primary")}>
+              <span className="eval-action-group-label">{t("eval.actions.primary")}</span>
+              <div className="eval-action-row">
+                <button
+                  className="btn btn-ghost eval-action-btn"
+                  onClick={() => void handleGenerateSamples()}
+                  disabled={running || generating || !selectedSkill}
+                >
+                  {generating ? t("eval.samples.generating") : t("eval.samples.generate")}
+                </button>
+                <button
+                  className="btn btn-primary eval-action-btn eval-action-btn-run"
+                  onClick={() => void handleRunEval()}
+                  disabled={running || generating}
+                >
+                  {running ? t("eval.running") : t("eval.run")}
+                </button>
+              </div>
+            </section>
+            <section className="eval-action-group" aria-label={t("eval.actions.secondary")}>
+              <span className="eval-action-group-label">{t("eval.actions.secondary")}</span>
+              <div className="eval-action-row">
+                <button
+                  className="btn btn-ghost eval-action-btn"
+                  onClick={() => {
+                    const next = !showSamples;
+                    setShowSamples(next);
+                    if (next) {
+                      setShowHistory(false);
+                    }
+                  }}
+                  disabled={triggerDraftRows.length === 0 && functionalDraftRows.length === 0}
+                >
+                  {showSamples ? t("eval.samples.hide") : t("eval.samples.view")} ({triggerDraftCount}/
+                  {functionalDraftCount})
+                </button>
+                <button
+                  className="btn btn-ghost eval-action-btn"
+                  onClick={() => {
+                    const next = !showHistory;
+                    setShowHistory(next);
+                    if (next && selectedSkill) {
+                      setShowSamples(false);
+                      void refreshHistory(selectedSkill);
+                    }
+                  }}
+                  disabled={!selectedSkill}
+                >
+                  {t("eval.history.view")} ({historyEntries.length})
+                </button>
+              </div>
+            </section>
+          </div>
+        </div>
+      </article>
+
+      <article className="eval-run-dock">
+        <div className="eval-run-dock-head">
+          <h3 className="chart-title">{t("eval.runDock.title")}</h3>
+          <div className="eval-run-dock-actions">
+            {running ? (
               <>
                 <button
                   className="btn btn-ghost"
@@ -982,202 +1089,242 @@ export default function EvalPage({ skills }: Props) {
                   {t("eval.control.stop")}
                 </button>
               </>
+            ) : (
+              <span className="eval-run-dock-idle">{t("eval.runDock.idle")}</span>
             )}
           </div>
         </div>
+        <p className="eval-run-dock-status">{progressDetail || status || t("eval.empty")}</p>
+        <div className="eval-run-dock-meta">
+          <span>
+            {t("eval.runDock.rounds", {
+              current: progressEvent?.currentRepeat ?? (running ? 1 : 0),
+              total: progressEvent?.totalRepeats ?? configuredRepeats,
+            })}
+          </span>
+          <span>
+            {t("eval.runDock.steps", {
+              current: progressEvent?.stepIndex ?? 0,
+              total: progressEvent?.totalSteps ?? 0,
+            })}
+          </span>
+          <span>{t("eval.runDock.elapsed", { seconds: elapsedSeconds })}</span>
+        </div>
+        <div className="eval-run-dock-progress" role="progressbar" aria-valuenow={progressPercent}>
+          <span style={{ width: `${progressPercent}%` }} />
+        </div>
       </article>
 
-      {(triggerDraftRows.length > 0 || functionalDraftRows.length > 0) && (
-        <article className="chart-card eval-draft-card">
-          <h3 className="chart-title">{t("eval.samples.title")}</h3>
-          <div className="eval-draft-grid">
-            <div className="field">
-              <label className="field-label">
-                {t("eval.samples.triggerForm")} ({triggerDraftCount})
-              </label>
-              <div className="eval-draft-actions">
-                <button
-                  className="btn btn-ghost"
-                  onClick={() =>
-                    setTriggerDraftRows((prev) => [...prev, { query: "", shouldTrigger: true }])
-                  }
-                >
-                  {t("eval.samples.addRow")}
-                </button>
-                <button
-                  className="btn btn-ghost"
-                  onClick={() => void handleSaveDraft("trigger", "default")}
-                  disabled={savingDraft !== null}
-                >
-                  {savingDraft === "trigger"
-                    ? t("eval.samples.saving")
-                    : t("eval.samples.saveTriggerDefault")}
-                </button>
-                <button
-                  className="btn btn-ghost"
-                  onClick={() => void handleSaveDraft("trigger", "choose")}
-                  disabled={savingDraft !== null}
-                >
-                  {savingDraft === "trigger" ? t("eval.samples.saving") : t("eval.samples.saveTrigger")}
+      {showSamples && (triggerDraftRows.length > 0 || functionalDraftRows.length > 0) && (
+        <div
+          className="eval-samples-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("eval.samples.title")}
+          onClick={() => setShowSamples(false)}
+        >
+          <article className="eval-samples-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="eval-samples-modal-head">
+              <h3 className="chart-title">{t("eval.samples.title")}</h3>
+              <div className="eval-samples-modal-actions">
+                <button className="btn btn-ghost" onClick={() => setShowSamples(false)}>
+                  {t("eval.history.close")}
                 </button>
               </div>
-              <div className="eval-draft-table-wrap">
-                <table className="eval-draft-table">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>{t("eval.table.query")}</th>
-                      <th>{t("eval.table.expected")}</th>
-                      <th>{t("eval.samples.actions")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {triggerDraftRows.map((row, index) => (
-                      <tr key={`trigger-draft-${index}`}>
-                        <td>{index + 1}</td>
-                        <td>
-                          <input
-                            className="field-input"
-                            value={row.query}
-                            onChange={(event) => {
-                              const query = event.target.value;
-                              setTriggerDraftRows((prev) =>
-                                prev.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, query } : item,
-                                ),
-                              );
-                            }}
-                          />
-                        </td>
-                        <td>
-                          <select
-                            className="filter-select"
-                            value={row.shouldTrigger ? "true" : "false"}
-                            onChange={(event) => {
-                              const shouldTrigger = event.target.value === "true";
-                              setTriggerDraftRows((prev) =>
-                                prev.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, shouldTrigger } : item,
-                                ),
-                              );
-                            }}
-                          >
-                            <option value="true">{t("eval.option.yes")}</option>
-                            <option value="false">{t("eval.option.no")}</option>
-                          </select>
-                        </td>
-                        <td>
+            </div>
+            <div className="eval-samples-modal-body">
+              <div className="eval-draft-grid">
+                <div className="field">
+                  <label className="field-label">
+                    {t("eval.samples.triggerForm")} ({triggerDraftCount})
+                  </label>
+                  <div className="eval-draft-actions">
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() =>
+                        setTriggerDraftRows((prev) => [...prev, { query: "", shouldTrigger: true }])
+                      }
+                    >
+                      {t("eval.samples.addRow")}
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => void handleSaveDraft("trigger", "default")}
+                      disabled={savingDraft !== null}
+                    >
+                      {savingDraft === "trigger"
+                        ? t("eval.samples.saving")
+                        : t("eval.samples.saveTriggerDefault")}
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => void handleSaveDraft("trigger", "choose")}
+                      disabled={savingDraft !== null}
+                    >
+                      {savingDraft === "trigger" ? t("eval.samples.saving") : t("eval.samples.saveTrigger")}
+                    </button>
+                  </div>
+                  <div className="eval-draft-table-wrap">
+                    <table className="eval-draft-table">
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>{t("eval.table.query")}</th>
+                          <th>{t("eval.table.expected")}</th>
+                          <th>{t("eval.samples.actions")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {triggerDraftRows.map((row, index) => (
+                          <tr key={`trigger-draft-${index}`}>
+                            <td>{index + 1}</td>
+                            <td>
+                              <input
+                                className="field-input"
+                                value={row.query}
+                                onChange={(event) => {
+                                  const query = event.target.value;
+                                  setTriggerDraftRows((prev) =>
+                                    prev.map((item, itemIndex) =>
+                                      itemIndex === index ? { ...item, query } : item,
+                                    ),
+                                  );
+                                }}
+                              />
+                            </td>
+                            <td>
+                              <select
+                                className="filter-select"
+                                value={row.shouldTrigger ? "true" : "false"}
+                                onChange={(event) => {
+                                  const shouldTrigger = event.target.value === "true";
+                                  setTriggerDraftRows((prev) =>
+                                    prev.map((item, itemIndex) =>
+                                      itemIndex === index ? { ...item, shouldTrigger } : item,
+                                    ),
+                                  );
+                                }}
+                              >
+                                <option value="true">{t("eval.option.yes")}</option>
+                                <option value="false">{t("eval.option.no")}</option>
+                              </select>
+                            </td>
+                            <td>
+                              <button
+                                className="btn btn-danger eval-draft-inline-btn"
+                                onClick={() =>
+                                  setTriggerDraftRows((prev) =>
+                                    prev.filter((_, itemIndex) => itemIndex !== index),
+                                  )
+                                }
+                              >
+                                {t("eval.samples.removeRow")}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div className="field">
+                  <label className="field-label">
+                    {t("eval.samples.functionalForm")} ({functionalDraftCount})
+                  </label>
+                  <div className="eval-draft-actions">
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() =>
+                        setFunctionalDraftRows((prev) => [
+                          ...prev,
+                          { id: "", prompt: "", assertionsText: "" },
+                        ])
+                      }
+                    >
+                      {t("eval.samples.addRow")}
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => void handleSaveDraft("functional", "default")}
+                      disabled={savingDraft !== null}
+                    >
+                      {savingDraft === "functional"
+                        ? t("eval.samples.saving")
+                        : t("eval.samples.saveFunctionalDefault")}
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => void handleSaveDraft("functional", "choose")}
+                      disabled={savingDraft !== null}
+                    >
+                      {savingDraft === "functional"
+                        ? t("eval.samples.saving")
+                        : t("eval.samples.saveFunctional")}
+                    </button>
+                  </div>
+                  <div className="eval-functional-draft-list">
+                    {functionalDraftRows.map((row, index) => (
+                      <div className="eval-functional-draft-item" key={`functional-draft-${index}`}>
+                        <div className="eval-functional-draft-head">
+                          <span>#{index + 1}</span>
                           <button
                             className="btn btn-danger eval-draft-inline-btn"
                             onClick={() =>
-                              setTriggerDraftRows((prev) =>
+                              setFunctionalDraftRows((prev) =>
                                 prev.filter((_, itemIndex) => itemIndex !== index),
                               )
                             }
                           >
                             {t("eval.samples.removeRow")}
                           </button>
-                        </td>
-                      </tr>
+                        </div>
+                        <label className="field-label">{t("eval.table.caseId")}</label>
+                        <input
+                          className="field-input"
+                          value={row.id}
+                          onChange={(event) => {
+                            const id = event.target.value;
+                            setFunctionalDraftRows((prev) =>
+                              prev.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, id } : item,
+                              ),
+                            );
+                          }}
+                        />
+                        <label className="field-label">{t("eval.samples.prompt")}</label>
+                        <textarea
+                          className="eval-draft-textarea"
+                          value={row.prompt}
+                          onChange={(event) => {
+                            const prompt = event.target.value;
+                            setFunctionalDraftRows((prev) =>
+                              prev.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, prompt } : item,
+                              ),
+                            );
+                          }}
+                        />
+                        <label className="field-label">{t("eval.samples.assertions")}</label>
+                        <textarea
+                          className="eval-draft-textarea"
+                          value={row.assertionsText}
+                          onChange={(event) => {
+                            const assertionsText = event.target.value;
+                            setFunctionalDraftRows((prev) =>
+                              prev.map((item, itemIndex) =>
+                                itemIndex === index ? { ...item, assertionsText } : item,
+                              ),
+                            );
+                          }}
+                        />
+                      </div>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <div className="field">
-              <label className="field-label">
-                {t("eval.samples.functionalForm")} ({functionalDraftCount})
-              </label>
-              <div className="eval-draft-actions">
-                <button
-                  className="btn btn-ghost"
-                  onClick={() =>
-                    setFunctionalDraftRows((prev) => [
-                      ...prev,
-                      { id: "", prompt: "", assertionsText: "" },
-                    ])
-                  }
-                >
-                  {t("eval.samples.addRow")}
-                </button>
-                <button
-                  className="btn btn-ghost"
-                  onClick={() => void handleSaveDraft("functional", "default")}
-                  disabled={savingDraft !== null}
-                >
-                  {savingDraft === "functional"
-                    ? t("eval.samples.saving")
-                    : t("eval.samples.saveFunctionalDefault")}
-                </button>
-                <button
-                  className="btn btn-ghost"
-                  onClick={() => void handleSaveDraft("functional", "choose")}
-                  disabled={savingDraft !== null}
-                >
-                  {savingDraft === "functional"
-                    ? t("eval.samples.saving")
-                    : t("eval.samples.saveFunctional")}
-                </button>
-              </div>
-              <div className="eval-functional-draft-list">
-                {functionalDraftRows.map((row, index) => (
-                  <div className="eval-functional-draft-item" key={`functional-draft-${index}`}>
-                    <div className="eval-functional-draft-head">
-                      <span>#{index + 1}</span>
-                      <button
-                        className="btn btn-danger eval-draft-inline-btn"
-                        onClick={() =>
-                          setFunctionalDraftRows((prev) =>
-                            prev.filter((_, itemIndex) => itemIndex !== index),
-                          )
-                        }
-                      >
-                        {t("eval.samples.removeRow")}
-                      </button>
-                    </div>
-                    <label className="field-label">{t("eval.table.caseId")}</label>
-                    <input
-                      className="field-input"
-                      value={row.id}
-                      onChange={(event) => {
-                        const id = event.target.value;
-                        setFunctionalDraftRows((prev) =>
-                          prev.map((item, itemIndex) => (itemIndex === index ? { ...item, id } : item)),
-                        );
-                      }}
-                    />
-                    <label className="field-label">{t("eval.samples.prompt")}</label>
-                    <textarea
-                      className="eval-draft-textarea"
-                      value={row.prompt}
-                      onChange={(event) => {
-                        const prompt = event.target.value;
-                        setFunctionalDraftRows((prev) =>
-                          prev.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, prompt } : item,
-                          ),
-                        );
-                      }}
-                    />
-                    <label className="field-label">{t("eval.samples.assertions")}</label>
-                    <textarea
-                      className="eval-draft-textarea"
-                      value={row.assertionsText}
-                      onChange={(event) => {
-                        const assertionsText = event.target.value;
-                        setFunctionalDraftRows((prev) =>
-                          prev.map((item, itemIndex) =>
-                            itemIndex === index ? { ...item, assertionsText } : item,
-                          ),
-                        );
-                      }}
-                    />
                   </div>
-                ))}
+                </div>
               </div>
             </div>
-          </div>
-        </article>
+          </article>
+        </div>
       )}
 
       {status && (
@@ -1186,66 +1333,146 @@ export default function EvalPage({ skills }: Props) {
         </p>
       )}
 
-      {running && progressDetail && (
-        <p className="settings-status" role="status" aria-live="polite">
-          {progressDetail}
-        </p>
-      )}
-
       {showHistory && selectedSkill && (
-        <article className="chart-card eval-history-card">
-          <div className="eval-history-head">
-            <h3 className="chart-title">{t("eval.history.title", { skill: selectedSkill })}</h3>
-            <button
-              className="btn btn-ghost"
-              onClick={() => void refreshHistory(selectedSkill)}
-              disabled={historyLoading}
-            >
-              {historyLoading ? t("eval.history.loading") : t("eval.history.refresh")}
-            </button>
-          </div>
-          <p className="eval-path-hint">
-            {t("eval.history.path", { path: storagePaths?.historyDir ?? "--" })}
-          </p>
-          {historyEntries.length === 0 ? (
-            <p className="eval-path-hint">{t("eval.history.empty")}</p>
-          ) : (
-            <div className="eval-results-table-wrap">
-              <table className="eval-results-table">
-                <thead>
-                  <tr>
-                    <th>{t("eval.history.time")}</th>
-                    <th>{t("eval.config.mode")}</th>
-                    <th>{t("eval.kpi.totalCases")}</th>
-                    <th>{t("eval.table.passRate")}</th>
-                    <th>{t("eval.config.model")}</th>
-                    <th>{t("eval.samples.actions")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {historyEntries.map((item) => (
-                    <tr key={item.path}>
-                      <td>{new Date(item.savedAtUnix * 1000).toLocaleString()}</td>
-                      <td>{item.mode}</td>
-                      <td>{item.totalCases}</td>
-                      <td>{Math.round(item.passRate * 100)}%</td>
-                      <td>{item.model}</td>
-                      <td>
-                        <button
-                          className="btn btn-ghost eval-draft-inline-btn"
-                          onClick={() => void handleLoadHistory(item.path)}
-                          disabled={historyLoading}
-                        >
-                          {t("eval.history.load")}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        <div
+          className="eval-history-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("eval.history.title", { skill: selectedSkill })}
+          onClick={() => setShowHistory(false)}
+        >
+          <article className="eval-history-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="eval-history-modal-head">
+              <h3 className="chart-title">{t("eval.history.title", { skill: selectedSkill })}</h3>
+              <div className="eval-history-modal-actions">
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => void refreshHistory(selectedSkill)}
+                  disabled={historyLoading}
+                >
+                  {historyLoading ? t("eval.history.loading") : t("eval.history.refresh")}
+                </button>
+                <button className="btn btn-ghost" onClick={() => setShowHistory(false)}>
+                  {t("eval.history.close")}
+                </button>
+              </div>
             </div>
-          )}
-        </article>
+            <p className="eval-path-hint">
+              {t("eval.history.path", { path: storagePaths?.historyDir ?? "--" })}
+            </p>
+
+            <div className="eval-history-modal-body">
+              {historyEntries.length === 0 ? (
+                <p className="eval-path-hint">{t("eval.history.empty")}</p>
+              ) : (
+                <div className="eval-history-list">
+                  {historyEntries.map((item) => {
+                    const expanded = expandedHistoryPath === item.path;
+                    const detail = historyDetails[item.path];
+                    const detailError = historyDetailErrors[item.path];
+                    const detailLoading = historyDetailLoadingPath === item.path;
+                    return (
+                      <section className="eval-history-item" key={item.path}>
+                        <div className="eval-history-item-main">
+                          <div className="eval-history-item-grid">
+                            <div>
+                              <span className="eval-history-item-label">{t("eval.history.time")}</span>
+                              <strong>{new Date(item.savedAtUnix * 1000).toLocaleString()}</strong>
+                            </div>
+                            <div>
+                              <span className="eval-history-item-label">{t("eval.config.mode")}</span>
+                              <strong>{item.mode}</strong>
+                            </div>
+                            <div>
+                              <span className="eval-history-item-label">{t("eval.history.repeats")}</span>
+                              <strong>{item.repeats}</strong>
+                            </div>
+                            <div>
+                              <span className="eval-history-item-label">{t("eval.kpi.totalCases")}</span>
+                              <strong>{item.totalCases}</strong>
+                            </div>
+                            <div>
+                              <span className="eval-history-item-label">{t("eval.table.passRate")}</span>
+                              <strong>{Math.round(item.passRate * 100)}%</strong>
+                            </div>
+                            <div>
+                              <span className="eval-history-item-label">{t("eval.config.model")}</span>
+                              <strong>{item.model}</strong>
+                            </div>
+                          </div>
+                          <div className="eval-history-item-actions">
+                            <button
+                              className="btn btn-ghost"
+                              onClick={() => void handleToggleHistoryExpand(item.path)}
+                              disabled={detailLoading}
+                            >
+                              {expanded ? t("eval.history.collapse") : t("eval.history.expand")}
+                            </button>
+                            <button
+                              className="btn btn-ghost"
+                              onClick={() => void handleLoadHistory(item.path)}
+                              disabled={historyLoading}
+                            >
+                              {t("eval.history.load")}
+                            </button>
+                          </div>
+                        </div>
+
+                        {expanded && (
+                          <div className="eval-history-item-detail">
+                            {detailLoading && <p className="eval-path-hint">{t("eval.history.detailLoading")}</p>}
+                            {!detailLoading && detailError && (
+                              <p className="settings-status">{`${t("eval.history.detailError")}: ${detailError}`}</p>
+                            )}
+                            {!detailLoading && !detailError && detail && (
+                              <div className="eval-history-detail-grid">
+                                <div>
+                                  <span className="eval-history-item-label">{t("eval.kpi.totalCases")}</span>
+                                  <strong>{detail.summary.totalCases}</strong>
+                                </div>
+                                <div>
+                                  <span className="eval-history-item-label">{t("eval.kpi.totalPassed")}</span>
+                                  <strong>{detail.summary.totalPassed}</strong>
+                                </div>
+                                <div>
+                                  <span className="eval-history-item-label">{t("eval.table.passRate")}</span>
+                                  <strong>{Math.round(detail.summary.passRate * 100)}%</strong>
+                                </div>
+                                <div>
+                                  <span className="eval-history-item-label">{t("eval.kpi.precision")}</span>
+                                  <strong>{Math.round(detail.triggerMetrics.precision * 100)}%</strong>
+                                </div>
+                                <div>
+                                  <span className="eval-history-item-label">{t("eval.kpi.recall")}</span>
+                                  <strong>{Math.round(detail.triggerMetrics.recall * 100)}%</strong>
+                                </div>
+                                <div>
+                                  <span className="eval-history-item-label">{t("eval.kpi.fpr")}</span>
+                                  <strong>{Math.round(detail.triggerMetrics.fpr * 100)}%</strong>
+                                </div>
+                                <div>
+                                  <span className="eval-history-item-label">{t("eval.kpi.costEstimate")}</span>
+                                  <strong>${detail.costEstimate.estimatedUsd.toFixed(4)}</strong>
+                                </div>
+                                <div>
+                                  <span className="eval-history-item-label">{t("eval.kpi.repeatStats")}</span>
+                                  <strong>
+                                    {Math.round(detail.repeatStats.overallPassRate.mean * 100)}% +/-{" "}
+                                    {Math.round(detail.repeatStats.overallPassRate.stdDev * 100)}%
+                                  </strong>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </section>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </article>
+        </div>
       )}
 
       {report && (

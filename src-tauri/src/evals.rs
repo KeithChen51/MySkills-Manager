@@ -15,6 +15,8 @@ use tauri::Emitter;
 const DEFAULT_PROVIDER: &str = "openai-compatible";
 const DEFAULT_MODEL: &str = "gpt-4o-mini";
 const EVAL_TIMEOUT_SECS: u64 = 300;
+const MAX_EVAL_TIMEOUT_SECS: u64 = 10800;
+const EVAL_TIMEOUT_PER_CASE_SECS: u64 = 12;
 const DEFAULT_TRIGGER_CASE_COUNT: usize = 40;
 const DEFAULT_FUNCTIONAL_CASE_COUNT: usize = 20;
 const DEFAULT_PIPELINE_REPEATS: usize = 1;
@@ -144,6 +146,7 @@ pub struct EvalHistoryEntry {
     pub file_name: String,
     pub saved_at_unix: u64,
     pub mode: String,
+    pub repeats: usize,
     pub pass_rate: f64,
     pub total_cases: i32,
     pub model: String,
@@ -722,6 +725,7 @@ fn detect_python_runtime(workdir: &Path) -> Result<PythonRuntime, String> {
 fn run_eval_engine(
     args: &[String],
     control: Option<&Arc<EvalRunControl>>,
+    timeout_secs: u64,
 ) -> Result<std::process::Output, String> {
     let workdir = resolve_python_workdir()?;
     let runtime = detect_python_runtime(&workdir)?;
@@ -755,10 +759,10 @@ fn run_eval_engine(
         {
             Some(_) => break,
             None => {
-                if start.elapsed() > Duration::from_secs(EVAL_TIMEOUT_SECS) {
+                if start.elapsed() > Duration::from_secs(timeout_secs) {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!("eval_engine timed out after {EVAL_TIMEOUT_SECS}s"));
+                    return Err(format!("eval_engine timed out after {timeout_secs}s"));
                 }
                 std::thread::sleep(Duration::from_millis(200));
             }
@@ -770,7 +774,11 @@ fn run_eval_engine(
         .map_err(|e| format!("Failed to collect eval_engine output via {runtime_name}: {e}"))
 }
 
-async fn run_eval_blocking<T, F>(task_name: &'static str, task: F) -> Result<T, String>
+async fn run_eval_blocking<T, F>(
+    task_name: &'static str,
+    timeout_secs: u64,
+    task: F,
+) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, String> + Send + 'static,
@@ -795,10 +803,10 @@ where
             let _ = sender.send(payload);
         });
 
-        match receiver.recv_timeout(Duration::from_secs(EVAL_TIMEOUT_SECS)) {
+        match receiver.recv_timeout(Duration::from_secs(timeout_secs)) {
             Ok(result) => result,
             Err(RecvTimeoutError::Timeout) => {
-                Err(format!("{task_name} timed out after {EVAL_TIMEOUT_SECS}s"))
+                Err(format!("{task_name} timed out after {timeout_secs}s"))
             }
             Err(RecvTimeoutError::Disconnected) => {
                 Err(format!("{task_name} runner disconnected before returning a result"))
@@ -849,7 +857,10 @@ fn run_trigger_eval_impl(
         cmd_args.push(path_to_utf8(&dir)?);
     }
 
-    let output = run_eval_engine(&cmd_args, control)?;
+    let eval_case_count =
+        read_eval_set_case_count(&eval_set_path).unwrap_or(DEFAULT_TRIGGER_CASE_COUNT);
+    let timeout_secs = timeout_secs_for_case_count(eval_case_count);
+    let output = run_eval_engine(&cmd_args, control, timeout_secs)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let _ = fs::remove_dir_all(&output_dir);
@@ -915,7 +926,10 @@ fn run_functional_eval_impl(
         }
     }
 
-    let output = run_eval_engine(&cmd_args, control)?;
+    let eval_case_count =
+        read_eval_set_case_count(&eval_set_path).unwrap_or(DEFAULT_FUNCTIONAL_CASE_COUNT);
+    let timeout_secs = timeout_secs_for_case_count(eval_case_count);
+    let output = run_eval_engine(&cmd_args, control, timeout_secs)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let _ = fs::remove_dir_all(&output_dir);
@@ -1641,6 +1655,39 @@ fn parse_json_case_count(raw: &str) -> Result<usize, String> {
     Ok(items.len())
 }
 
+fn read_eval_set_case_count(path: &Path) -> Result<usize, String> {
+    let raw = fs::read_to_string(path).map_err(|e| format!("Read eval set failed: {e}"))?;
+    parse_json_case_count(&raw)
+}
+
+fn timeout_secs_for_case_count(case_count: usize) -> u64 {
+    let safe_cases = case_count.max(1) as u64;
+    let computed = EVAL_TIMEOUT_SECS.saturating_add(
+        safe_cases.saturating_mul(EVAL_TIMEOUT_PER_CASE_SECS),
+    );
+    computed.clamp(EVAL_TIMEOUT_SECS, MAX_EVAL_TIMEOUT_SECS)
+}
+
+fn estimate_pipeline_case_count(
+    mode: &str,
+    trigger_cases: usize,
+    functional_cases: usize,
+    repeats: usize,
+) -> usize {
+    let trigger_runs_per_repeat = if mode == "full" { 2 } else { 1 };
+    let functional_runs_per_repeat = match mode {
+        "quick" => 0,
+        "full" => 2,
+        _ => 1,
+    };
+
+    let per_repeat = trigger_cases
+        .saturating_mul(trigger_runs_per_repeat)
+        .saturating_add(functional_cases.saturating_mul(functional_runs_per_repeat))
+        .max(1);
+    per_repeat.saturating_mul(repeats.max(1))
+}
+
 fn eval_generate_samples_impl(
     skill_name: String,
     skill_path: PathBuf,
@@ -1690,7 +1737,8 @@ fn eval_generate_samples_impl(
         cmd_args.push(base_url.clone());
     }
 
-    let output = run_eval_engine(&cmd_args, None)?;
+    let timeout_secs = timeout_secs_for_case_count(trigger_count.saturating_add(functional_count));
+    let output = run_eval_engine(&cmd_args, None, timeout_secs)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let _ = fs::remove_dir_all(&output_dir);
@@ -1778,6 +1826,7 @@ fn build_eval_history_entry(path: &Path, output: EvalPipelineOutput) -> Result<E
         file_name,
         saved_at_unix,
         mode: output.mode,
+        repeats: output.run_meta.repeats,
         pass_rate: output.summary.pass_rate,
         total_cases: output.summary.total_cases,
         model: output.run_meta.model,
@@ -1908,7 +1957,10 @@ pub async fn run_trigger_eval(
     installed_skills_dir: Option<PathBuf>,
     model: String,
 ) -> Result<TriggerEvalOutput, String> {
-    run_eval_blocking("run_trigger_eval", move || {
+    let timeout_secs = timeout_secs_for_case_count(
+        read_eval_set_case_count(&eval_set_path).unwrap_or(DEFAULT_TRIGGER_CASE_COUNT),
+    );
+    run_eval_blocking("run_trigger_eval", timeout_secs, move || {
         run_trigger_eval_impl(
             skill_name,
             eval_set_path,
@@ -1929,7 +1981,10 @@ pub async fn run_functional_eval(
     compare_mode: String,
     model: String,
 ) -> Result<FunctionalEvalOutput, String> {
-    run_eval_blocking("run_functional_eval", move || {
+    let timeout_secs = timeout_secs_for_case_count(
+        read_eval_set_case_count(&eval_set_path).unwrap_or(DEFAULT_FUNCTIONAL_CASE_COUNT),
+    );
+    run_eval_blocking("run_functional_eval", timeout_secs, move || {
         run_functional_eval_impl(
             skill_name,
             skill_path,
@@ -1968,7 +2023,18 @@ pub async fn run_eval_pipeline(
     let app_handle_for_task = app_handle.clone();
     let run_id_for_task = resolved_run_id.clone();
     let expected_repeats = repeats.unwrap_or(DEFAULT_PIPELINE_REPEATS).max(1);
-    run_eval_blocking("run_eval_pipeline", move || {
+    let mode_for_timeout = normalize_eval_mode(&mode).unwrap_or("standard");
+    let trigger_case_count =
+        read_eval_set_case_count(&trigger_eval_set_path).unwrap_or(DEFAULT_TRIGGER_CASE_COUNT);
+    let functional_case_count =
+        read_eval_set_case_count(&functional_eval_set_path).unwrap_or(DEFAULT_FUNCTIONAL_CASE_COUNT);
+    let timeout_secs = timeout_secs_for_case_count(estimate_pipeline_case_count(
+        mode_for_timeout,
+        trigger_case_count,
+        functional_case_count,
+        expected_repeats,
+    ));
+    run_eval_blocking("run_eval_pipeline", timeout_secs, move || {
         let control = register_eval_run_control(&run_id_for_task)?;
         let _guard = EvalRunControlGuard::new(run_id_for_task.clone());
         let result = run_eval_pipeline_impl(
@@ -2016,7 +2082,16 @@ pub async fn eval_generate_samples(
     trigger_count: Option<usize>,
     functional_count: Option<usize>,
 ) -> Result<EvalSampleDrafts, String> {
-    run_eval_blocking("eval_generate_samples", move || {
+    let planned_case_count = trigger_count
+        .unwrap_or(DEFAULT_TRIGGER_CASE_COUNT)
+        .max(2)
+        .saturating_add(
+            functional_count
+                .unwrap_or(DEFAULT_FUNCTIONAL_CASE_COUNT)
+                .max(1),
+        );
+    let timeout_secs = timeout_secs_for_case_count(planned_case_count);
+    run_eval_blocking("eval_generate_samples", timeout_secs, move || {
         eval_generate_samples_impl(
             skill_name,
             skill_path,

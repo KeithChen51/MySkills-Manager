@@ -24,12 +24,12 @@ export default function Sidebar({ active, onChange }: Props) {
     const { t } = useI18n();
     const { resolvedTheme } = useTheme();
     const brandLogoSrc = resolvedTheme === "dark" ? brandLogoWhiteBg : brandLogoTransparent;
-    const navItems: { view: ViewName; icon: React.ReactNode; label: string }[] = [
+    const navItems: { view: ViewName; icon: React.ReactNode; label: string; beta?: boolean }[] = [
         { view: "skills", icon: <IconSkills size={20} />, label: t("nav.skills") },
         { view: "tools", icon: <IconTools size={20} />, label: t("nav.tools") },
         { view: "dashboard", icon: <IconDashboard size={20} />, label: t("nav.dashboard") },
         { view: "logs", icon: <IconLogs size={20} />, label: t("nav.logs") },
-        { view: "eval", icon: <IconEval size={20} />, label: t("nav.eval") },
+        { view: "eval", icon: <IconEval size={20} />, label: t("nav.eval"), beta: true },
         { view: "git", icon: <IconGit size={20} />, label: "Git" },
     ];
 
@@ -52,11 +52,14 @@ export default function Sidebar({ active, onChange }: Props) {
                             key={item.view}
                             className={`sidebar-item${active === item.view ? " active" : ""}`}
                             onClick={() => onChange(item.view)}
-                            aria-label={item.label}
-                            title={item.label}
+                            aria-label={item.beta ? `${item.label} (BETA)` : item.label}
+                            title={item.beta ? `${item.label} (BETA)` : item.label}
                         >
                             {item.icon}
-                            <span className="sidebar-label">{item.label}</span>
+                            <span className="sidebar-label-wrap">
+                                <span className="sidebar-label">{item.label}</span>
+                                {item.beta ? <span className="sidebar-beta-badge">BETA</span> : null}
+                            </span>
                         </button>
                     ))}
                 </div>

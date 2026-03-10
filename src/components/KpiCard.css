@@ -31,7 +31,7 @@
 
 .kpi-help-icon {
   align-items: center;
-  background: var(--surface);
+  background: var(--bg-input);
   border: 1px solid var(--border-card);
   border-radius: 999px;
   color: var(--text-secondary);

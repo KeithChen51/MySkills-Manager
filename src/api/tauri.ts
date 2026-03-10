@@ -517,6 +517,7 @@ export type EvalHistoryEntry = {
   fileName: string;
   savedAtUnix: number;
   mode: string;
+  repeats: number;
   passRate: number;
   totalCases: number;
   model: string;

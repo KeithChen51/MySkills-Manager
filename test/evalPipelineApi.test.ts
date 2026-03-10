@@ -70,6 +70,10 @@ test("tauri API exposes eval dataset storage and history commands", () => {
     source.includes("kind?: \"trigger\" | \"functional\""),
     "evalSaveDataset request should support dataset kind for preset file naming",
   );
+  assert.ok(
+    source.includes("repeats: number"),
+    "eval history contract should include repeats in overview records",
+  );
 });
 
 test("evalSaveConfig sends compatibility keys for tauri arg naming differences", () => {

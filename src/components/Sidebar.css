@@ -152,6 +152,27 @@
   line-height: 1.2;
 }
 
+.sidebar-label-wrap {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sidebar-beta-badge {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 58%, transparent);
+  border-radius: var(--radius-pill);
+  color: var(--accent);
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  padding: 3px 6px;
+  text-transform: uppercase;
+}
+
 .sidebar-item-secondary {
   justify-content: center;
 }
@@ -187,5 +208,10 @@
 
   .sidebar-label {
     font-size: var(--text-md);
+  }
+
+  .sidebar-beta-badge {
+    font-size: 9px;
+    padding: 2px 5px;
   }
 }
