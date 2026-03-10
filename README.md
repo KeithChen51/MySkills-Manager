@@ -137,27 +137,27 @@ graph TD
         D[ECharts & Monaco Editor]
     end
 
-    subgraph Backend (Rust)
+    subgraph Backend_Rust[Backend - Rust]
         E[Tauri v2]
         F[Serde & Serde_yaml]
         G[Rusqlite]
         H[Git2]
     end
 
-    subgraph Eval Engine (Python)
+    subgraph Eval_Engine[Eval Engine - Python]
         I[Python 3]
         J[Sidecar Process]
         K[LLM APIs]
     end
 
-    Frontend -- Tauri IPC --> Backend
-    Backend -- Spawns --> J
-    J -- Stdio --> Backend
+    Frontend -- Tauri IPC --> Backend_Rust
+    Backend_Rust -- Spawns --> J
+    J -- Stdio --> Backend_Rust
     J -- HTTP --> K
 
     style Frontend fill:#cde4ff
-    style Backend fill:#d5f0d5
-    style "Eval Engine (Python)" fill:#ffeacc
+    style Backend_Rust fill:#d5f0d5
+    style Eval_Engine fill:#ffeacc
 ```
 
 - **前端 (Frontend)**: 使用 **React 19** 和 **TypeScript** 构建，由 **Vite** 提供开发和构建支持。UI 层面，集成了 **ECharts** 用于数据可视化（仪表盘），以及 **Monaco Editor** 提供一流的代码和文本编辑体验（技能编辑器）。
