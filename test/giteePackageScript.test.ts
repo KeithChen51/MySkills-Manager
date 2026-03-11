@@ -5,6 +5,7 @@ import {
   buildWindowsLatestJson,
   chooseArchiveName,
   resolveGiteeReleaseBaseUrl,
+  rewriteTauriUpdaterEndpoint,
   shouldExcludeFromSource,
 } from "../scripts/prepare-gitee-package.mjs";
 
@@ -46,6 +47,28 @@ test("resolveGiteeReleaseBaseUrl derives from repo and version", () => {
   assert.equal(url, "https://gitee.com/acme/tools/releases/download/v0.1.9");
 });
 
+test("resolveGiteeReleaseBaseUrl accepts full repo url in giteeRepo", () => {
+  const url = resolveGiteeReleaseBaseUrl("0.1.9", {
+    explicitBaseUrl: "",
+    giteeRepo: "https://devops.byd.com/QCSHFW/lin.zixuan/skillar",
+  });
+  assert.equal(
+    url,
+    "https://devops.byd.com/QCSHFW/lin.zixuan/skillar/releases/download/v0.1.9",
+  );
+});
+
+test("resolveGiteeReleaseBaseUrl defaults to BYD gitee repository", () => {
+  const url = resolveGiteeReleaseBaseUrl("0.1.9", {
+    explicitBaseUrl: "",
+    giteeRepo: "",
+  });
+  assert.equal(
+    url,
+    "https://devops.byd.com/QCSHFW/lin.zixuan/skillar/releases/download/v0.1.9",
+  );
+});
+
 test("buildWindowsLatestJson includes windows updater platform aliases", () => {
   const manifest = buildWindowsLatestJson({
     version: "0.1.9",
@@ -67,4 +90,39 @@ test("buildWindowsLatestJson includes windows updater platform aliases", () => {
     signature: "MINISIGN-SIG",
     url: "https://gitee.com/acme/tools/releases/download/v0.1.9/Skillar_0.1.9_x64-setup.exe",
   });
+});
+
+test("rewriteTauriUpdaterEndpoint rewrites updater endpoint to gitee latest manifest", () => {
+  const source = JSON.stringify(
+    {
+      plugins: {
+        updater: {
+          endpoints: [
+            "https://github.com/KeithChen51/MySkills-Manager/releases/latest/download/latest.json",
+          ],
+          pubkey: "PUBKEY",
+        },
+      },
+    },
+    null,
+    2,
+  );
+
+  const rewritten = rewriteTauriUpdaterEndpoint(
+    source,
+    "https://gitee.com/acme/tools/releases/download/v0.1.9",
+  );
+  const parsed = JSON.parse(rewritten) as {
+    plugins?: {
+      updater?: {
+        endpoints?: string[];
+        pubkey?: string;
+      };
+    };
+  };
+
+  assert.deepEqual(parsed.plugins?.updater?.endpoints, [
+    "https://gitee.com/acme/tools/releases/download/v0.1.9/latest.json",
+  ]);
+  assert.equal(parsed.plugins?.updater?.pubkey, "PUBKEY");
 });

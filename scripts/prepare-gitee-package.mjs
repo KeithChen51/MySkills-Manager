@@ -24,12 +24,22 @@ const EXCLUDED_FILES = new Set([
   "vite-dev.log",
 ]);
 
+const DEFAULT_GITEE_REPO_URL = "https://devops.byd.com/QCSHFW/lin.zixuan/skillar";
+
 function normalizePath(value) {
   return value.replaceAll("\\", "/");
 }
 
 function trimTrailingSlash(value) {
   return value.trim().replace(/\/+$/, "");
+}
+
+function buildUpdaterManifestUrl(baseDownloadUrl) {
+  return `${trimTrailingSlash(baseDownloadUrl)}/latest.json`;
+}
+
+function isHttpUrl(value) {
+  return /^https?:\/\//i.test(value);
 }
 
 export function shouldExcludeFromSource(relativePath) {
@@ -64,12 +74,17 @@ export function resolveGiteeReleaseBaseUrl(
     return explicitBaseUrl;
   }
 
-  const giteeRepo = normalizePath((options.giteeRepo ?? "").trim()).replace(/^\/+|\/+$/g, "");
-  if (giteeRepo) {
+  const repoInput = (options.giteeRepo ?? "").trim();
+  if (repoInput) {
+    if (isHttpUrl(repoInput)) {
+      return `${trimTrailingSlash(repoInput)}/releases/download/v${packageVersion}`;
+    }
+
+    const giteeRepo = normalizePath(repoInput).replace(/^\/+|\/+$/g, "");
     return `https://gitee.com/${giteeRepo}/releases/download/v${packageVersion}`;
   }
 
-  return `https://gitee.com/<owner>/<repo>/releases/download/v${packageVersion}`;
+  return `${DEFAULT_GITEE_REPO_URL}/releases/download/v${packageVersion}`;
 }
 
 export function buildWindowsLatestJson({
@@ -94,6 +109,31 @@ export function buildWindowsLatestJson({
       "windows-x86_64-nsis": { ...entry },
     },
   };
+}
+
+export function rewriteTauriUpdaterEndpoint(tauriConfigRaw, baseDownloadUrl) {
+  let parsedConfig;
+  try {
+    parsedConfig = JSON.parse(tauriConfigRaw);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid tauri config JSON: ${message}`);
+  }
+
+  const nextConfig = parsedConfig ?? {};
+  if (typeof nextConfig.plugins !== "object" || nextConfig.plugins === null || Array.isArray(nextConfig.plugins)) {
+    nextConfig.plugins = {};
+  }
+  if (
+    typeof nextConfig.plugins.updater !== "object" ||
+    nextConfig.plugins.updater === null ||
+    Array.isArray(nextConfig.plugins.updater)
+  ) {
+    nextConfig.plugins.updater = {};
+  }
+
+  nextConfig.plugins.updater.endpoints = [buildUpdaterManifestUrl(baseDownloadUrl)];
+  return `${JSON.stringify(nextConfig, null, 2)}\n`;
 }
 
 async function collectSourceFiles(rootDir, currentDir = rootDir, output = []) {
@@ -195,7 +235,7 @@ async function readSignatureFile(filePath) {
   return content;
 }
 
-async function createSourceArchive(projectRoot, giteeDir, archiveName) {
+async function createSourceArchive(projectRoot, giteeDir, archiveName, updaterBaseUrl) {
   const files = await collectSourceFiles(projectRoot);
   const stageRoot = await mkdtemp(path.join(os.tmpdir(), "myskills-gitee-pack-"));
   const stageProjectDir = path.join(stageRoot, "MySkills-Manager");
@@ -208,6 +248,11 @@ async function createSourceArchive(projectRoot, giteeDir, archiveName) {
       await mkdir(path.dirname(targetPath), { recursive: true });
       await copyFile(sourcePath, targetPath);
     }
+
+    const tauriConfigPath = path.join(stageProjectDir, "src-tauri", "tauri.conf.json");
+    const tauriConfigRaw = await readFile(tauriConfigPath, "utf8");
+    const rewrittenConfig = rewriteTauriUpdaterEndpoint(tauriConfigRaw, updaterBaseUrl);
+    await writeFile(tauriConfigPath, rewrittenConfig, "utf8");
 
     const archivePath = path.join(giteeDir, archiveName);
     await execFileAsync(
@@ -277,7 +322,7 @@ export async function prepareGiteePackage(options = {}) {
   });
   await writeFile(latestJsonPath, `${JSON.stringify(latestJson, null, 2)}\n`, "utf8");
 
-  const archivePath = await createSourceArchive(projectRoot, giteeDir, archiveName);
+  const archivePath = await createSourceArchive(projectRoot, giteeDir, archiveName, updaterBaseUrl);
   await removeOldArchives(giteeDir, archiveName);
 
   const readmePath = path.join(giteeDir, "README.md");
