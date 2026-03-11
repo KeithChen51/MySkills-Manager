@@ -33,6 +33,21 @@
   margin-left: auto;
 }
 
+.skills-insight-window-switch {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.skills-insight-window-btn {
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.skills-insight-window-btn.active {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+}
+
 .skills-refresh-btn {
   min-height: 42px;
 }
@@ -186,6 +201,78 @@
 .skills-overview-conflict-btn:disabled {
   cursor: not-allowed;
   opacity: 0.7;
+}
+
+.skills-insight-detail-overlay {
+  background: var(--overlay-scrim);
+  backdrop-filter: blur(4px);
+  display: flex;
+  inset: 0;
+  position: fixed;
+  z-index: var(--z-overlay);
+}
+
+.skills-insight-detail-panel {
+  background: var(--bg-app);
+  border-left: 1px solid var(--border-card);
+  box-shadow: var(--shadow-drawer);
+  display: grid;
+  gap: var(--sp-md);
+  height: 100%;
+  margin-left: auto;
+  min-width: var(--drawer-min-width);
+  overflow: auto;
+  padding: var(--sp-xl);
+  width: min(74vw, 1000px);
+}
+
+.skills-insight-detail-header {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-sm);
+}
+
+.skills-insight-detail-title {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.skills-insight-detail-subtitle {
+  color: var(--text-muted);
+  margin: 4px 0 0;
+  font-size: var(--text-sm);
+}
+
+.skills-insight-detail-status {
+  color: var(--text-secondary);
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.skills-insight-detail-grid {
+  display: grid;
+  gap: var(--sp-md);
+}
+
+.skills-insight-detail-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--sp-sm);
+  padding: var(--sp-md);
+}
+
+.skills-insight-detail-section h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.skills-insight-detail-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
 }
 
 .skills-conflict-overlay {
@@ -424,6 +511,14 @@
     width: 100%;
   }
 
+  .skills-insight-window-switch {
+    width: 100%;
+  }
+
+  .skills-insight-window-btn {
+    flex: 1;
+  }
+
   .skills-search-box {
     max-width: none;
     width: 100%;
@@ -434,6 +529,11 @@
   }
 
   .skills-conflict-drawer {
+    min-width: 100%;
+    width: 100%;
+  }
+
+  .skills-insight-detail-panel {
     min-width: 100%;
     width: 100%;
   }

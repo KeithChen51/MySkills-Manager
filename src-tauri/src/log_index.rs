@@ -17,6 +17,18 @@ pub(crate) struct IndexedStatsRows {
     pub recent: Vec<LogEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct SkillUsageWindowRow {
+    pub skill: String,
+    pub d7: usize,
+    pub d30: usize,
+    pub d90: usize,
+    pub d7_prev: usize,
+    pub d30_prev: usize,
+    pub d90_prev: usize,
+    pub last_used_at: Option<String>,
+}
+
 fn logs_file(root: &Path) -> PathBuf {
     root.join(".logs").join("skill-usage.jsonl")
 }
@@ -340,6 +352,69 @@ pub(crate) fn query_stats_index(
         by_day,
         recent,
     })
+}
+
+pub(crate) fn query_skill_usage_windows_index(
+    root: &Path,
+    now: DateTime<Utc>,
+) -> Result<Vec<SkillUsageWindowRow>, String> {
+    let conn = open_synced_index(root)?;
+
+    let d7_start = (now - chrono::Duration::days(7)).timestamp();
+    let d30_start = (now - chrono::Duration::days(30)).timestamp();
+    let d90_start = (now - chrono::Duration::days(90)).timestamp();
+
+    let d7_prev_start = (now - chrono::Duration::days(14)).timestamp();
+    let d30_prev_start = (now - chrono::Duration::days(60)).timestamp();
+    let d90_prev_start = (now - chrono::Duration::days(180)).timestamp();
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT skill,
+                SUM(CASE WHEN ts_epoch >= ?1 THEN 1 ELSE 0 END) AS d7,
+                SUM(CASE WHEN ts_epoch >= ?2 THEN 1 ELSE 0 END) AS d30,
+                SUM(CASE WHEN ts_epoch >= ?3 THEN 1 ELSE 0 END) AS d90,
+                SUM(CASE WHEN ts_epoch >= ?4 AND ts_epoch < ?1 THEN 1 ELSE 0 END) AS d7_prev,
+                SUM(CASE WHEN ts_epoch >= ?5 AND ts_epoch < ?2 THEN 1 ELSE 0 END) AS d30_prev,
+                SUM(CASE WHEN ts_epoch >= ?6 AND ts_epoch < ?3 THEN 1 ELSE 0 END) AS d90_prev,
+                MAX(ts) AS last_used_at
+             FROM logs
+             WHERE ts_epoch IS NOT NULL
+             GROUP BY skill
+             ORDER BY skill ASC",
+        )
+        .map_err(|e| format!("Prepare indexed skill usage query failed: {e}"))?;
+
+    let rows = stmt
+        .query_map(
+            params![
+                d7_start,
+                d30_start,
+                d90_start,
+                d7_prev_start,
+                d30_prev_start,
+                d90_prev_start
+            ],
+            |row| {
+                Ok(SkillUsageWindowRow {
+                    skill: row.get(0)?,
+                    d7: row.get::<_, i64>(1)?.max(0) as usize,
+                    d30: row.get::<_, i64>(2)?.max(0) as usize,
+                    d90: row.get::<_, i64>(3)?.max(0) as usize,
+                    d7_prev: row.get::<_, i64>(4)?.max(0) as usize,
+                    d30_prev: row.get::<_, i64>(5)?.max(0) as usize,
+                    d90_prev: row.get::<_, i64>(6)?.max(0) as usize,
+                    last_used_at: row.get(7)?,
+                })
+            },
+        )
+        .map_err(|e| format!("Run indexed skill usage query failed: {e}"))?;
+
+    let mut out = Vec::<SkillUsageWindowRow>::new();
+    for row in rows {
+        out.push(row.map_err(|e| format!("Read indexed skill usage row failed: {e}"))?);
+    }
+    Ok(out)
 }
 
 fn query_named_counts(

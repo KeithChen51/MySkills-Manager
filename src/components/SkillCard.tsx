@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import type { SkillInsight } from "../api/tauri";
+import {
+  evalTrend,
+  trendFromValues,
+  usageCountForWindow,
+  usagePrevCountForWindow,
+  type InsightTrend,
+  type SkillInsightWindow,
+} from "../domain/skillInsights";
 import { IconEdit, IconMoreHorizontal, IconTrash } from "./icons";
 import { useI18n } from "../i18n/I18nProvider";
 import "./SkillCard.css";
@@ -9,7 +18,10 @@ type Props = {
   description?: string;
   category?: string;
   tags?: string[];
+  insightWindow: SkillInsightWindow;
+  insight?: SkillInsight | null;
   onEdit: () => void;
+  onViewInsights: () => void;
   onDelete: () => void;
   deleteBusy?: boolean;
 };
@@ -19,11 +31,14 @@ export default function SkillCard({
   description,
   category,
   tags,
+  insightWindow,
+  insight,
   onEdit,
+  onViewInsights,
   onDelete,
   deleteBusy = false,
 }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -58,6 +73,30 @@ export default function SkillCard({
     const firstVisible = chars.find((char) => /[\p{L}\p{N}]/u.test(char)) ?? chars[0];
     return /^[a-z]$/i.test(firstVisible) ? firstVisible.toUpperCase() : firstVisible;
   }, [name]);
+
+  const usageCount = insight ? usageCountForWindow(insight.usage, insightWindow) : null;
+  const usagePrev = insight ? usagePrevCountForWindow(insight.usage, insightWindow) : null;
+  const usageTrend = trendFromValues(usageCount, usagePrev);
+  const evalPassRate = insight?.eval.latestPassRate ?? null;
+  const evalTrendDirection = insight ? evalTrend(insight.eval) : "na";
+  const lastUsedText = insight?.usage.lastUsedAt
+    ? new Date(insight.usage.lastUsedAt).toLocaleString(locale)
+    : t("skills.insights.usage.lastUsed.empty");
+  const evalStatusText = insight?.eval.latestStatus ?? t("skills.insights.eval.status.none");
+
+  function trendGlyph(direction: InsightTrend): string {
+    if (direction === "up") return "^";
+    if (direction === "down") return "v";
+    if (direction === "flat") return "=";
+    return ".";
+  }
+
+  function trendText(direction: InsightTrend): string {
+    if (direction === "up") return t("skills.insights.trend.up");
+    if (direction === "down") return t("skills.insights.trend.down");
+    if (direction === "flat") return t("skills.insights.trend.flat");
+    return t("skills.insights.trend.na");
+  }
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -96,6 +135,31 @@ export default function SkillCard({
         </div>
       </div>
 
+      <div className="skill-card-insights">
+        <div className="skill-card-insight-row">
+          <span className="skill-card-insight-label">
+            {t("skills.insights.usage.window", { days: insightWindow })}
+          </span>
+          <strong className="skill-card-insight-value">{usageCount ?? "--"}</strong>
+          <span className={`skill-card-insight-trend ${usageTrend}`}>
+            {trendGlyph(usageTrend)} {trendText(usageTrend)}
+          </span>
+        </div>
+        <div className="skill-card-insight-row">
+          <span className="skill-card-insight-label">{t("skills.insights.eval.passRate")}</span>
+          <strong className="skill-card-insight-value">
+            {evalPassRate === null ? "--" : `${Math.round(evalPassRate * 100)}%`}
+          </strong>
+          <span className={`skill-card-insight-trend ${evalTrendDirection}`}>
+            {trendGlyph(evalTrendDirection)} {trendText(evalTrendDirection)}
+          </span>
+        </div>
+        <div className="skill-card-insight-meta">
+          <span>{t("skills.insights.usage.lastUsed", { time: lastUsedText })}</span>
+          <span>{t("skills.insights.eval.latestStatus", { status: evalStatusText })}</span>
+        </div>
+      </div>
+
       <div className="skill-card-divider" />
 
       <div className="skill-card-footer">
@@ -116,6 +180,15 @@ export default function SkillCard({
             <span className="skill-card-empty">{t("skills.enableFor.empty")}</span>
           )}
         </div>
+        <button
+          className="btn btn-ghost skill-card-detail-btn"
+          onClick={(event) => {
+            event.stopPropagation();
+            onViewInsights();
+          }}
+        >
+          {t("skills.insights.detail")}
+        </button>
         <div className="skill-card-actions" ref={menuRef} onClick={(e) => e.stopPropagation()}>
           <button
             className="skill-card-menu-trigger"

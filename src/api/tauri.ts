@@ -45,6 +45,32 @@ export type SkillMeta = {
   directory: string;
 };
 
+export type SkillUsageInsight = {
+  lastUsedAt: string | null;
+  d7: number;
+  d30: number;
+  d90: number;
+  d7Prev: number;
+  d30Prev: number;
+  d90Prev: number;
+};
+
+export type SkillEvalInsight = {
+  latestRunAtUnix: number | null;
+  latestStatus: string | null;
+  latestPassRate: number | null;
+  latestMode: string | null;
+  latestModel: string | null;
+  prevPassRate: number | null;
+  runs90d: number;
+};
+
+export type SkillInsight = {
+  skillName: string;
+  usage: SkillUsageInsight;
+  eval: SkillEvalInsight;
+};
+
 export type SkillDocument = {
   frontmatter: Record<string, unknown>;
   body: string;
@@ -745,6 +771,10 @@ export async function appPing(): Promise<string> {
 
 export async function skillsList(): Promise<SkillMeta[]> {
   return invokeWithError<SkillMeta[]>("skills_list");
+}
+
+export async function skillsGetInsights(): Promise<SkillInsight[]> {
+  return invokeWithError<SkillInsight[]>("skills_get_insights");
 }
 
 export async function skillsGetContent(name: string): Promise<SkillDocument> {

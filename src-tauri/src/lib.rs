@@ -9,6 +9,7 @@ mod router_seed;
 mod rules;
 mod setup;
 mod skills;
+mod skill_insights;
 mod stats;
 mod update_checker;
 #[cfg(test)]
@@ -45,6 +46,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_ping,
             skills::skills_list,
+            skill_insights::skills_get_insights,
             skills::skills_get_content,
             skills::skills_save_content,
             skills::skills_list_files,
