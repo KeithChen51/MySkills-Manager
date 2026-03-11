@@ -24,7 +24,7 @@ const EXCLUDED_FILES = new Set([
   "vite-dev.log",
 ]);
 
-const DEFAULT_GITEE_REPO_URL = "https://devops.byd.com/QCSHFW/lin.zixuan/skillar";
+const DEFAULT_GITEE_REPO_URL = "https://devops.byd.com/QCSHFW/_source/QCSHFW/lin.zixuan/skillar";
 
 function normalizePath(value) {
   return value.replaceAll("\\", "/");
@@ -40,6 +40,26 @@ function buildUpdaterManifestUrl(baseDownloadUrl) {
 
 function isHttpUrl(value) {
   return /^https?:\/\//i.test(value);
+}
+
+function stripReleaseSuffix(repoUrl) {
+  return repoUrl
+    .replace(/\/-\/releases(?:\/.*)?$/i, "")
+    .replace(/\/releases(?:\/.*)?$/i, "");
+}
+
+function buildReleaseDownloadBaseFromRepoUrl(repoUrl, packageVersion) {
+  const normalizedRepoUrl = stripReleaseSuffix(trimTrailingSlash(repoUrl));
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(normalizedRepoUrl);
+  } catch {
+    return `${normalizedRepoUrl}/releases/download/v${packageVersion}`;
+  }
+  const hostname = parsedUrl.hostname.toLowerCase();
+  const isPublicGitee = hostname === "gitee.com" || hostname === "www.gitee.com";
+  const releasePrefix = isPublicGitee ? "/releases/download" : "/-/releases/download";
+  return `${normalizedRepoUrl}${releasePrefix}/v${packageVersion}`;
 }
 
 export function shouldExcludeFromSource(relativePath) {
@@ -77,14 +97,14 @@ export function resolveGiteeReleaseBaseUrl(
   const repoInput = (options.giteeRepo ?? "").trim();
   if (repoInput) {
     if (isHttpUrl(repoInput)) {
-      return `${trimTrailingSlash(repoInput)}/releases/download/v${packageVersion}`;
+      return buildReleaseDownloadBaseFromRepoUrl(repoInput, packageVersion);
     }
 
     const giteeRepo = normalizePath(repoInput).replace(/^\/+|\/+$/g, "");
     return `https://gitee.com/${giteeRepo}/releases/download/v${packageVersion}`;
   }
 
-  return `${DEFAULT_GITEE_REPO_URL}/releases/download/v${packageVersion}`;
+  return buildReleaseDownloadBaseFromRepoUrl(DEFAULT_GITEE_REPO_URL, packageVersion);
 }
 
 export function buildWindowsLatestJson({

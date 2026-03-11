@@ -50,11 +50,22 @@ test("resolveGiteeReleaseBaseUrl derives from repo and version", () => {
 test("resolveGiteeReleaseBaseUrl accepts full repo url in giteeRepo", () => {
   const url = resolveGiteeReleaseBaseUrl("0.1.9", {
     explicitBaseUrl: "",
-    giteeRepo: "https://devops.byd.com/QCSHFW/lin.zixuan/skillar",
+    giteeRepo: "https://gitee.com/acme/tools",
   });
   assert.equal(
     url,
-    "https://devops.byd.com/QCSHFW/lin.zixuan/skillar/releases/download/v0.1.9",
+    "https://gitee.com/acme/tools/releases/download/v0.1.9",
+  );
+});
+
+test("resolveGiteeReleaseBaseUrl uses enterprise releases path for self-hosted repo url", () => {
+  const url = resolveGiteeReleaseBaseUrl("0.1.9", {
+    explicitBaseUrl: "",
+    giteeRepo: "https://devops.byd.com/QCSHFW/_source/QCSHFW/lin.zixuan/skillar",
+  });
+  assert.equal(
+    url,
+    "https://devops.byd.com/QCSHFW/_source/QCSHFW/lin.zixuan/skillar/-/releases/download/v0.1.9",
   );
 });
 
@@ -65,7 +76,7 @@ test("resolveGiteeReleaseBaseUrl defaults to BYD gitee repository", () => {
   });
   assert.equal(
     url,
-    "https://devops.byd.com/QCSHFW/lin.zixuan/skillar/releases/download/v0.1.9",
+    "https://devops.byd.com/QCSHFW/_source/QCSHFW/lin.zixuan/skillar/-/releases/download/v0.1.9",
   );
 });
 
