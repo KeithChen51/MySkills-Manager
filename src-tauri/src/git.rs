@@ -585,8 +585,8 @@ pub fn load_git_guide_markdown(home: &Path) -> Result<GitGuideDocument, String> 
             .map_err(|e| format!("Write default git guide markdown failed: {e}"))?;
     }
 
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Read git guide markdown failed: {e}"))?;
+    let content =
+        fs::read_to_string(&path).map_err(|e| format!("Read git guide markdown failed: {e}"))?;
 
     Ok(GitGuideDocument {
         path: path_to_string(&path),
@@ -1102,15 +1102,17 @@ fn list_sync_tree_entries(
             ignored: ignore_matcher.matches(&rel_normalized),
         });
     }
-    result.sort_by(|a, b| match (a.entry_type.as_str(), b.entry_type.as_str()) {
-        ("dir", "file") => std::cmp::Ordering::Less,
-        ("file", "dir") => std::cmp::Ordering::Greater,
-        _ => a
-            .name
-            .to_ascii_lowercase()
-            .cmp(&b.name.to_ascii_lowercase())
-            .then_with(|| a.name.cmp(&b.name)),
-    });
+    result.sort_by(
+        |a, b| match (a.entry_type.as_str(), b.entry_type.as_str()) {
+            ("dir", "file") => std::cmp::Ordering::Less,
+            ("file", "dir") => std::cmp::Ordering::Greater,
+            _ => a
+                .name
+                .to_ascii_lowercase()
+                .cmp(&b.name.to_ascii_lowercase())
+                .then_with(|| a.name.cmp(&b.name)),
+        },
+    );
     Ok(result)
 }
 
@@ -1136,8 +1138,12 @@ fn write_repository_gitignore_managed_block(
 ) -> Result<(), String> {
     let gitignore_path = repository_root.join(".gitignore");
     let existing_raw = if gitignore_path.exists() {
-        fs::read_to_string(&gitignore_path)
-            .map_err(|e| format!("Read .gitignore failed ({}): {e}", gitignore_path.to_string_lossy()))?
+        fs::read_to_string(&gitignore_path).map_err(|e| {
+            format!(
+                "Read .gitignore failed ({}): {e}",
+                gitignore_path.to_string_lossy()
+            )
+        })?
     } else {
         String::new()
     };
@@ -1182,8 +1188,12 @@ fn write_repository_gitignore_managed_block(
     if !output.is_empty() {
         output.push_str(newline);
     }
-    fs::write(&gitignore_path, output)
-        .map_err(|e| format!("Write .gitignore failed ({}): {e}", gitignore_path.to_string_lossy()))
+    fs::write(&gitignore_path, output).map_err(|e| {
+        format!(
+            "Write .gitignore failed ({}): {e}",
+            gitignore_path.to_string_lossy()
+        )
+    })
 }
 
 fn collect_relative_entries(
@@ -1374,16 +1384,67 @@ fn format_git_time(time: git2::Time) -> String {
     }
 }
 
-fn resolve_upstream_oid(
-    repo: &git2::Repository,
-    branch_name: Option<&str>,
-) -> Option<git2::Oid> {
+fn resolve_upstream_oid(repo: &git2::Repository, branch_name: Option<&str>) -> Option<git2::Oid> {
     let branch_name = branch_name?;
     let local_branch = repo
         .find_branch(branch_name, git2::BranchType::Local)
         .ok()?;
     let upstream = local_branch.upstream().ok()?;
     upstream.into_reference().target()
+}
+
+fn resolve_origin_upstream_branch_name(
+    repo: &git2::Repository,
+    local_branch: &str,
+) -> Option<String> {
+    let local_branch = repo
+        .find_branch(local_branch, git2::BranchType::Local)
+        .ok()?;
+    let upstream = local_branch.upstream().ok()?;
+    let upstream_name = upstream.name().ok().flatten()?;
+    let (remote_name, branch_name) = upstream_name.split_once('/')?;
+    if remote_name != "origin" || branch_name.trim().is_empty() {
+        return None;
+    }
+    Some(branch_name.to_string())
+}
+
+fn has_origin_tracking_branch(repo: &git2::Repository, branch_name: &str) -> bool {
+    repo.find_reference(&format!("refs/remotes/origin/{branch_name}"))
+        .is_ok()
+}
+
+fn resolve_origin_default_branch_name(repo: &git2::Repository) -> Option<String> {
+    let origin_head = repo.find_reference("refs/remotes/origin/HEAD").ok()?;
+    let symbolic_target = origin_head.symbolic_target()?;
+    symbolic_target
+        .strip_prefix("refs/remotes/origin/")
+        .map(|name| name.to_string())
+}
+
+fn resolve_push_target_branch(repo: &git2::Repository, local_branch: &str) -> String {
+    if let Some(upstream_branch) = resolve_origin_upstream_branch_name(repo, local_branch) {
+        return upstream_branch;
+    }
+    if has_origin_tracking_branch(repo, local_branch) {
+        return local_branch.to_string();
+    }
+
+    if matches!(local_branch, "main" | "master") {
+        if let Some(default_branch) = resolve_origin_default_branch_name(repo) {
+            return default_branch;
+        }
+        let alternate = if local_branch == "main" {
+            "master"
+        } else {
+            "main"
+        };
+        if has_origin_tracking_branch(repo, alternate) {
+            return alternate.to_string();
+        }
+    }
+
+    local_branch.to_string()
 }
 
 fn is_commit_pushed(
@@ -1407,10 +1468,7 @@ fn collect_commit_ref_labels(repo: &git2::Repository) -> HashMap<git2::Oid, Vec<
     if let Ok(head) = repo.head() {
         if let Some(oid) = head.target() {
             if let Some(name) = head.shorthand() {
-                push_unique(
-                    labels.entry(oid).or_default(),
-                    format!("HEAD -> {name}"),
-                );
+                push_unique(labels.entry(oid).or_default(), format!("HEAD -> {name}"));
             } else {
                 push_unique(labels.entry(oid).or_default(), "HEAD".to_string());
             }
@@ -1719,10 +1777,12 @@ pub fn push_origin(_root: &Path) -> Result<GitPushResult, String> {
     }
 
     let head = repo.head().map_err(|e| format!("Read HEAD failed: {e}"))?;
-    let branch = head
+    let local_branch = head
         .shorthand()
         .ok_or_else(|| "Current HEAD is detached".to_string())?
         .to_string();
+    let _ = fetch_origin(&repo);
+    let target_branch = resolve_push_target_branch(&repo, &local_branch);
 
     let mut remote = repo
         .find_remote("origin")
@@ -1731,21 +1791,21 @@ pub fn push_origin(_root: &Path) -> Result<GitPushResult, String> {
     let mut push_options = git2::PushOptions::new();
     push_options.remote_callbacks(build_remote_callbacks_for_push(&repo)?);
 
-    let refspec = format!("refs/heads/{0}:refs/heads/{0}", branch);
+    let refspec = format!("refs/heads/{local_branch}:refs/heads/{target_branch}");
     remote
         .push(&[&refspec], Some(&mut push_options))
-        .map_err(|e| format!("Push to origin failed: {e}"))?;
+        .map_err(|e| format!("Push to origin failed ({local_branch} -> {target_branch}): {e}"))?;
 
     if let Some(head_oid) = head.target() {
         let _ = repo.reference(
-            &format!("refs/remotes/origin/{branch}"),
+            &format!("refs/remotes/origin/{target_branch}"),
             head_oid,
             true,
             "update origin tracking ref after push",
         );
     }
-    if let Ok(mut local_branch) = repo.find_branch(&branch, git2::BranchType::Local) {
-        let _ = local_branch.set_upstream(Some(&format!("origin/{branch}")));
+    if let Ok(mut branch) = repo.find_branch(&local_branch, git2::BranchType::Local) {
+        let _ = branch.set_upstream(Some(&format!("origin/{target_branch}")));
     }
 
     Ok(GitPushResult {
@@ -1773,10 +1833,16 @@ fn normalize_path_for_system_open(path: &Path) -> PathBuf {
 
 fn open_directory_in_file_manager(path: &Path) -> Result<(), String> {
     if !path.exists() {
-        return Err(format!("Directory does not exist: {}", path.to_string_lossy()));
+        return Err(format!(
+            "Directory does not exist: {}",
+            path.to_string_lossy()
+        ));
     }
     if !path.is_dir() {
-        return Err(format!("Path is not a directory: {}", path.to_string_lossy()));
+        return Err(format!(
+            "Path is not a directory: {}",
+            path.to_string_lossy()
+        ));
     }
 
     let open_path = normalize_path_for_system_open(path);
@@ -2067,8 +2133,8 @@ pub async fn git_sync_skills_to_repo(
     let target_repo_root = PathBuf::from(repo_path);
     let ignore_paths = with_repository_config_lock(|| {
         let repositories = read_managed_repositories_unlocked(&home)?;
-        let resolved_target = fs::canonicalize(&target_repo_root)
-            .unwrap_or_else(|_| target_repo_root.clone());
+        let resolved_target =
+            fs::canonicalize(&target_repo_root).unwrap_or_else(|_| target_repo_root.clone());
         let matched = repositories.into_iter().find(|entry| {
             if entry.local_path.trim().is_empty() {
                 return false;
@@ -2081,7 +2147,11 @@ pub async fn git_sync_skills_to_repo(
         if ignore_paths.is_empty() {
             sync_skills_dir_to_repository(&source_root, &target_repo_root)
         } else {
-            sync_skills_dir_to_repository_with_ignores(&source_root, &target_repo_root, &ignore_paths)
+            sync_skills_dir_to_repository_with_ignores(
+                &source_root,
+                &target_repo_root,
+                &ignore_paths,
+            )
         }
     });
     let joined = tokio::time::timeout(Duration::from_secs(180), task)
@@ -2107,8 +2177,7 @@ pub async fn git_list_commit_history(
 ) -> Result<Vec<GitGraphCommit>, String> {
     let root = resolve_repo_root(repo_path);
     let limit = limit.unwrap_or(80).clamp(1, 200);
-    let task =
-        tauri::async_runtime::spawn_blocking(move || get_git_commit_history(&root, limit));
+    let task = tauri::async_runtime::spawn_blocking(move || get_git_commit_history(&root, limit));
     let joined = tokio::time::timeout(Duration::from_secs(30), task)
         .await
         .map_err(|_| "git_list_commit_history timed out after 30s".to_string())?;
@@ -2154,6 +2223,23 @@ mod tests {
     fn init_bare_repo(root: &Path) -> git2::Repository {
         fs::create_dir_all(root).expect("create root");
         git2::Repository::init_bare(root).expect("init bare repo")
+    }
+
+    fn ensure_local_branch_name(repo: &git2::Repository, target: &str) {
+        let head = repo.head().expect("read head");
+        let current = head.shorthand().unwrap_or("HEAD");
+        if current == target {
+            return;
+        }
+
+        let head_oid = head.target().expect("head oid");
+        let commit = repo.find_commit(head_oid).expect("find head commit");
+        if repo.find_branch(target, git2::BranchType::Local).is_err() {
+            repo.branch(target, &commit, true)
+                .expect("create local branch");
+        }
+        repo.set_head(&format!("refs/heads/{target}"))
+            .expect("set local branch head");
     }
 
     #[test]
@@ -2252,7 +2338,11 @@ mod tests {
         let status = get_git_status(&root).expect("status");
         assert_eq!(status.latest_pushed_hash, Some(commit_result.hash.clone()));
         assert_eq!(status.latest_commit_hash, Some(commit_result.hash));
-        assert!(status.recent_commits.first().map(|entry| entry.is_pushed).unwrap_or(false));
+        assert!(status
+            .recent_commits
+            .first()
+            .map(|entry| entry.is_pushed)
+            .unwrap_or(false));
     }
 
     #[test]
@@ -2343,6 +2433,108 @@ mod tests {
             err.to_lowercase().contains("no commits"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn push_origin_uses_origin_upstream_branch_when_names_differ() {
+        let root = temp_root("myskills-tauri-git-test");
+        let local = init_repo(&root);
+        fs::write(root.join("seed.md"), "seed").expect("write seed file");
+        commit_all(&root, "feat: seed").expect("seed commit");
+        ensure_local_branch_name(&local, "master");
+
+        let remote_root = temp_root("myskills-tauri-git-test");
+        init_bare_repo(&remote_root);
+        let remote_path = remote_root
+            .to_str()
+            .expect("remote path utf8")
+            .replace('\\', "/");
+        local
+            .remote("origin", &remote_path)
+            .expect("add remote origin");
+
+        let mut remote = local.find_remote("origin").expect("find origin");
+        remote
+            .push(&["refs/heads/master:refs/heads/main"], None)
+            .expect("seed origin main");
+
+        let local_repo = git2::Repository::open(&root).expect("open local repo");
+        let seed_oid = local_repo
+            .head()
+            .ok()
+            .and_then(|head| head.target())
+            .expect("seed head oid");
+        local_repo
+            .reference(
+                "refs/remotes/origin/main",
+                seed_oid,
+                true,
+                "seed origin/main tracking ref",
+            )
+            .expect("seed origin tracking ref");
+        let mut master_branch = local_repo
+            .find_branch("master", git2::BranchType::Local)
+            .expect("find master branch");
+        master_branch
+            .set_upstream(Some("origin/main"))
+            .expect("set upstream");
+
+        fs::write(root.join("next.md"), "next").expect("write next file");
+        let second = commit_all(&root, "feat: next").expect("second commit");
+        push_origin(&root).expect("push to upstream branch");
+
+        let remote_repo = git2::Repository::open_bare(&remote_root).expect("open remote");
+        let main_ref = remote_repo
+            .find_reference("refs/heads/main")
+            .expect("find remote main");
+        assert_eq!(
+            main_ref.target().expect("main target").to_string(),
+            second.hash
+        );
+        assert!(remote_repo.find_reference("refs/heads/master").is_err());
+    }
+
+    #[test]
+    fn push_origin_maps_local_master_to_remote_main_without_upstream() {
+        let root = temp_root("myskills-tauri-git-test");
+        let local = init_repo(&root);
+        fs::write(root.join("seed.md"), "seed").expect("write seed file");
+        commit_all(&root, "feat: seed").expect("seed commit");
+        ensure_local_branch_name(&local, "master");
+
+        let remote_root = temp_root("myskills-tauri-git-test");
+        init_bare_repo(&remote_root);
+        let remote_path = remote_root
+            .to_str()
+            .expect("remote path utf8")
+            .replace('\\', "/");
+        local
+            .remote("origin", &remote_path)
+            .expect("add remote origin");
+
+        let mut remote = local.find_remote("origin").expect("find origin");
+        remote
+            .push(&["refs/heads/master:refs/heads/main"], None)
+            .expect("seed origin main");
+
+        let local_repo = git2::Repository::open(&root).expect("open local repo");
+        if let Ok(mut branch) = local_repo.find_branch("master", git2::BranchType::Local) {
+            let _ = branch.set_upstream(None);
+        }
+
+        fs::write(root.join("next.md"), "next").expect("write next file");
+        let second = commit_all(&root, "feat: next").expect("second commit");
+        push_origin(&root).expect("push with branch adaptation");
+
+        let remote_repo = git2::Repository::open_bare(&remote_root).expect("open remote");
+        let main_ref = remote_repo
+            .find_reference("refs/heads/main")
+            .expect("find remote main");
+        assert_eq!(
+            main_ref.target().expect("main target").to_string(),
+            second.hash
+        );
+        assert!(remote_repo.find_reference("refs/heads/master").is_err());
     }
 
     fn init_repo_with_commit(root: &Path) {
@@ -2503,8 +2695,9 @@ mod tests {
         )
         .expect("add repository");
 
-        let updated = update_managed_repository_alias(&home, &added.id, Some("notes-main".to_string()))
-            .expect("update alias");
+        let updated =
+            update_managed_repository_alias(&home, &added.id, Some("notes-main".to_string()))
+                .expect("update alias");
         assert_eq!(updated.alias, Some("notes-main".to_string()));
 
         let listed = list_managed_repositories(&home).expect("list repositories");
@@ -2610,7 +2803,8 @@ mod tests {
             "lastSyncError":null,
             "scriptAfterAdd":null
         }"#;
-        let repository: ManagedGitRepository = serde_json::from_str(raw).expect("deserialize repository");
+        let repository: ManagedGitRepository =
+            serde_json::from_str(raw).expect("deserialize repository");
         assert!(repository.ignore_paths.is_empty());
     }
 
@@ -2684,7 +2878,10 @@ mod tests {
         assert!(update_result.sync_result.is_some());
 
         let listed = list_managed_repositories(&home).expect("list repositories");
-        assert_eq!(listed[0].ignore_paths, update_result.repository.ignore_paths);
+        assert_eq!(
+            listed[0].ignore_paths,
+            update_result.repository.ignore_paths
+        );
 
         let mirror_root = PathBuf::from(&added.local_path);
         assert!(!mirror_root.join("notes").exists());
@@ -2708,7 +2905,8 @@ mod tests {
         let target = temp_root("myskills-tauri-git-target");
         init_repo(&target);
         fs::create_dir_all(target.join("ignored-dir")).expect("create target ignored dir");
-        fs::write(target.join("ignored-dir").join("drop.md"), "old").expect("seed target ignored file");
+        fs::write(target.join("ignored-dir").join("drop.md"), "old")
+            .expect("seed target ignored file");
         fs::write(target.join("ignored.md"), "old").expect("seed target ignored root file");
 
         let result = sync_skills_dir_to_repository_with_ignores(
