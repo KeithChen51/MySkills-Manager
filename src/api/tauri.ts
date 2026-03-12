@@ -40,9 +40,22 @@ export type SkillMeta = {
   description?: string;
   category?: string;
   tags?: string[];
+  taxonomy?: SkillTaxonomy;
   my_notes?: string;
   last_updated?: string;
   directory: string;
+};
+
+export type SkillTaxonomy = {
+  sokRepresentation: string;
+  sokScope: string;
+  sokGroup: string;
+  anthropicCategory: string;
+  skillsbenchDomain: string;
+  skillsbenchDifficultyCore: "Core" | "Extended" | "Extreme";
+  skillsbenchDifficultyLevel: "Easy" | "Medium" | "Hard";
+  classifiedAt: string;
+  classifierModel: string;
 };
 
 export type SkillUsageInsight = {
@@ -58,6 +71,7 @@ export type SkillUsageInsight = {
 export type SkillEvalInsight = {
   latestRunAtUnix: number | null;
   latestStatus: string | null;
+  latestAdvisoryLevel?: "pass" | "warn" | "high_risk" | null;
   latestPassRate: number | null;
   latestMode: string | null;
   latestModel: string | null;
@@ -452,6 +466,12 @@ type TriggerEvalResultItemRaw = {
   triggered_skill_name?: string | null;
   pass: boolean;
   error?: string;
+  raw_response_path?: string | null;
+  latency_ms?: number | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  judge_trace_id?: string | null;
+  error_type?: string | null;
 };
 
 type TriggerEvalSummaryRaw = {
@@ -476,6 +496,12 @@ export type TriggerEvalResultItem = {
   triggeredSkillName: string | null;
   pass: boolean;
   error?: string;
+  rawResponsePath?: string | null;
+  latencyMs?: number | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  judgeTraceId?: string | null;
+  errorType?: string | null;
 };
 
 export type TriggerEvalSummary = {
@@ -504,6 +530,12 @@ type FunctionalEvalResultItemRaw = {
   judge_rationale?: string;
   judge_suggestions?: string[];
   judge_source?: string;
+  raw_response_path?: string | null;
+  latency_ms?: number | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  judge_trace_id?: string | null;
+  error_type?: string | null;
 };
 
 type FunctionalEvalSummaryRaw = {
@@ -533,6 +565,12 @@ export type FunctionalEvalResultItem = {
   judgeRationale?: string;
   judgeSuggestions?: string[];
   judgeSource?: string;
+  rawResponsePath?: string | null;
+  latencyMs?: number | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  judgeTraceId?: string | null;
+  errorType?: string | null;
 };
 
 export type FunctionalEvalSummary = {
@@ -682,6 +720,19 @@ export type EvalRepeatStats = {
   valueAdded?: EvalRateStats;
 };
 
+export type EvalAdvisory = {
+  level: "pass" | "warn" | "high_risk";
+  reasons: string[];
+  nonBlocking: boolean;
+};
+
+export type EvalEvidenceSummary = {
+  totalRuns: number;
+  capturedTranscripts: number;
+  capturedTiming: number;
+  capturedTokens: number;
+};
+
 export type EvalPipelineOutput = {
   status: string;
   mode: EvalPipelineMode | string;
@@ -696,6 +747,12 @@ export type EvalPipelineOutput = {
   deltaVsNoSkill?: EvalDeltaVsNoSkill;
   repeatStats: EvalRepeatStats;
   runMeta: EvalRunMeta;
+  evidenceLevel?: "simulated" | "real";
+  advisory?: EvalAdvisory;
+  evidenceSummary?: EvalEvidenceSummary;
+  taxonomyStatus?: "applied" | "skipped" | "failed";
+  taxonomyMessage?: string;
+  taxonomyApplied?: boolean;
   historyPath?: string;
   message?: string;
 };
@@ -714,6 +771,12 @@ type EvalPipelineOutputRaw = {
   deltaVsNoSkill?: EvalDeltaVsNoSkill;
   repeatStats: EvalRepeatStats;
   runMeta: EvalRunMeta;
+  evidenceLevel?: "simulated" | "real";
+  advisory?: EvalAdvisory;
+  evidenceSummary?: EvalEvidenceSummary;
+  taxonomyStatus?: "applied" | "skipped" | "failed";
+  taxonomyMessage?: string;
+  taxonomyApplied?: boolean;
   historyPath?: string;
   message?: string;
 };
@@ -756,6 +819,12 @@ function mapTriggerOutput(raw: TriggerEvalOutputRaw): TriggerEvalOutput {
       triggeredSkillName: item.triggered_skill_name ?? null,
       pass: item.pass,
       error: item.error,
+      rawResponsePath: item.raw_response_path ?? null,
+      latencyMs: item.latency_ms ?? null,
+      inputTokens: item.input_tokens ?? null,
+      outputTokens: item.output_tokens ?? null,
+      judgeTraceId: item.judge_trace_id ?? null,
+      errorType: item.error_type ?? null,
     })),
   };
 }
@@ -785,6 +854,12 @@ function mapFunctionalOutput(raw: FunctionalEvalOutputRaw): FunctionalEvalOutput
       judgeRationale: item.judge_rationale,
       judgeSuggestions: item.judge_suggestions,
       judgeSource: item.judge_source,
+      rawResponsePath: item.raw_response_path ?? null,
+      latencyMs: item.latency_ms ?? null,
+      inputTokens: item.input_tokens ?? null,
+      outputTokens: item.output_tokens ?? null,
+      judgeTraceId: item.judge_trace_id ?? null,
+      errorType: item.error_type ?? null,
     })),
   };
 }
@@ -1193,6 +1268,7 @@ export async function evalLoadHistory(path: string): Promise<EvalPipelineOutput>
   );
   return {
     ...raw,
+    evidenceLevel: raw.evidenceLevel ?? "simulated",
     triggerClean: mapTriggerOutput(raw.triggerClean),
     triggerComplex: raw.triggerComplex ? mapTriggerOutput(raw.triggerComplex) : undefined,
     functional: mapFunctionalOutput(raw.functional),
@@ -1269,6 +1345,7 @@ export async function runEvalPipeline(request: EvalPipelineRequest): Promise<Eva
   );
   return {
     ...raw,
+    evidenceLevel: raw.evidenceLevel ?? "simulated",
     triggerClean: mapTriggerOutput(raw.triggerClean),
     triggerComplex: raw.triggerComplex ? mapTriggerOutput(raw.triggerComplex) : undefined,
     functional: mapFunctionalOutput(raw.functional),

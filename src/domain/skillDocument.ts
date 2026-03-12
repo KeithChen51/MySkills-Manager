@@ -10,6 +10,7 @@ export type EditableSkillFrontmatter = {
   description: string;
   category: string;
   tags: string[];
+  skillar_taxonomy?: Record<string, unknown> | null;
   my_notes: string;
   last_updated: string;
   extra: Record<string, unknown>;
@@ -25,6 +26,7 @@ const KNOWN_KEYS = new Set([
   "description",
   "category",
   "tags",
+  "skillar_taxonomy",
   "my_notes",
   "last_updated",
 ]);
@@ -40,6 +42,13 @@ function asTags(value: unknown): string[] {
   return value
     .map((item) => String(item).trim())
     .filter((item) => item.length > 0);
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return { ...(value as Record<string, unknown>) };
 }
 
 export function toEditableDocument(raw: SkillDocument): EditableSkillDocument {
@@ -58,6 +67,7 @@ export function toEditableDocument(raw: SkillDocument): EditableSkillDocument {
       description: asString(frontmatter.description),
       category: asString(frontmatter.category),
       tags: asTags(frontmatter.tags),
+      skillar_taxonomy: asObject(frontmatter.skillar_taxonomy),
       my_notes: asString(frontmatter.my_notes),
       last_updated: asString(frontmatter.last_updated),
       extra,
@@ -74,6 +84,7 @@ export function fromEditableDocument(doc: EditableSkillDocument): string {
   if (meta.description) frontmatter.description = meta.description;
   if (meta.category) frontmatter.category = meta.category;
   if (meta.tags.length > 0) frontmatter.tags = meta.tags;
+  if (meta.skillar_taxonomy) frontmatter.skillar_taxonomy = meta.skillar_taxonomy;
   if (meta.my_notes) frontmatter.my_notes = meta.my_notes;
   if (meta.last_updated) frontmatter.last_updated = meta.last_updated;
 

@@ -78,6 +78,20 @@ function skillDocPath(skill: SkillMeta | undefined): string | undefined {
   return `${skill.directory.replace(/[\\/]+$/, "")}/SKILL.md`;
 }
 
+function compactPath(path: string | null | undefined): string {
+  if (!path) return "--";
+  const normalized = path.replace(/\\/g, "/");
+  const parts = normalized.split("/");
+  return parts[parts.length - 1] || path;
+}
+
+function formatTokenPair(inputTokens: number | null | undefined, outputTokens: number | null | undefined): string {
+  if (typeof inputTokens !== "number" && typeof outputTokens !== "number") {
+    return "--";
+  }
+  return `${inputTokens ?? 0}/${outputTokens ?? 0}`;
+}
+
 function parseTriggerDraftRows(raw: string): TriggerDraftRow[] {
   const parsed = JSON.parse(raw) as unknown;
   if (!Array.isArray(parsed)) {
@@ -720,6 +734,69 @@ export default function EvalPage({ skills }: Props) {
     );
   }
 
+  function renderEvidenceOverview() {
+    if (!report) return null;
+    const advisory = report.advisory;
+    const level = advisory?.level ?? "warn";
+    const evidenceSummary = report.evidenceSummary;
+    const samplePath =
+      report.triggerClean.results?.find((item) => item.rawResponsePath)?.rawResponsePath ??
+      report.functional.results?.find((item) => item.rawResponsePath)?.rawResponsePath ??
+      null;
+
+    const advisoryClass =
+      level === "high_risk"
+        ? "eval-advisory-high-risk"
+        : level === "warn"
+          ? "eval-advisory-warn"
+          : "eval-advisory-pass";
+
+    return (
+      <article className="chart-card eval-advisory-card">
+        <div className="eval-advisory-head">
+          <h3 className="chart-title">{t("eval.advisory.title")}</h3>
+          <span className={`eval-advisory-pill ${advisoryClass}`}>
+            {level === "high_risk"
+              ? t("eval.advisory.level.highRisk")
+              : level === "warn"
+                ? t("eval.advisory.level.warn")
+                : t("eval.advisory.level.pass")}
+          </span>
+        </div>
+        <p className="eval-advisory-note">{t("eval.notice.nonBlocking")}</p>
+        <div className="eval-advisory-grid">
+          <div>
+            <span className="eval-history-item-label">{t("eval.advisory.evidenceLevel")}</span>
+            <strong>
+              {report.evidenceLevel === "real"
+                ? t("eval.advisory.evidenceLevel.real")
+                : t("eval.advisory.evidenceLevel.simulated")}
+            </strong>
+          </div>
+          <div>
+            <span className="eval-history-item-label">{t("eval.advisory.totalRuns")}</span>
+            <strong>{evidenceSummary?.totalRuns ?? 0}</strong>
+          </div>
+          <div>
+            <span className="eval-history-item-label">{t("eval.advisory.captured")}</span>
+            <strong>
+              {`${evidenceSummary?.capturedTranscripts ?? 0}/${evidenceSummary?.capturedTiming ?? 0}/${evidenceSummary?.capturedTokens ?? 0}`}
+            </strong>
+          </div>
+          <div>
+            <span className="eval-history-item-label">{t("eval.advisory.samplePath")}</span>
+            <strong title={samplePath ?? undefined}>{samplePath ? compactPath(samplePath) : "--"}</strong>
+          </div>
+        </div>
+        <ul className="eval-advisory-reasons">
+          {(advisory?.reasons ?? [t("eval.advisory.reason.missing")]).map((reason, index) => (
+            <li key={`advisory-reason-${index}`}>{reason}</li>
+          ))}
+        </ul>
+      </article>
+    );
+  }
+
   function renderTriggerChart(triggerReport: EvalPipelineOutput["triggerClean"] | undefined, title: string) {
     const results = triggerReport?.results;
     if (!results || results.length === 0) return null;
@@ -766,6 +843,7 @@ export default function EvalPage({ skills }: Props) {
                 <th>{t("eval.table.expected")}</th>
                 <th>{t("eval.table.actual")}</th>
                 <th>{t("eval.table.capturedBy")}</th>
+                <th>{t("eval.table.evidence")}</th>
                 <th>{t("eval.table.result")}</th>
               </tr>
             </thead>
@@ -776,6 +854,15 @@ export default function EvalPage({ skills }: Props) {
                   <td>{item.shouldTrigger ? "Yes" : "No"}</td>
                   <td>{item.triggered ? "Yes" : "No"}</td>
                   <td>{item.triggeredSkillName ?? "-"}</td>
+                  <td className="eval-evidence-cell">
+                    <span>
+                      {(typeof item.latencyMs === "number" ? `${item.latencyMs}ms` : "--")} /{" "}
+                      {formatTokenPair(item.inputTokens, item.outputTokens)} tok
+                    </span>
+                    <small title={item.rawResponsePath ?? undefined}>
+                      {item.rawResponsePath ? compactPath(item.rawResponsePath) : "--"}
+                    </small>
+                  </td>
                   <td>
                     <span className={`eval-badge ${item.pass ? "eval-badge-pass" : "eval-badge-fail"}`}>
                       {item.pass ? "PASS" : "FAIL"}
@@ -833,6 +920,7 @@ export default function EvalPage({ skills }: Props) {
                 <th>{t("eval.table.qualityScore")}</th>
                 <th>{t("eval.table.judgeRationale")}</th>
                 <th>{t("eval.table.judgeSuggestions")}</th>
+                <th>{t("eval.table.evidence")}</th>
                 <th>{t("eval.table.result")}</th>
               </tr>
             </thead>
@@ -847,6 +935,15 @@ export default function EvalPage({ skills }: Props) {
                     {item.judgeSuggestions && item.judgeSuggestions.length > 0
                       ? item.judgeSuggestions.join("; ")
                       : "-"}
+                  </td>
+                  <td className="eval-evidence-cell">
+                    <span>
+                      {(typeof item.latencyMs === "number" ? `${item.latencyMs}ms` : "--")} /{" "}
+                      {formatTokenPair(item.inputTokens, item.outputTokens)} tok
+                    </span>
+                    <small title={item.rawResponsePath ?? undefined}>
+                      {item.rawResponsePath ? compactPath(item.rawResponsePath) : "--"}
+                    </small>
                   </td>
                   <td>
                     <span className={`eval-badge ${item.passed ? "eval-badge-pass" : "eval-badge-fail"}`}>
@@ -885,6 +982,7 @@ export default function EvalPage({ skills }: Props) {
 
       <article className="chart-card eval-config-card">
         <h3 className="chart-title">{t("eval.config.title")}</h3>
+        <p className="eval-advisory-note">{t("eval.notice.nonBlocking")}</p>
         <div className="eval-config-grid">
           <div className="field">
             <label className="field-label">{t("eval.config.skill")}</label>
@@ -1455,6 +1553,26 @@ export default function EvalPage({ skills }: Props) {
                                   <strong>${detail.costEstimate.estimatedUsd.toFixed(4)}</strong>
                                 </div>
                                 <div>
+                                  <span className="eval-history-item-label">{t("eval.advisory.level.label")}</span>
+                                  <strong>
+                                    {detail.advisory?.level === "high_risk"
+                                      ? t("eval.advisory.level.highRisk")
+                                      : detail.advisory?.level === "warn"
+                                        ? t("eval.advisory.level.warn")
+                                        : detail.advisory?.level === "pass"
+                                          ? t("eval.advisory.level.pass")
+                                          : "--"}
+                                  </strong>
+                                </div>
+                                <div>
+                                  <span className="eval-history-item-label">{t("eval.advisory.evidenceLevel")}</span>
+                                  <strong>
+                                    {detail.evidenceLevel === "real"
+                                      ? t("eval.advisory.evidenceLevel.real")
+                                      : t("eval.advisory.evidenceLevel.simulated")}
+                                  </strong>
+                                </div>
+                                <div>
                                   <span className="eval-history-item-label">{t("eval.kpi.repeatStats")}</span>
                                   <strong>
                                     {Math.round(detail.repeatStats.overallPassRate.mean * 100)}% +/-{" "}
@@ -1477,6 +1595,7 @@ export default function EvalPage({ skills }: Props) {
 
       {report && (
         <>
+          {renderEvidenceOverview()}
           {renderSummaryKpis()}
           {renderModeKpis()}
           <div className="chart-row">

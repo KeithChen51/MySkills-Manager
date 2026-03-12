@@ -93,3 +93,34 @@ test("compareSkillNamesByMode sorts by eval pass rate desc and unevaluated last"
   );
   assert.deepEqual(names, ["gamma", "beta", "alpha"]);
 });
+
+test("compareSkillNamesByMode prioritizes high-risk advisory before pass rate when sorting eval", () => {
+  const insightBySkill = new Map([
+    [
+      "alpha",
+      {
+        usage: sampleUsage,
+        eval: { latestPassRate: 0.9, latestStatus: "success", latestAdvisoryLevel: "pass" },
+      },
+    ],
+    [
+      "beta",
+      {
+        usage: sampleUsage,
+        eval: { latestPassRate: 0.6, latestStatus: "failed", latestAdvisoryLevel: "high_risk" },
+      },
+    ],
+    [
+      "gamma",
+      {
+        usage: sampleUsage,
+        eval: { latestPassRate: 0.8, latestStatus: "success", latestAdvisoryLevel: "warn" },
+      },
+    ],
+  ]);
+
+  const names = ["alpha", "beta", "gamma"].sort((a, b) =>
+    compareSkillNamesByMode(a, b, insightBySkill, "eval", 30),
+  );
+  assert.deepEqual(names, ["beta", "gamma", "alpha"]);
+});

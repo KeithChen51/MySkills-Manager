@@ -54,3 +54,57 @@ test("Skills page insight detail fetches logs and eval history with limit 10", (
     "SkillsPage detail panel should load recent eval history with limit 10",
   );
 });
+
+test("Skills page defaults to SoK taxonomy standard and exposes standard switch", () => {
+  const source = readSource("src/pages/SkillsPage.tsx");
+
+  assert.ok(
+    source.includes(
+      "useState<\"sok\" | \"anthropic\" | \"skillsbench-domain\" | \"skillsbench-difficulty\">(\"sok\")",
+    ),
+    "SkillsPage should default taxonomy standard to SoK",
+  );
+  assert.ok(
+    source.includes("skills.taxonomy.standard.label"),
+    "SkillsPage should render taxonomy standard selector label",
+  );
+});
+
+test("Skills page groups skills by taxonomy and keeps unclassified bucket", () => {
+  const source = readSource("src/pages/SkillsPage.tsx");
+
+  assert.ok(
+    source.includes("skills.taxonomy.unclassified"),
+    "SkillsPage should provide an unclassified bucket for missing taxonomy",
+  );
+  assert.ok(
+    source.includes("groupedVisibleSkills"),
+    "SkillsPage should build grouped skills collection for section rendering",
+  );
+});
+
+test("Skills page supports SkillsBench difficulty display mode switch", () => {
+  const source = readSource("src/pages/SkillsPage.tsx");
+
+  assert.ok(
+    source.includes("useState<\"level\" | \"core\">(\"level\")"),
+    "SkillsPage should default SkillsBench difficulty display to level view",
+  );
+  assert.ok(
+    source.includes("skills.taxonomy.difficulty.mode.label"),
+    "SkillsPage should render difficulty mode selector",
+  );
+});
+
+test("Skills page groups controls into structured action rows", () => {
+  const source = readSource("src/pages/SkillsPage.tsx");
+
+  assert.ok(
+    source.includes("skills-actions-row skills-actions-row-primary"),
+    "SkillsPage should keep primary actions in a dedicated row",
+  );
+  assert.ok(
+    source.includes("skills-actions-row skills-actions-row-secondary"),
+    "SkillsPage should keep classification/sort controls grouped in a secondary row",
+  );
+});

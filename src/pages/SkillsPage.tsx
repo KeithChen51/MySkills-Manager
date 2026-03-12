@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   evalListHistory,
@@ -29,17 +29,25 @@ type Props = {
   onRefresh: () => void;
 };
 
+type GroupedSkills = {
+  key: string;
+  label: string;
+  skills: SkillMeta[];
+};
+
 export default function SkillsPage({ skills, onRefresh }: Props) {
   const { t, locale } = useI18n();
   const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("all");
+  const [taxonomyStandard, setTaxonomyStandard] = useState<"sok" | "anthropic" | "skillsbench-domain" | "skillsbench-difficulty">("sok");
+  const [taxonomyGroup, setTaxonomyGroup] = useState("all");
+  const [difficultyDisplayMode, setDifficultyDisplayMode] = useState<"level" | "core">("level");
   const [editing, setEditing] = useState<SkillMeta | null>(null);
   const [deletingSkillName, setDeletingSkillName] = useState<string | null>(null);
   const [actionStatus, setActionStatus] = useState("");
   const [insights, setInsights] = useState<SkillInsight[]>([]);
   const [insightsLoading, setInsightsLoading] = useState(false);
   const [insightWindow, setInsightWindow] = useState<7 | 30 | 90>(30);
-  const [sortMode, setSortMode] = useState<"name" | "usage" | "eval">("name");
+  const [sortMode, setSortMode] = useState<"name" | "usage" | "eval">("eval");
   const [detailSkillName, setDetailSkillName] = useState<string | null>(null);
   const [detailLogs, setDetailLogs] = useState<LogEntry[]>([]);
   const [detailEvalHistory, setDetailEvalHistory] = useState<EvalHistoryEntry[]>([]);
@@ -48,47 +56,119 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
 
   const controller = useSkillsPageController({ onRefresh, t });
 
-  const categories = useMemo(() => {
-    const out = new Set<string>();
-    for (const s of skills) {
-      if (s.category) out.add(s.category);
-    }
-    return ["all", ...Array.from(out).sort()];
-  }, [skills]);
+  const unclassifiedLabel = t("skills.taxonomy.unclassified");
 
-  const visible = useMemo(() => {
+  const resolveGroupLabel = useCallback((skill: SkillMeta): string => {
+    const taxonomy = skill.taxonomy;
+    if (!taxonomy) return unclassifiedLabel;
+    const normalizedSoKGroup = taxonomy.sokGroup?.trim()
+      ? taxonomy.sokGroup.trim()
+      : [taxonomy.sokRepresentation, taxonomy.sokScope].filter(Boolean).join(" × ").trim();
+    switch (taxonomyStandard) {
+      case "sok":
+        return normalizedSoKGroup || unclassifiedLabel;
+      case "anthropic":
+        return taxonomy.anthropicCategory?.trim() || unclassifiedLabel;
+      case "skillsbench-domain":
+        return taxonomy.skillsbenchDomain?.trim() || unclassifiedLabel;
+      case "skillsbench-difficulty":
+        return difficultyDisplayMode === "core"
+          ? taxonomy.skillsbenchDifficultyCore?.trim() || unclassifiedLabel
+          : taxonomy.skillsbenchDifficultyLevel?.trim() || unclassifiedLabel;
+      default:
+        return unclassifiedLabel;
+    }
+  }, [difficultyDisplayMode, taxonomyStandard, unclassifiedLabel]);
+
+  const searchMatched = useMemo(() => {
     const q = search.trim().toLowerCase();
     return skills.filter((s) => {
-      if (category !== "all" && (s.category ?? "") !== category) return false;
       if (!q) return true;
       const tags = (s.tags ?? []).join(" ").toLowerCase();
       const notes = (s.my_notes ?? "").toLowerCase();
+      const taxonomy = s.taxonomy
+        ? [
+          s.taxonomy.sokRepresentation,
+          s.taxonomy.sokScope,
+          s.taxonomy.sokGroup,
+          s.taxonomy.anthropicCategory,
+          s.taxonomy.skillsbenchDomain,
+          s.taxonomy.skillsbenchDifficultyCore,
+          s.taxonomy.skillsbenchDifficultyLevel,
+        ]
+          .join(" ")
+          .toLowerCase()
+        : "";
       return (
         s.name.toLowerCase().includes(q) ||
         (s.description ?? "").toLowerCase().includes(q) ||
         tags.includes(q) ||
-        notes.includes(q)
+        notes.includes(q) ||
+        taxonomy.includes(q)
       );
     });
-  }, [category, search, skills]);
+  }, [search, skills]);
 
   const insightBySkill = useMemo(() => {
     return new Map(insights.map((item) => [item.skillName, item]));
   }, [insights]);
 
-  const visibleSorted = useMemo(() => {
-    const copied = [...visible];
-    copied.sort((a, b) =>
-      compareSkillNamesByMode(
-        a.name,
-        b.name,
-        insightBySkill,
-        sortMode,
-        insightWindow,
-      ),
-    );
-    return copied;
-  }, [insightBySkill, insightWindow, sortMode, visible]);
+  const groupedVisibleSkills = useMemo(() => {
+    const bucket = new Map<string, SkillMeta[]>();
+    for (const skill of searchMatched) {
+      const key = resolveGroupLabel(skill);
+      if (!bucket.has(key)) {
+        bucket.set(key, []);
+      }
+      bucket.get(key)?.push(skill);
+    }
+    const groups = Array.from(bucket.entries())
+      .map(([key, groupSkills]): GroupedSkills => ({
+        key,
+        label: key,
+        skills: [...groupSkills].sort((a, b) =>
+          compareSkillNamesByMode(
+            a.name,
+            b.name,
+            insightBySkill,
+            sortMode,
+            insightWindow,
+          ),
+        ),
+      }))
+      .sort((a, b) => {
+        if (a.label === unclassifiedLabel) return 1;
+        if (b.label === unclassifiedLabel) return -1;
+        return a.label.localeCompare(b.label);
+      });
+    return groups;
+  }, [
+    insightBySkill,
+    insightWindow,
+    searchMatched,
+    sortMode,
+    unclassifiedLabel,
+    resolveGroupLabel,
+  ]);
+
+  const availableGroups = useMemo(() => {
+    return ["all", ...groupedVisibleSkills.map((group) => group.key)];
+  }, [groupedVisibleSkills]);
+
+  const filteredGroups = useMemo(() => {
+    if (taxonomyGroup === "all") return groupedVisibleSkills;
+    return groupedVisibleSkills.filter((group) => group.key === taxonomyGroup);
+  }, [groupedVisibleSkills, taxonomyGroup]);
+
+  const visibleCount = useMemo(() => {
+    return filteredGroups.reduce((total, group) => total + group.skills.length, 0);
+  }, [filteredGroups]);
+
+  useEffect(() => {
+    if (!availableGroups.includes(taxonomyGroup)) {
+      setTaxonomyGroup("all");
+    }
+  }, [availableGroups, taxonomyGroup]);
 
   useEffect(() => {
     let mounted = true;
@@ -185,64 +265,109 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
           <p className="skills-installed">
             {insightsLoading ? t("skills.insights.loading") : t("skills.insights.ready", { count: insights.length })}
           </p>
+          <p className="skills-installed">{t("skills.eval.nonBlockingHint")}</p>
           {actionStatus ? <p className="skills-action-status">{actionStatus}</p> : null}
         </div>
         <div className="skills-header-actions">
-          <div className="skills-insight-window-switch" role="tablist" aria-label={t("skills.insights.window.label")}>
-            {[7, 30, 90].map((window) => (
-              <button
-                key={`insight-window-${window}`}
-                type="button"
-                className={`btn btn-ghost skills-insight-window-btn ${insightWindow === window ? "active" : ""}`}
-                onClick={() => setInsightWindow(window as SkillInsightWindow)}
+          <div className="skills-actions-row skills-actions-row-primary">
+            <div className="skills-insight-window-switch" role="tablist" aria-label={t("skills.insights.window.label")}>
+              {[7, 30, 90].map((window) => (
+                <button
+                  key={`insight-window-${window}`}
+                  type="button"
+                  className={`btn btn-ghost skills-insight-window-btn ${insightWindow === window ? "active" : ""}`}
+                  onClick={() => setInsightWindow(window as SkillInsightWindow)}
+                >
+                  {t("skills.insights.window.option", { days: window })}
+                </button>
+              ))}
+            </div>
+            <button
+              className="btn btn-primary skills-overview-btn"
+              onClick={() => void controller.handleLocalOverview()}
+              disabled={controller.overviewBusy}
+            >
+              {controller.overviewBusy
+                ? t("skills.overview.scan.button.busy")
+                : t("skills.overview.scan.button")}
+            </button>
+            <button className="btn btn-ghost skills-refresh-btn" onClick={onRefresh}>
+              <IconRefresh size={14} />
+              {t("skills.refresh")}
+            </button>
+            <div className="search-box skills-search-box">
+              <IconSearch size={16} />
+              <input
+                className="search-input"
+                placeholder={t("skills.search")}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="skills-actions-row skills-actions-row-secondary">
+            <section className="skills-filter-cluster" aria-label={t("skills.taxonomy.standard.label")}>
+              <p className="skills-filter-cluster-title">{t("skills.taxonomy.standard.label")}</p>
+              <div className="skills-filter-cluster-controls">
+                <select
+                  className="filter-select skills-filter-select"
+                  aria-label={t("skills.taxonomy.standard.label")}
+                  value={taxonomyStandard}
+                  onChange={(e) => {
+                    const next = e.target.value as "sok" | "anthropic" | "skillsbench-domain" | "skillsbench-difficulty";
+                    setTaxonomyStandard(next);
+                    setTaxonomyGroup("all");
+                  }}
+                >
+                  <option value="sok">{t("skills.taxonomy.standard.sok")}</option>
+                  <option value="anthropic">{t("skills.taxonomy.standard.anthropic")}</option>
+                  <option value="skillsbench-domain">{t("skills.taxonomy.standard.skillsbenchDomain")}</option>
+                  <option value="skillsbench-difficulty">{t("skills.taxonomy.standard.skillsbenchDifficulty")}</option>
+                </select>
+                {taxonomyStandard === "skillsbench-difficulty" ? (
+                  <select
+                    className="filter-select skills-filter-select"
+                    aria-label={t("skills.taxonomy.difficulty.mode.label")}
+                    value={difficultyDisplayMode}
+                    onChange={(e) => {
+                      setDifficultyDisplayMode(e.target.value as "level" | "core");
+                      setTaxonomyGroup("all");
+                    }}
+                  >
+                    <option value="level">{t("skills.taxonomy.difficulty.mode.level")}</option>
+                    <option value="core">{t("skills.taxonomy.difficulty.mode.core")}</option>
+                  </select>
+                ) : null}
+                <select
+                  className="filter-select skills-filter-select"
+                  aria-label={t("skills.taxonomy.group.label")}
+                  value={taxonomyGroup}
+                  onChange={(e) => setTaxonomyGroup(e.target.value)}
+                >
+                  {availableGroups.map((group) => (
+                    <option key={group} value={group}>
+                      {group === "all" ? t("skills.taxonomy.group.all") : group}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </section>
+
+            <section className="skills-filter-cluster skills-filter-cluster-sort" aria-label={t("skills.sort.label")}>
+              <p className="skills-filter-cluster-title">{t("skills.sort.label")}</p>
+              <select
+                className="filter-select skills-filter-select skills-sort-select"
+                aria-label={t("skills.sort.label")}
+                value={sortMode}
+                onChange={(e) => setSortMode(e.target.value as "name" | "usage" | "eval")}
               >
-                {t("skills.insights.window.option", { days: window })}
-              </button>
-            ))}
+                <option value="name">{t("skills.sort.name")}</option>
+                <option value="usage">{t("skills.sort.usage")}</option>
+                <option value="eval">{t("skills.sort.eval")}</option>
+              </select>
+            </section>
           </div>
-          <button
-            className="btn btn-primary skills-overview-btn"
-            onClick={() => void controller.handleLocalOverview()}
-            disabled={controller.overviewBusy}
-          >
-            {controller.overviewBusy
-              ? t("skills.overview.scan.button.busy")
-              : t("skills.overview.scan.button")}
-          </button>
-          <button className="btn btn-ghost skills-refresh-btn" onClick={onRefresh}>
-            <IconRefresh size={14} />
-            {t("skills.refresh")}
-          </button>
-          <div className="search-box skills-search-box">
-            <IconSearch size={16} />
-            <input
-              className="search-input"
-              placeholder={t("skills.search")}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-          <select
-            className="filter-select skills-filter-select"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-          >
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {c === "all" ? t("skills.category.all") : c}
-              </option>
-            ))}
-          </select>
-          <select
-            className="filter-select skills-filter-select"
-            aria-label={t("skills.sort.label")}
-            value={sortMode}
-            onChange={(e) => setSortMode(e.target.value as "name" | "usage" | "eval")}
-          >
-            <option value="name">{t("skills.sort.name")}</option>
-            <option value="usage">{t("skills.sort.usage")}</option>
-            <option value="eval">{t("skills.sort.eval")}</option>
-          </select>
         </div>
       </header>
 
@@ -257,24 +382,34 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
         onOpenConflictResolver={(skillName) => void controller.handleOpenConflictResolver(skillName)}
       />
 
-      {visible.length === 0 ? (
+      {visibleCount === 0 ? (
         <p className="empty-state">{t("skills.empty")}</p>
       ) : (
-        <div className="skills-grid">
-          {visibleSorted.map((skill) => (
-            <SkillCard
-              key={skill.name}
-              name={skill.name}
-              description={skill.description}
-              category={skill.category}
-              tags={skill.tags}
-              insightWindow={insightWindow}
-              insight={insightBySkill.get(skill.name) ?? null}
-              onEdit={() => setEditing(skill)}
-              onViewInsights={() => void handleOpenInsightDetail(skill.name)}
-              onDelete={() => void handleDeleteSkill(skill)}
-              deleteBusy={deletingSkillName === skill.name}
-            />
+        <div className="skills-group-list">
+          {filteredGroups.map((group) => (
+            <section key={group.key} className="skills-group-section">
+              <header className="skills-group-header">
+                <h2 className="skills-group-title">{group.label}</h2>
+                <span className="skills-group-count">{group.skills.length}</span>
+              </header>
+              <div className="skills-grid">
+                {group.skills.map((skill) => (
+                  <SkillCard
+                    key={skill.name}
+                    name={skill.name}
+                    description={skill.description}
+                    category={skill.category}
+                    tags={skill.tags}
+                    insightWindow={insightWindow}
+                    insight={insightBySkill.get(skill.name) ?? null}
+                    onEdit={() => setEditing(skill)}
+                    onViewInsights={() => void handleOpenInsightDetail(skill.name)}
+                    onDelete={() => void handleDeleteSkill(skill)}
+                    deleteBusy={deletingSkillName === skill.name}
+                  />
+                ))}
+              </div>
+            </section>
           ))}
         </div>
       )}

@@ -60,6 +60,10 @@ test("fromEditableDocument keeps multiline and special frontmatter values", () =
       tags: ["a:b", "x#y"],
       my_notes: "quote: \"hello\"",
       last_updated: "2026-02-27",
+      skillar_taxonomy: {
+        sokRepresentation: "Natural-language",
+        sokScope: "Single-tool",
+      },
       extra: {
         nested: { env: "prod", enabled: true },
       },
@@ -72,4 +76,31 @@ test("fromEditableDocument keeps multiline and special frontmatter values", () =
   assert.match(markdown, /line 2/);
   assert.match(markdown, /nested:/);
   assert.match(markdown, /enabled: true/);
+  assert.match(markdown, /skillar_taxonomy:/);
+  assert.match(markdown, /sokRepresentation:/);
+});
+
+test("toEditableDocument preserves skillar_taxonomy outside extra fields", () => {
+  const raw: SkillDocument = {
+    frontmatter: {
+      name: "tax-skill",
+      description: "taxonomy-enabled",
+      tags: ["alpha"],
+      skillar_taxonomy: {
+        sokRepresentation: "Tool macros",
+        sokScope: "Multi-tool",
+      },
+    },
+    body: "# Body\n",
+  };
+
+  const normalized = toEditableDocument(raw);
+  assert.deepEqual(normalized.frontmatter.skillar_taxonomy, {
+    sokRepresentation: "Tool macros",
+    sokScope: "Multi-tool",
+  });
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(normalized.frontmatter.extra, "skillar_taxonomy"),
+    false,
+  );
 });

@@ -6,7 +6,7 @@ export type SkillSortMode = "name" | "usage" | "eval";
 
 type SkillInsightLite = {
   usage?: Pick<SkillUsageInsight, "d7" | "d30" | "d90">;
-  eval?: Pick<SkillEvalInsight, "latestPassRate" | "latestStatus">;
+  eval?: Pick<SkillEvalInsight, "latestPassRate" | "latestStatus" | "latestAdvisoryLevel">;
 };
 
 export function usageCountForWindow(
@@ -50,6 +50,13 @@ function evalStatusRank(status: string | null | undefined): number {
   return 0;
 }
 
+function advisoryRank(level: string | null | undefined): number {
+  if (level === "high_risk") return 3;
+  if (level === "warn") return 2;
+  if (level === "pass") return 1;
+  return 0;
+}
+
 export function compareSkillNamesByMode(
   aName: string,
   bName: string,
@@ -81,6 +88,11 @@ export function compareSkillNamesByMode(
 
   const aPass = aInsight?.eval?.latestPassRate ?? -1;
   const bPass = bInsight?.eval?.latestPassRate ?? -1;
+  const aAdvisoryRank = advisoryRank(aInsight?.eval?.latestAdvisoryLevel);
+  const bAdvisoryRank = advisoryRank(bInsight?.eval?.latestAdvisoryLevel);
+  if (bAdvisoryRank !== aAdvisoryRank) {
+    return bAdvisoryRank - aAdvisoryRank;
+  }
   if (bPass !== aPass) {
     return bPass - aPass;
   }
