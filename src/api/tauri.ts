@@ -40,9 +40,22 @@ export type SkillMeta = {
   description?: string;
   category?: string;
   tags?: string[];
+  taxonomy?: SkillTaxonomy;
   my_notes?: string;
   last_updated?: string;
   directory: string;
+};
+
+export type SkillTaxonomy = {
+  sokRepresentation: string;
+  sokScope: string;
+  sokGroup: string;
+  anthropicCategory: string;
+  skillsbenchDomain: string;
+  skillsbenchDifficultyCore: "Core" | "Extended" | "Extreme";
+  skillsbenchDifficultyLevel: "Easy" | "Medium" | "Hard";
+  classifiedAt: string;
+  classifierModel: string;
 };
 
 export type SkillUsageInsight = {
@@ -672,6 +685,9 @@ export type EvalPipelineOutput = {
   deltaVsNoSkill?: EvalDeltaVsNoSkill;
   repeatStats: EvalRepeatStats;
   runMeta: EvalRunMeta;
+  taxonomyStatus?: "applied" | "skipped" | "failed";
+  taxonomyMessage?: string;
+  taxonomyApplied?: boolean;
   historyPath?: string;
   message?: string;
 };
@@ -690,6 +706,9 @@ type EvalPipelineOutputRaw = {
   deltaVsNoSkill?: EvalDeltaVsNoSkill;
   repeatStats: EvalRepeatStats;
   runMeta: EvalRunMeta;
+  taxonomyStatus?: "applied" | "skipped" | "failed";
+  taxonomyMessage?: string;
+  taxonomyApplied?: boolean;
   historyPath?: string;
   message?: string;
 };

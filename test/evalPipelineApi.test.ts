@@ -103,3 +103,23 @@ test("functional eval mapping keeps Layer2 quality fields for UI explanation", (
     "functional output should expose dimension score summary",
   );
 });
+
+test("tauri API exposes taxonomy metadata on skills and eval pipeline outputs", () => {
+  const source = read("src/api/tauri.ts");
+  assert.ok(
+    source.includes("export type SkillTaxonomy = {"),
+    "tauri API should define SkillTaxonomy contract",
+  );
+  assert.ok(
+    source.includes("taxonomy?: SkillTaxonomy;"),
+    "SkillMeta should expose optional taxonomy metadata",
+  );
+  assert.ok(
+    source.includes("taxonomyStatus?: \"applied\" | \"skipped\" | \"failed\";"),
+    "Eval pipeline output should include taxonomy status",
+  );
+  assert.ok(
+    source.includes("taxonomyMessage?: string;") && source.includes("taxonomyApplied?: boolean;"),
+    "Eval pipeline output should include taxonomy message/applied flags",
+  );
+});

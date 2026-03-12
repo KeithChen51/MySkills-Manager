@@ -1,13 +1,14 @@
 use serde::{Deserialize, Serialize};
+use serde_yaml::{Mapping, Value as YamlValue};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
-use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
@@ -17,6 +18,8 @@ const DEFAULT_MODEL: &str = "gpt-4o-mini";
 const EVAL_TIMEOUT_SECS: u64 = 300;
 const MAX_EVAL_TIMEOUT_SECS: u64 = 10800;
 const EVAL_TIMEOUT_PER_CASE_SECS: u64 = 12;
+const TAXONOMY_TIMEOUT_SECS: u64 = 180;
+const TAXONOMY_TAG_PREFIX: &str = "taxonomy:";
 const DEFAULT_TRIGGER_CASE_COUNT: usize = 40;
 const DEFAULT_FUNCTIONAL_CASE_COUNT: usize = 20;
 const DEFAULT_PIPELINE_REPEATS: usize = 1;
@@ -261,8 +264,46 @@ pub struct EvalPipelineOutput {
     pub delta_vs_no_skill: Option<EvalDeltaVsNoSkill>,
     pub repeat_stats: EvalRepeatStats,
     pub run_meta: EvalRunMeta,
+    pub taxonomy_status: Option<String>,
+    pub taxonomy_message: Option<String>,
+    pub taxonomy_applied: Option<bool>,
     pub history_path: Option<String>,
     pub message: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SkillTaxonomyClassification {
+    sok_representation: String,
+    sok_scope: String,
+    sok_group: String,
+    anthropic_category: String,
+    skillsbench_domain: String,
+    skillsbench_difficulty_core: String,
+    skillsbench_difficulty_level: String,
+    classified_at: String,
+    classifier_model: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TaxonomyClassifyOutput {
+    status: String,
+    taxonomy: Option<SkillTaxonomyClassification>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct EnsureSkillTaxonomyResult {
+    status: String,
+    message: String,
+    applied: bool,
+    taxonomy: Option<SkillTaxonomyClassification>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum EvalStrategy {
+    Default,
 }
 
 #[derive(Default)]
@@ -571,16 +612,16 @@ fn read_eval_config_with_home(home: &Path) -> Result<EvalConfig, String> {
         return Ok(EvalConfig::default());
     }
 
-    let parsed =
-        serde_json::from_str::<RawEvalConfig>(&raw).map_err(|e| format!("Invalid eval config: {e}"))?;
+    let parsed = serde_json::from_str::<RawEvalConfig>(&raw)
+        .map_err(|e| format!("Invalid eval config: {e}"))?;
     Ok(sanitize_eval_config(parsed))
 }
 
 fn write_eval_config_with_home(home: &Path, config: &EvalConfig) -> Result<(), String> {
     fs::create_dir_all(crate::root_dir::app_config_dir(home))
         .map_err(|e| format!("Create app config dir failed: {e}"))?;
-    let content =
-        serde_json::to_string_pretty(config).map_err(|e| format!("Serialize eval config failed: {e}"))?;
+    let content = serde_json::to_string_pretty(config)
+        .map_err(|e| format!("Serialize eval config failed: {e}"))?;
     fs::write(eval_config_file(home), format!("{content}\n"))
         .map_err(|e| format!("Write eval config failed: {e}"))
 }
@@ -612,6 +653,320 @@ fn eval_tmp_dir(label: &str) -> Result<PathBuf, String> {
     dir.push(format!("myskills-eval-{label}-{ts}-{n}"));
     fs::create_dir_all(&dir).map_err(|e| format!("Create temporary eval dir failed: {e}"))?;
     Ok(dir)
+}
+
+fn split_skill_frontmatter(raw: &str) -> Result<(Mapping, String), String> {
+    let normalized = raw.replace("\r\n", "\n");
+    let normalized = normalized.strip_prefix('\u{feff}').unwrap_or(&normalized);
+    if !normalized.starts_with("---\n") {
+        return Ok((Mapping::new(), normalized.to_string()));
+    }
+    let marker = "\n---\n";
+    let rest = &normalized[4..];
+    let Some(end) = rest.find(marker) else {
+        return Err("Invalid frontmatter block".to_string());
+    };
+    let yaml_str = &rest[..end];
+    let body = rest[end + marker.len()..].to_string();
+    let frontmatter = if yaml_str.trim().is_empty() {
+        Mapping::new()
+    } else {
+        serde_yaml::from_str::<Mapping>(yaml_str)
+            .map_err(|e| format!("Invalid YAML frontmatter: {e}"))?
+    };
+    Ok((frontmatter, body))
+}
+
+fn build_skill_markdown(frontmatter: &Mapping, body: &str) -> Result<String, String> {
+    let yaml =
+        serde_yaml::to_string(frontmatter).map_err(|e| format!("Serialize YAML failed: {e}"))?;
+    Ok(format!(
+        "---\n{}---\n\n{}",
+        yaml,
+        body.trim_start_matches('\n')
+    ))
+}
+
+fn yaml_get_string(map: &Mapping, key: &str) -> Option<String> {
+    map.get(YamlValue::String(key.to_string()))
+        .and_then(|v| v.as_str().map(std::string::ToString::to_string))
+}
+
+fn yaml_get_string_any(map: &Mapping, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(value) = yaml_get_string(map, key) {
+            let trimmed = value.trim().to_string();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
+    }
+    None
+}
+
+fn yaml_get_tags(map: &Mapping) -> Vec<String> {
+    map.get(YamlValue::String("tags".to_string()))
+        .and_then(|value| value.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|item| item.as_str().map(std::string::ToString::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn normalize_difficulty_core(value: &str) -> Option<String> {
+    match value.trim().to_lowercase().as_str() {
+        "core" => Some("Core".to_string()),
+        "extended" => Some("Extended".to_string()),
+        "extreme" => Some("Extreme".to_string()),
+        _ => None,
+    }
+}
+
+fn normalize_difficulty_level(value: &str) -> Option<String> {
+    match value.trim().to_lowercase().as_str() {
+        "easy" => Some("Easy".to_string()),
+        "medium" => Some("Medium".to_string()),
+        "hard" => Some("Hard".to_string()),
+        _ => None,
+    }
+}
+
+fn level_from_core(core: &str) -> Option<String> {
+    match core {
+        "Core" => Some("Easy".to_string()),
+        "Extended" => Some("Medium".to_string()),
+        "Extreme" => Some("Hard".to_string()),
+        _ => None,
+    }
+}
+
+fn core_from_level(level: &str) -> Option<String> {
+    match level {
+        "Easy" => Some("Core".to_string()),
+        "Medium" => Some("Extended".to_string()),
+        "Hard" => Some("Extreme".to_string()),
+        _ => None,
+    }
+}
+
+fn normalize_taxonomy(
+    mut taxonomy: SkillTaxonomyClassification,
+) -> Result<SkillTaxonomyClassification, String> {
+    taxonomy.sok_representation = taxonomy.sok_representation.trim().to_string();
+    taxonomy.sok_scope = taxonomy.sok_scope.trim().to_string();
+    taxonomy.sok_group = taxonomy.sok_group.trim().to_string();
+    taxonomy.anthropic_category = taxonomy.anthropic_category.trim().to_string();
+    taxonomy.skillsbench_domain = taxonomy.skillsbench_domain.trim().to_string();
+    taxonomy.classified_at = taxonomy.classified_at.trim().to_string();
+    taxonomy.classifier_model = taxonomy.classifier_model.trim().to_string();
+
+    if taxonomy.sok_group.is_empty()
+        && !taxonomy.sok_representation.is_empty()
+        && !taxonomy.sok_scope.is_empty()
+    {
+        taxonomy.sok_group = format!("{} × {}", taxonomy.sok_representation, taxonomy.sok_scope);
+    }
+
+    taxonomy.skillsbench_difficulty_core =
+        normalize_difficulty_core(&taxonomy.skillsbench_difficulty_core)
+            .or_else(|| {
+                normalize_difficulty_level(&taxonomy.skillsbench_difficulty_level)
+                    .and_then(|level| core_from_level(&level))
+            })
+            .ok_or_else(|| "Invalid skillsbenchDifficultyCore".to_string())?;
+    taxonomy.skillsbench_difficulty_level =
+        normalize_difficulty_level(&taxonomy.skillsbench_difficulty_level)
+            .or_else(|| level_from_core(&taxonomy.skillsbench_difficulty_core))
+            .ok_or_else(|| "Invalid skillsbenchDifficultyLevel".to_string())?;
+
+    let required = [
+        taxonomy.sok_representation.as_str(),
+        taxonomy.sok_scope.as_str(),
+        taxonomy.sok_group.as_str(),
+        taxonomy.anthropic_category.as_str(),
+        taxonomy.skillsbench_domain.as_str(),
+        taxonomy.classified_at.as_str(),
+        taxonomy.classifier_model.as_str(),
+    ];
+    if required.iter().any(|item| item.trim().is_empty()) {
+        return Err("Taxonomy payload contains empty required fields".to_string());
+    }
+    Ok(taxonomy)
+}
+
+fn taxonomy_from_frontmatter(frontmatter: &Mapping) -> Option<SkillTaxonomyClassification> {
+    let taxonomy_value = frontmatter
+        .get(YamlValue::String("skillar_taxonomy".to_string()))
+        .or_else(|| frontmatter.get(YamlValue::String("skillarTaxonomy".to_string())))?;
+    let taxonomy = taxonomy_value.as_mapping()?;
+    let raw = SkillTaxonomyClassification {
+        sok_representation: yaml_get_string_any(
+            taxonomy,
+            &["sokRepresentation", "sok_representation"],
+        )?,
+        sok_scope: yaml_get_string_any(taxonomy, &["sokScope", "sok_scope"])?,
+        sok_group: yaml_get_string_any(taxonomy, &["sokGroup", "sok_group"]).unwrap_or_default(),
+        anthropic_category: yaml_get_string_any(
+            taxonomy,
+            &["anthropicCategory", "anthropic_category"],
+        )?,
+        skillsbench_domain: yaml_get_string_any(
+            taxonomy,
+            &["skillsbenchDomain", "skillsbench_domain"],
+        )?,
+        skillsbench_difficulty_core: yaml_get_string_any(
+            taxonomy,
+            &["skillsbenchDifficultyCore", "skillsbench_difficulty_core"],
+        )
+        .unwrap_or_default(),
+        skillsbench_difficulty_level: yaml_get_string_any(
+            taxonomy,
+            &["skillsbenchDifficultyLevel", "skillsbench_difficulty_level"],
+        )
+        .unwrap_or_default(),
+        classified_at: yaml_get_string_any(taxonomy, &["classifiedAt", "classified_at"])?,
+        classifier_model: yaml_get_string_any(taxonomy, &["classifierModel", "classifier_model"])?,
+    };
+    normalize_taxonomy(raw).ok()
+}
+
+fn slugify_taxonomy_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut last_dash = false;
+    for ch in value.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+fn taxonomy_tags(taxonomy: &SkillTaxonomyClassification) -> Vec<String> {
+    vec![
+        format!(
+            "{TAXONOMY_TAG_PREFIX}sok-representation:{}",
+            slugify_taxonomy_value(&taxonomy.sok_representation)
+        ),
+        format!(
+            "{TAXONOMY_TAG_PREFIX}sok-scope:{}",
+            slugify_taxonomy_value(&taxonomy.sok_scope)
+        ),
+        format!(
+            "{TAXONOMY_TAG_PREFIX}sok-group:{}",
+            slugify_taxonomy_value(&taxonomy.sok_group)
+        ),
+        format!(
+            "{TAXONOMY_TAG_PREFIX}anthropic-category:{}",
+            slugify_taxonomy_value(&taxonomy.anthropic_category)
+        ),
+        format!(
+            "{TAXONOMY_TAG_PREFIX}skillsbench-domain:{}",
+            slugify_taxonomy_value(&taxonomy.skillsbench_domain)
+        ),
+        format!(
+            "{TAXONOMY_TAG_PREFIX}skillsbench-difficulty-core:{}",
+            slugify_taxonomy_value(&taxonomy.skillsbench_difficulty_core)
+        ),
+        format!(
+            "{TAXONOMY_TAG_PREFIX}skillsbench-difficulty-level:{}",
+            slugify_taxonomy_value(&taxonomy.skillsbench_difficulty_level)
+        ),
+    ]
+}
+
+fn merge_taxonomy_tags(
+    existing_tags: &[String],
+    taxonomy: &SkillTaxonomyClassification,
+) -> Vec<String> {
+    let mut out = Vec::<String>::new();
+    for tag in existing_tags {
+        let trimmed = tag.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.to_lowercase().starts_with(TAXONOMY_TAG_PREFIX) {
+            continue;
+        }
+        if !out.iter().any(|item| item == trimmed) {
+            out.push(trimmed.to_string());
+        }
+    }
+    for tag in taxonomy_tags(taxonomy) {
+        if !out.iter().any(|item| item == &tag) {
+            out.push(tag);
+        }
+    }
+    out
+}
+
+fn build_taxonomy_mapping(taxonomy: &SkillTaxonomyClassification) -> Mapping {
+    let mut mapping = Mapping::new();
+    mapping.insert(
+        YamlValue::String("sokRepresentation".to_string()),
+        YamlValue::String(taxonomy.sok_representation.clone()),
+    );
+    mapping.insert(
+        YamlValue::String("sokScope".to_string()),
+        YamlValue::String(taxonomy.sok_scope.clone()),
+    );
+    mapping.insert(
+        YamlValue::String("sokGroup".to_string()),
+        YamlValue::String(taxonomy.sok_group.clone()),
+    );
+    mapping.insert(
+        YamlValue::String("anthropicCategory".to_string()),
+        YamlValue::String(taxonomy.anthropic_category.clone()),
+    );
+    mapping.insert(
+        YamlValue::String("skillsbenchDomain".to_string()),
+        YamlValue::String(taxonomy.skillsbench_domain.clone()),
+    );
+    mapping.insert(
+        YamlValue::String("skillsbenchDifficultyCore".to_string()),
+        YamlValue::String(taxonomy.skillsbench_difficulty_core.clone()),
+    );
+    mapping.insert(
+        YamlValue::String("skillsbenchDifficultyLevel".to_string()),
+        YamlValue::String(taxonomy.skillsbench_difficulty_level.clone()),
+    );
+    mapping.insert(
+        YamlValue::String("classifiedAt".to_string()),
+        YamlValue::String(taxonomy.classified_at.clone()),
+    );
+    mapping.insert(
+        YamlValue::String("classifierModel".to_string()),
+        YamlValue::String(taxonomy.classifier_model.clone()),
+    );
+    mapping
+}
+
+fn apply_taxonomy_to_frontmatter(
+    frontmatter: &mut Mapping,
+    taxonomy: &SkillTaxonomyClassification,
+) {
+    frontmatter.insert(
+        YamlValue::String("skillar_taxonomy".to_string()),
+        YamlValue::Mapping(build_taxonomy_mapping(taxonomy)),
+    );
+    let merged_tags = merge_taxonomy_tags(&yaml_get_tags(frontmatter), taxonomy);
+    if merged_tags.is_empty() {
+        frontmatter.remove(&YamlValue::String("tags".to_string()));
+    } else {
+        let tags = merged_tags
+            .into_iter()
+            .map(YamlValue::String)
+            .collect::<Vec<_>>();
+        frontmatter.insert(
+            YamlValue::String("tags".to_string()),
+            YamlValue::Sequence(tags),
+        );
+    }
 }
 
 fn python_workdir_candidates() -> Vec<PathBuf> {
@@ -774,6 +1129,160 @@ fn run_eval_engine(
         .map_err(|e| format!("Failed to collect eval_engine output via {runtime_name}: {e}"))
 }
 
+fn run_taxonomy_classify_impl(
+    skill_name: String,
+    skill_path: PathBuf,
+    model: String,
+    control: Option<&Arc<EvalRunControl>>,
+) -> Result<SkillTaxonomyClassification, String> {
+    let home = crate::root_dir::default_home_dir();
+    let config = require_eval_config_with_api_key(&home)?;
+    let output_dir = eval_tmp_dir("taxonomy")?;
+    let output_path = output_dir.join("taxonomy-output.json");
+
+    let mut cmd_args = vec![
+        "classify".to_string(),
+        "--skill-name".to_string(),
+        skill_name,
+        "--skill-path".to_string(),
+        path_to_utf8(&skill_path)?,
+        "--output-path".to_string(),
+        path_to_utf8(&output_path)?,
+        "--api-key".to_string(),
+        config.api_key.clone(),
+        "--model".to_string(),
+        normalize_model(&model),
+        "--provider".to_string(),
+        config.provider.clone(),
+    ];
+
+    if let Some(base_url) = config.base_url.as_ref() {
+        cmd_args.push("--base-url".to_string());
+        cmd_args.push(base_url.clone());
+    }
+
+    let output = run_eval_engine(&cmd_args, control, TAXONOMY_TIMEOUT_SECS)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let _ = fs::remove_dir_all(&output_dir);
+        return Err(format!(
+            "Python taxonomy classify failed: {}",
+            stderr.trim()
+        ));
+    }
+
+    let raw = fs::read_to_string(&output_path)
+        .map_err(|e| format!("Read taxonomy output failed: {e}"))?;
+    let parsed = serde_json::from_str::<TaxonomyClassifyOutput>(&raw)
+        .map_err(|e| format!("Parse taxonomy output failed: {e}"))?;
+    let _ = fs::remove_dir_all(&output_dir);
+    if parsed.status.trim().eq_ignore_ascii_case("success") {
+        let taxonomy = parsed
+            .taxonomy
+            .ok_or_else(|| "Taxonomy result missing `taxonomy` payload".to_string())?;
+        normalize_taxonomy(taxonomy)
+    } else {
+        Err(parsed
+            .message
+            .unwrap_or_else(|| "taxonomy classification returned error status".to_string()))
+    }
+}
+
+fn ensure_skill_taxonomy(
+    skill_name: &str,
+    skill_path: &Path,
+    model: &str,
+    control: Option<&Arc<EvalRunControl>>,
+) -> EnsureSkillTaxonomyResult {
+    let raw = match fs::read_to_string(skill_path) {
+        Ok(value) => value,
+        Err(err) => {
+            return EnsureSkillTaxonomyResult {
+                status: "failed".to_string(),
+                message: format!("Read SKILL.md failed: {err}"),
+                applied: false,
+                taxonomy: None,
+            };
+        }
+    };
+    let (mut frontmatter, body) = match split_skill_frontmatter(&raw) {
+        Ok(value) => value,
+        Err(err) => {
+            return EnsureSkillTaxonomyResult {
+                status: "failed".to_string(),
+                message: err,
+                applied: false,
+                taxonomy: None,
+            };
+        }
+    };
+
+    if let Some(existing) = taxonomy_from_frontmatter(&frontmatter) {
+        return EnsureSkillTaxonomyResult {
+            status: "skipped".to_string(),
+            message: "Taxonomy already present.".to_string(),
+            applied: false,
+            taxonomy: Some(existing),
+        };
+    }
+
+    let classified = match run_taxonomy_classify_impl(
+        skill_name.to_string(),
+        skill_path.to_path_buf(),
+        model.to_string(),
+        control,
+    ) {
+        Ok(value) => value,
+        Err(err) => {
+            return EnsureSkillTaxonomyResult {
+                status: "failed".to_string(),
+                message: format!("Taxonomy classification failed: {err}"),
+                applied: false,
+                taxonomy: None,
+            };
+        }
+    };
+
+    apply_taxonomy_to_frontmatter(&mut frontmatter, &classified);
+    let next = match build_skill_markdown(&frontmatter, &body) {
+        Ok(value) => value,
+        Err(err) => {
+            return EnsureSkillTaxonomyResult {
+                status: "failed".to_string(),
+                message: err,
+                applied: false,
+                taxonomy: None,
+            };
+        }
+    };
+    if let Err(err) = fs::write(skill_path, next) {
+        return EnsureSkillTaxonomyResult {
+            status: "failed".to_string(),
+            message: format!("Write SKILL.md failed: {err}"),
+            applied: false,
+            taxonomy: None,
+        };
+    }
+    let home = crate::root_dir::default_home_dir();
+    let skills_root = crate::root_dir::default_root_dir();
+    if let Err(err) =
+        crate::setup::sync_saved_skill_to_copy_tools_with_home(&home, &skills_root, skill_name)
+    {
+        eprintln!("copy-mode incremental sync failed after taxonomy write: {err}");
+    }
+
+    EnsureSkillTaxonomyResult {
+        status: "applied".to_string(),
+        message: "Taxonomy applied from AI classifier.".to_string(),
+        applied: true,
+        taxonomy: Some(classified),
+    }
+}
+
+fn select_eval_strategy_by_sok(_taxonomy: Option<&SkillTaxonomyClassification>) -> EvalStrategy {
+    EvalStrategy::Default
+}
+
 async fn run_eval_blocking<T, F>(
     task_name: &'static str,
     timeout_secs: u64,
@@ -808,9 +1317,9 @@ where
             Err(RecvTimeoutError::Timeout) => {
                 Err(format!("{task_name} timed out after {timeout_secs}s"))
             }
-            Err(RecvTimeoutError::Disconnected) => {
-                Err(format!("{task_name} runner disconnected before returning a result"))
-            }
+            Err(RecvTimeoutError::Disconnected) => Err(format!(
+                "{task_name} runner disconnected before returning a result"
+            )),
         }
     });
     task.await
@@ -867,8 +1376,8 @@ fn run_trigger_eval_impl(
         return Err(format!("Python trigger eval failed: {}", stderr.trim()));
     }
 
-    let raw =
-        fs::read_to_string(&output_path).map_err(|e| format!("Read trigger eval output failed: {e}"))?;
+    let raw = fs::read_to_string(&output_path)
+        .map_err(|e| format!("Read trigger eval output failed: {e}"))?;
     let parsed = serde_json::from_str::<TriggerEvalOutput>(&raw)
         .map_err(|e| format!("Parse trigger eval output failed: {e}"))?;
     let _ = fs::remove_dir_all(&output_dir);
@@ -1109,7 +1618,11 @@ fn parse_json_file_case_count(path: &Path) -> Result<usize, String> {
     parse_json_case_count(&raw)
 }
 
-fn normalize_judge_models(primary_model: &str, mode: &str, judge_models: Option<Vec<String>>) -> Vec<String> {
+fn normalize_judge_models(
+    primary_model: &str,
+    mode: &str,
+    judge_models: Option<Vec<String>>,
+) -> Vec<String> {
     let mut out = judge_models
         .unwrap_or_default()
         .into_iter()
@@ -1206,6 +1719,11 @@ fn run_eval_pipeline_impl(
     let judge_models = normalize_judge_models(&primary_model, &mode, judge_models);
     let repeats = repeats.unwrap_or(DEFAULT_PIPELINE_REPEATS).max(1);
     let temp = temperature.unwrap_or(0.0);
+    let taxonomy_result =
+        ensure_skill_taxonomy(&skill_name, &skill_path, &primary_model, Some(&control));
+    match select_eval_strategy_by_sok(taxonomy_result.taxonomy.as_ref()) {
+        EvalStrategy::Default => {}
+    }
     let total_steps_per_repeat = match mode.as_str() {
         "quick" => 1,
         "standard" => 3,
@@ -1251,6 +1769,23 @@ fn run_eval_pipeline_impl(
         "Evaluation pipeline started.",
         start.elapsed().as_millis(),
     );
+    if taxonomy_result.status == "failed" {
+        push_pipeline_progress(
+            &app_handle,
+            &run_id,
+            "running",
+            0,
+            repeats,
+            0,
+            total_steps,
+            "taxonomy",
+            &format!(
+                "Taxonomy classification warning: {}",
+                taxonomy_result.message
+            ),
+            start.elapsed().as_millis(),
+        );
+    }
     let mut last_trigger_clean: Option<TriggerEvalOutput> = None;
     let mut last_trigger_complex: Option<TriggerEvalOutput> = None;
     let mut last_functional: Option<FunctionalEvalOutput> = None;
@@ -1440,7 +1975,9 @@ fn run_eval_pipeline_impl(
                     next_step,
                     total_steps,
                     "functional_with_skill",
-                    &format!("Round {current_repeat}/{repeats}: functional(with skill) failed: {err}"),
+                    &format!(
+                        "Round {current_repeat}/{repeats}: functional(with skill) failed: {err}"
+                    ),
                     start.elapsed().as_millis(),
                 );
                 err
@@ -1471,7 +2008,9 @@ fn run_eval_pipeline_impl(
                 next_step,
                 total_steps,
                 "functional_without_skill",
-                &format!("Round {current_repeat}/{repeats}: running functional eval (without skill)."),
+                &format!(
+                    "Round {current_repeat}/{repeats}: running functional eval (without skill)."
+                ),
                 start.elapsed().as_millis(),
             );
             let functional_without_skill = run_functional_eval_impl(
@@ -1493,7 +2032,9 @@ fn run_eval_pipeline_impl(
                     next_step,
                     total_steps,
                     "functional_without_skill",
-                    &format!("Round {current_repeat}/{repeats}: functional(without skill) failed: {err}"),
+                    &format!(
+                        "Round {current_repeat}/{repeats}: functional(without skill) failed: {err}"
+                    ),
                     start.elapsed().as_millis(),
                 );
                 err
@@ -1527,7 +2068,8 @@ fn run_eval_pipeline_impl(
         );
     }
 
-    let trigger_clean = last_trigger_clean.ok_or_else(|| "Missing trigger clean report".to_string())?;
+    let trigger_clean =
+        last_trigger_clean.ok_or_else(|| "Missing trigger clean report".to_string())?;
     let trigger_complex = last_trigger_complex;
     let functional = last_functional.ok_or_else(|| "Missing functional report".to_string())?;
     let functional_without_skill = last_functional_without_skill;
@@ -1556,7 +2098,8 @@ fn run_eval_pipeline_impl(
 
     let trigger_total = clean_summary.total + complex_summary.as_ref().map_or(0, |item| item.total);
     let total_cases = trigger_total + functional_summary.total;
-    let total_passed = ((overall_stats.mean * total_cases as f64).round() as i32).clamp(0, total_cases);
+    let total_passed =
+        ((overall_stats.mean * total_cases as f64).round() as i32).clamp(0, total_cases);
     let total_failed = total_cases - total_passed;
 
     let trigger_metrics = if trigger_rows_for_metrics.is_empty() {
@@ -1578,7 +2121,8 @@ fn run_eval_pipeline_impl(
     };
 
     let robustness = robustness_stats.mean;
-    let efficiency = (1.0 - (estimated.actual_usd_estimate / (estimated.actual_usd_estimate + 0.01))).max(0.0);
+    let efficiency =
+        (1.0 - (estimated.actual_usd_estimate / (estimated.actual_usd_estimate + 0.01))).max(0.0);
     let value_added = value_added_stats.as_ref().map_or(0.0, |item| item.mean);
 
     let mut output = EvalPipelineOutput {
@@ -1626,6 +2170,9 @@ fn run_eval_pipeline_impl(
             elapsed_ms: start.elapsed().as_millis(),
             skill_hash: compute_skill_hash(&skill_path),
         },
+        taxonomy_status: Some(taxonomy_result.status.clone()),
+        taxonomy_message: Some(taxonomy_result.message.clone()),
+        taxonomy_applied: Some(taxonomy_result.applied),
         history_path: None,
         message: None,
     };
@@ -1647,8 +2194,8 @@ fn run_eval_pipeline_impl(
 }
 
 fn parse_json_case_count(raw: &str) -> Result<usize, String> {
-    let value =
-        serde_json::from_str::<serde_json::Value>(raw).map_err(|e| format!("Parse JSON failed: {e}"))?;
+    let value = serde_json::from_str::<serde_json::Value>(raw)
+        .map_err(|e| format!("Parse JSON failed: {e}"))?;
     let Some(items) = value.as_array() else {
         return Err("Expected top-level JSON array".to_string());
     };
@@ -1662,9 +2209,8 @@ fn read_eval_set_case_count(path: &Path) -> Result<usize, String> {
 
 fn timeout_secs_for_case_count(case_count: usize) -> u64 {
     let safe_cases = case_count.max(1) as u64;
-    let computed = EVAL_TIMEOUT_SECS.saturating_add(
-        safe_cases.saturating_mul(EVAL_TIMEOUT_PER_CASE_SECS),
-    );
+    let computed =
+        EVAL_TIMEOUT_SECS.saturating_add(safe_cases.saturating_mul(EVAL_TIMEOUT_PER_CASE_SECS));
     computed.clamp(EVAL_TIMEOUT_SECS, MAX_EVAL_TIMEOUT_SECS)
 }
 
@@ -1742,7 +2288,10 @@ fn eval_generate_samples_impl(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let _ = fs::remove_dir_all(&output_dir);
-        return Err(format!("Python sample generation failed: {}", stderr.trim()));
+        return Err(format!(
+            "Python sample generation failed: {}",
+            stderr.trim()
+        ));
     }
 
     let trigger_draft = fs::read_to_string(&trigger_path)
@@ -1793,12 +2342,8 @@ fn eval_save_dataset_impl(
     serde_json::from_str::<serde_json::Value>(normalized)
         .map_err(|e| format!("Dataset JSON is invalid: {e}"))?;
 
-    let resolved_path = resolve_eval_dataset_path(
-        home,
-        path,
-        kind.as_deref(),
-        skill_name.as_deref(),
-    )?;
+    let resolved_path =
+        resolve_eval_dataset_path(home, path, kind.as_deref(), skill_name.as_deref())?;
 
     if let Some(parent) = resolved_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Create dataset parent dir failed: {e}"))?;
@@ -1811,7 +2356,10 @@ fn eval_save_dataset_impl(
     })
 }
 
-fn build_eval_history_entry(path: &Path, output: EvalPipelineOutput) -> Result<EvalHistoryEntry, String> {
+fn build_eval_history_entry(
+    path: &Path,
+    output: EvalPipelineOutput,
+) -> Result<EvalHistoryEntry, String> {
     let metadata = fs::metadata(path).map_err(|e| format!("Read history metadata failed: {e}"))?;
     let saved_at_unix = metadata
         .modified()
@@ -1848,7 +2396,9 @@ fn list_eval_history_impl(
     }
 
     let mut entries = Vec::<EvalHistoryEntry>::new();
-    for item in fs::read_dir(&history_dir).map_err(|e| format!("Read eval history dir failed: {e}"))? {
+    for item in
+        fs::read_dir(&history_dir).map_err(|e| format!("Read eval history dir failed: {e}"))?
+    {
         let Ok(item) = item else {
             continue;
         };
@@ -1868,7 +2418,11 @@ fn list_eval_history_impl(
         entries.push(entry);
     }
 
-    entries.sort_by(|a, b| b.saved_at_unix.cmp(&a.saved_at_unix).then_with(|| b.path.cmp(&a.path)));
+    entries.sort_by(|a, b| {
+        b.saved_at_unix
+            .cmp(&a.saved_at_unix)
+            .then_with(|| b.path.cmp(&a.path))
+    });
     if let Some(max_items) = limit {
         entries.truncate(max_items.max(1));
     }
@@ -2026,8 +2580,8 @@ pub async fn run_eval_pipeline(
     let mode_for_timeout = normalize_eval_mode(&mode).unwrap_or("standard");
     let trigger_case_count =
         read_eval_set_case_count(&trigger_eval_set_path).unwrap_or(DEFAULT_TRIGGER_CASE_COUNT);
-    let functional_case_count =
-        read_eval_set_case_count(&functional_eval_set_path).unwrap_or(DEFAULT_FUNCTIONAL_CASE_COUNT);
+    let functional_case_count = read_eval_set_case_count(&functional_eval_set_path)
+        .unwrap_or(DEFAULT_FUNCTIONAL_CASE_COUNT);
     let timeout_secs = timeout_secs_for_case_count(estimate_pipeline_case_count(
         mode_for_timeout,
         trigger_case_count,
@@ -2222,9 +2776,115 @@ mod tests {
                 elapsed_ms: 1234,
                 skill_hash: Some("abc".to_string()),
             },
+            taxonomy_status: Some("skipped".to_string()),
+            taxonomy_message: Some("Taxonomy already present.".to_string()),
+            taxonomy_applied: Some(false),
             history_path: None,
             message: None,
         }
+    }
+
+    #[test]
+    fn normalize_taxonomy_derives_group_and_difficulty_level() {
+        let normalized = normalize_taxonomy(SkillTaxonomyClassification {
+            sok_representation: "Natural-language".to_string(),
+            sok_scope: "Single-tool".to_string(),
+            sok_group: String::new(),
+            anthropic_category: "Workflow Automation".to_string(),
+            skillsbench_domain: "Software Engineering".to_string(),
+            skillsbench_difficulty_core: "core".to_string(),
+            skillsbench_difficulty_level: String::new(),
+            classified_at: "2026-03-12T00:00:00Z".to_string(),
+            classifier_model: "gpt-4o-mini".to_string(),
+        })
+        .expect("normalize taxonomy");
+
+        assert_eq!(normalized.sok_group, "Natural-language × Single-tool");
+        assert_eq!(normalized.skillsbench_difficulty_core, "Core");
+        assert_eq!(normalized.skillsbench_difficulty_level, "Easy");
+    }
+
+    #[test]
+    fn merge_taxonomy_tags_keeps_manual_tags_and_replaces_taxonomy_tags() {
+        let taxonomy = normalize_taxonomy(SkillTaxonomyClassification {
+            sok_representation: "Tool macros".to_string(),
+            sok_scope: "Multi-tool".to_string(),
+            sok_group: "Tool macros × Multi-tool".to_string(),
+            anthropic_category: "MCP Enhancement".to_string(),
+            skillsbench_domain: "Software Engineering".to_string(),
+            skillsbench_difficulty_core: "Extended".to_string(),
+            skillsbench_difficulty_level: "Medium".to_string(),
+            classified_at: "2026-03-12T00:00:00Z".to_string(),
+            classifier_model: "gpt-4o-mini".to_string(),
+        })
+        .expect("normalize taxonomy");
+
+        let merged = merge_taxonomy_tags(
+            &[
+                "manual-tag".to_string(),
+                "taxonomy:sok-scope:legacy".to_string(),
+                "manual-tag".to_string(),
+            ],
+            &taxonomy,
+        );
+
+        assert_eq!(merged[0], "manual-tag");
+        assert!(merged
+            .iter()
+            .any(|tag| tag == "taxonomy:sok-scope:multi-tool"));
+        assert_eq!(merged.iter().filter(|tag| *tag == "manual-tag").count(), 1);
+        assert!(merged.iter().all(|tag| tag != "taxonomy:sok-scope:legacy"));
+    }
+
+    #[test]
+    fn taxonomy_from_frontmatter_parses_complete_payload() {
+        let mut frontmatter = Mapping::new();
+        let mut taxonomy_map = Mapping::new();
+        taxonomy_map.insert(
+            YamlValue::String("sokRepresentation".to_string()),
+            YamlValue::String("Natural-language".to_string()),
+        );
+        taxonomy_map.insert(
+            YamlValue::String("sokScope".to_string()),
+            YamlValue::String("Single-tool".to_string()),
+        );
+        taxonomy_map.insert(
+            YamlValue::String("sokGroup".to_string()),
+            YamlValue::String("Natural-language × Single-tool".to_string()),
+        );
+        taxonomy_map.insert(
+            YamlValue::String("anthropicCategory".to_string()),
+            YamlValue::String("Workflow Automation".to_string()),
+        );
+        taxonomy_map.insert(
+            YamlValue::String("skillsbenchDomain".to_string()),
+            YamlValue::String("Software Engineering".to_string()),
+        );
+        taxonomy_map.insert(
+            YamlValue::String("skillsbenchDifficultyCore".to_string()),
+            YamlValue::String("Core".to_string()),
+        );
+        taxonomy_map.insert(
+            YamlValue::String("skillsbenchDifficultyLevel".to_string()),
+            YamlValue::String("Easy".to_string()),
+        );
+        taxonomy_map.insert(
+            YamlValue::String("classifiedAt".to_string()),
+            YamlValue::String("2026-03-12T00:00:00Z".to_string()),
+        );
+        taxonomy_map.insert(
+            YamlValue::String("classifierModel".to_string()),
+            YamlValue::String("gpt-4o-mini".to_string()),
+        );
+        frontmatter.insert(
+            YamlValue::String("skillar_taxonomy".to_string()),
+            YamlValue::Mapping(taxonomy_map),
+        );
+
+        let parsed = taxonomy_from_frontmatter(&frontmatter).expect("taxonomy parse");
+        assert_eq!(parsed.sok_representation, "Natural-language");
+        assert_eq!(parsed.skillsbench_difficulty_core, "Core");
+        assert_eq!(parsed.skillsbench_difficulty_level, "Easy");
     }
 
     #[test]
@@ -2250,7 +2910,10 @@ mod tests {
         let loaded = read_eval_config_with_home(&home).expect("read eval config");
         assert_eq!(loaded.api_key, "key-value");
         assert_eq!(loaded.provider, "openai-compatible");
-        assert_eq!(loaded.base_url.as_deref(), Some("https://api.openai.com/v1"));
+        assert_eq!(
+            loaded.base_url.as_deref(),
+            Some("https://api.openai.com/v1")
+        );
         assert_eq!(loaded.default_model, "gpt-4.1-mini");
     }
 
@@ -2259,8 +2922,8 @@ mod tests {
         let root = temp_root("myskills-tauri-evals-test");
         let py_dir = root.join("py");
         fs::create_dir_all(py_dir.join("eval_engine")).expect("create eval_engine dir");
-        let picked =
-            resolve_python_workdir_from_candidates(&[root.join("none"), py_dir.clone()]).expect("pick");
+        let picked = resolve_python_workdir_from_candidates(&[root.join("none"), py_dir.clone()])
+            .expect("pick");
         assert_eq!(picked, py_dir);
     }
 
@@ -2360,7 +3023,8 @@ mod tests {
               }
             ]
         }"#;
-        let parsed = serde_json::from_str::<FunctionalEvalOutput>(raw).expect("parse functional output");
+        let parsed =
+            serde_json::from_str::<FunctionalEvalOutput>(raw).expect("parse functional output");
         assert_eq!(parsed.status, "success");
         assert_eq!(parsed.skill_name.as_deref(), Some("myskill"));
         let summary = parsed.summary.expect("summary");
@@ -2378,7 +3042,10 @@ mod tests {
     #[test]
     fn normalize_eval_mode_accepts_known_values() {
         assert_eq!(normalize_eval_mode("quick").expect("quick"), "quick");
-        assert_eq!(normalize_eval_mode("standard").expect("standard"), "standard");
+        assert_eq!(
+            normalize_eval_mode("standard").expect("standard"),
+            "standard"
+        );
         assert_eq!(normalize_eval_mode("full").expect("full"), "full");
         assert!(normalize_eval_mode("unknown").is_err());
     }

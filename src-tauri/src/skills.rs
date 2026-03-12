@@ -12,9 +12,24 @@ pub struct SkillMeta {
     pub description: Option<String>,
     pub category: Option<String>,
     pub tags: Option<Vec<String>>,
+    pub taxonomy: Option<SkillTaxonomy>,
     pub my_notes: Option<String>,
     pub last_updated: Option<String>,
     pub directory: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillTaxonomy {
+    pub sok_representation: String,
+    pub sok_scope: String,
+    pub sok_group: String,
+    pub anthropic_category: String,
+    pub skillsbench_domain: String,
+    pub skillsbench_difficulty_core: String,
+    pub skillsbench_difficulty_level: String,
+    pub classified_at: String,
+    pub classifier_model: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -94,6 +109,18 @@ fn yaml_get_string(map: &Mapping, key: &str) -> Option<String> {
         .and_then(|v| v.as_str().map(std::string::ToString::to_string))
 }
 
+fn yaml_get_string_any(map: &Mapping, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(value) = yaml_get_string(map, key) {
+            let trimmed = value.trim().to_string();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
+    }
+    None
+}
+
 fn yaml_get_tags(map: &Mapping) -> Option<Vec<String>> {
     map.get(YamlValue::String("tags".to_string()))
         .and_then(|value| value.as_sequence())
@@ -102,6 +129,97 @@ fn yaml_get_tags(map: &Mapping) -> Option<Vec<String>> {
                 .filter_map(|item| item.as_str().map(std::string::ToString::to_string))
                 .collect::<Vec<_>>()
         })
+}
+
+fn normalize_difficulty_core(value: &str) -> Option<String> {
+    match value.trim().to_lowercase().as_str() {
+        "core" => Some("Core".to_string()),
+        "extended" => Some("Extended".to_string()),
+        "extreme" => Some("Extreme".to_string()),
+        _ => None,
+    }
+}
+
+fn normalize_difficulty_level(value: &str) -> Option<String> {
+    match value.trim().to_lowercase().as_str() {
+        "easy" => Some("Easy".to_string()),
+        "medium" => Some("Medium".to_string()),
+        "hard" => Some("Hard".to_string()),
+        _ => None,
+    }
+}
+
+fn level_from_core(core: &str) -> Option<String> {
+    match core {
+        "Core" => Some("Easy".to_string()),
+        "Extended" => Some("Medium".to_string()),
+        "Extreme" => Some("Hard".to_string()),
+        _ => None,
+    }
+}
+
+fn core_from_level(level: &str) -> Option<String> {
+    match level {
+        "Easy" => Some("Core".to_string()),
+        "Medium" => Some("Extended".to_string()),
+        "Hard" => Some("Extreme".to_string()),
+        _ => None,
+    }
+}
+
+fn yaml_get_taxonomy(map: &Mapping) -> Option<SkillTaxonomy> {
+    let taxonomy_value = map
+        .get(YamlValue::String("skillar_taxonomy".to_string()))
+        .or_else(|| map.get(YamlValue::String("skillarTaxonomy".to_string())))?;
+    let taxonomy = taxonomy_value.as_mapping()?;
+
+    let sok_representation =
+        yaml_get_string_any(taxonomy, &["sokRepresentation", "sok_representation"])?;
+    let sok_scope = yaml_get_string_any(taxonomy, &["sokScope", "sok_scope"])?;
+    let sok_group = yaml_get_string_any(taxonomy, &["sokGroup", "sok_group"])
+        .or_else(|| Some(format!("{sok_representation} × {sok_scope}")))?;
+    let anthropic_category =
+        yaml_get_string_any(taxonomy, &["anthropicCategory", "anthropic_category"])?;
+    let skillsbench_domain =
+        yaml_get_string_any(taxonomy, &["skillsbenchDomain", "skillsbench_domain"])?;
+
+    let raw_core = yaml_get_string_any(
+        taxonomy,
+        &["skillsbenchDifficultyCore", "skillsbench_difficulty_core"],
+    );
+    let raw_level = yaml_get_string_any(
+        taxonomy,
+        &["skillsbenchDifficultyLevel", "skillsbench_difficulty_level"],
+    );
+
+    let skillsbench_difficulty_core = raw_core
+        .as_deref()
+        .and_then(normalize_difficulty_core)
+        .or_else(|| {
+            raw_level
+                .as_deref()
+                .and_then(normalize_difficulty_level)
+                .and_then(|level| core_from_level(&level))
+        })?;
+    let skillsbench_difficulty_level = raw_level
+        .as_deref()
+        .and_then(normalize_difficulty_level)
+        .or_else(|| level_from_core(&skillsbench_difficulty_core))?;
+
+    let classified_at = yaml_get_string_any(taxonomy, &["classifiedAt", "classified_at"])?;
+    let classifier_model = yaml_get_string_any(taxonomy, &["classifierModel", "classifier_model"])?;
+
+    Some(SkillTaxonomy {
+        sok_representation,
+        sok_scope,
+        sok_group,
+        anthropic_category,
+        skillsbench_domain,
+        skillsbench_difficulty_core,
+        skillsbench_difficulty_level,
+        classified_at,
+        classifier_model,
+    })
 }
 
 fn locate_skill_dir(root: &Path, name: &str) -> Result<PathBuf, String> {
@@ -220,6 +338,7 @@ pub fn list_skills(root: &Path) -> Result<Vec<SkillMeta>, String> {
             description: yaml_get_string(&frontmatter, "description"),
             category: yaml_get_string(&frontmatter, "category"),
             tags: yaml_get_tags(&frontmatter),
+            taxonomy: yaml_get_taxonomy(&frontmatter),
             my_notes: yaml_get_string(&frontmatter, "my_notes"),
             last_updated: yaml_get_string(&frontmatter, "last_updated"),
             directory: entry_path.to_string_lossy().to_string(),
@@ -385,6 +504,41 @@ tags:
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "myskills-router");
         assert_eq!(skills[0].description.as_deref(), Some("router"));
+    }
+
+    #[test]
+    fn list_skills_reads_taxonomy_metadata() {
+        let root = temp_root("myskills-tauri-skills-test");
+        fs::create_dir_all(root.join("taxonomy-skill")).expect("create skill dir");
+        fs::write(
+            root.join("taxonomy-skill").join("SKILL.md"),
+            r#"---
+name: taxonomy-skill
+description: taxonomy demo
+skillar_taxonomy:
+  sokRepresentation: Natural-language
+  sokScope: Single-tool
+  sokGroup: Natural-language × Single-tool
+  anthropicCategory: Workflow Automation
+  skillsbenchDomain: Software Engineering
+  skillsbenchDifficultyCore: Core
+  skillsbenchDifficultyLevel: Easy
+  classifiedAt: "2026-03-12T00:00:00Z"
+  classifierModel: gpt-4o-mini
+---
+
+# Taxonomy
+"#,
+        )
+        .expect("write skill");
+
+        let skills = list_skills(&root).expect("list skills");
+        assert_eq!(skills.len(), 1);
+        let taxonomy = skills[0].taxonomy.clone().expect("taxonomy");
+        assert_eq!(taxonomy.sok_representation, "Natural-language");
+        assert_eq!(taxonomy.sok_scope, "Single-tool");
+        assert_eq!(taxonomy.skillsbench_difficulty_core, "Core");
+        assert_eq!(taxonomy.skillsbench_difficulty_level, "Easy");
     }
 
     #[test]
