@@ -1,0 +1,273 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ThesisFormatTemplate",
+  "description": "从学校Word格式文件中提取的论文格式模板规范",
+  "type": "object",
+  "properties": {
+    "meta": {
+      "type": "object",
+      "description": "模板元信息",
+      "properties": {
+        "university": { "type": "string", "description": "学校名称" },
+        "degree_type": { "type": "string", "enum": ["bachelor", "master", "doctor"], "description": "学位类型" },
+        "version": { "type": "string", "description": "模板版本" },
+        "source_file": { "type": "string", "description": "原始Word文件名" },
+        "extracted_at": { "type": "string", "format": "date-time", "description": "提取时间" }
+      }
+    },
+
+    "page_setup": {
+      "type": "object",
+      "description": "页面设置（全局默认，可被节级别覆盖）",
+      "properties": {
+        "paper_size": {
+          "type": "object",
+          "properties": {
+            "width_twips": { "type": "integer", "description": "页面宽度（缇，1英寸=1440缇）" },
+            "height_twips": { "type": "integer", "description": "页面高度（缇）" },
+            "orientation": { "type": "string", "enum": ["portrait", "landscape"] }
+          }
+        },
+        "margins": {
+          "type": "object",
+          "properties": {
+            "top_twips": { "type": "integer" },
+            "bottom_twips": { "type": "integer" },
+            "left_twips": { "type": "integer" },
+            "right_twips": { "type": "integer" },
+            "header_twips": { "type": "integer", "description": "页眉距页面顶部距离" },
+            "footer_twips": { "type": "integer", "description": "页脚距页面底部距离" },
+            "gutter_twips": { "type": "integer", "description": "装订线宽度" }
+          }
+        }
+      }
+    },
+
+    "sections": {
+      "type": "array",
+      "description": "文档各节的定义（按论文结构顺序）",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "节名称，如'封面'、'摘要'、'正文'、'参考文献'" },
+          "section_type": { "type": "string", "enum": ["nextPage", "evenPage", "oddPage", "continuous"], "description": "节起始方式" },
+          "page_setup_override": { "type": "object", "description": "如果该节有不同的页面设置，在此覆盖" },
+          "title_page": { "type": "boolean", "description": "该节首页是否有不同的页眉页脚" },
+          "page_number": {
+            "type": "object",
+            "properties": {
+              "format": { "type": "string", "enum": ["decimal", "upperRoman", "lowerRoman", "upperLetter", "lowerLetter"], "description": "页码格式" },
+              "start": { "type": "integer", "description": "起始页码" },
+              "show": { "type": "boolean", "description": "是否显示页码" },
+              "position": { "type": "string", "enum": ["header_center", "header_right", "footer_center", "footer_right"], "description": "页码位置" }
+            }
+          },
+          "header": {
+            "type": "object",
+            "description": "页眉定义",
+            "properties": {
+              "default": { "$ref": "#/definitions/header_footer_content" },
+              "first": { "$ref": "#/definitions/header_footer_content" },
+              "even": { "$ref": "#/definitions/header_footer_content" }
+            }
+          },
+          "footer": {
+            "type": "object",
+            "description": "页脚定义",
+            "properties": {
+              "default": { "$ref": "#/definitions/header_footer_content" },
+              "first": { "$ref": "#/definitions/header_footer_content" },
+              "even": { "$ref": "#/definitions/header_footer_content" }
+            }
+          }
+        }
+      }
+    },
+
+    "styles": {
+      "type": "object",
+      "description": "论文中各类内容的样式定义",
+      "properties": {
+        "heading_styles": {
+          "type": "array",
+          "description": "各级标题样式",
+          "items": {
+            "type": "object",
+            "properties": {
+              "level": { "type": "integer", "description": "标题级别（0=论文题目，1=章标题，2=节标题...）" },
+              "name": { "type": "string", "description": "样式名称，如'章标题'、'节标题'" },
+              "word_style_id": { "type": "string", "description": "对应Word中的样式ID" },
+              "numbering": { "$ref": "#/definitions/numbering_format" },
+              "paragraph_format": { "$ref": "#/definitions/paragraph_format" },
+              "character_format": { "$ref": "#/definitions/character_format" },
+              "page_break_before": { "type": "boolean", "description": "是否段前分页" }
+            }
+          }
+        },
+        "body_text": {
+          "type": "object",
+          "description": "正文样式",
+          "properties": {
+            "paragraph_format": { "$ref": "#/definitions/paragraph_format" },
+            "character_format": { "$ref": "#/definitions/character_format" }
+          }
+        },
+        "abstract_zh": {
+          "type": "object",
+          "description": "中文摘要样式",
+          "properties": {
+            "title_format": { "$ref": "#/definitions/combined_format" },
+            "body_format": { "$ref": "#/definitions/combined_format" },
+            "keywords_label_format": { "$ref": "#/definitions/combined_format" },
+            "keywords_body_format": { "$ref": "#/definitions/combined_format" }
+          }
+        },
+        "abstract_en": {
+          "type": "object",
+          "description": "英文摘要样式",
+          "properties": {
+            "title_format": { "$ref": "#/definitions/combined_format" },
+            "body_format": { "$ref": "#/definitions/combined_format" },
+            "keywords_label_format": { "$ref": "#/definitions/combined_format" },
+            "keywords_body_format": { "$ref": "#/definitions/combined_format" }
+          }
+        },
+        "figure_caption": {
+          "type": "object",
+          "description": "图注样式",
+          "properties": {
+            "label_prefix": { "type": "string", "description": "标签前缀，如'图'" },
+            "numbering_format": { "type": "string", "description": "编号格式，如'章号-图号'" },
+            "position": { "type": "string", "enum": ["below", "above"], "description": "位置" },
+            "paragraph_format": { "$ref": "#/definitions/paragraph_format" },
+            "character_format": { "$ref": "#/definitions/character_format" }
+          }
+        },
+        "table_caption": {
+          "type": "object",
+          "description": "表注样式",
+          "properties": {
+            "label_prefix": { "type": "string", "description": "标签前缀，如'表'" },
+            "numbering_format": { "type": "string", "description": "编号格式" },
+            "position": { "type": "string", "enum": ["below", "above"], "description": "位置" },
+            "paragraph_format": { "$ref": "#/definitions/paragraph_format" },
+            "character_format": { "$ref": "#/definitions/character_format" }
+          }
+        },
+        "footnote": {
+          "type": "object",
+          "description": "脚注样式",
+          "properties": {
+            "reference_mark_format": { "$ref": "#/definitions/character_format" },
+            "body_format": { "$ref": "#/definitions/combined_format" },
+            "numbering_format": { "type": "string", "enum": ["decimal", "lowerRoman", "symbol"] },
+            "restart_each_page": { "type": "boolean" }
+          }
+        },
+        "bibliography": {
+          "type": "object",
+          "description": "参考文献样式",
+          "properties": {
+            "citation_format": { "type": "string", "description": "引用标记格式，如'[1]'上标" },
+            "entry_format": { "$ref": "#/definitions/combined_format" },
+            "standard": { "type": "string", "description": "参考文献标准，如'GB/T 7714-2015'" }
+          }
+        },
+        "toc": {
+          "type": "object",
+          "description": "目录样式",
+          "properties": {
+            "levels": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "level": { "type": "integer" },
+                  "paragraph_format": { "$ref": "#/definitions/paragraph_format" },
+                  "character_format": { "$ref": "#/definitions/character_format" },
+                  "tab_leader": { "type": "string", "enum": ["dot", "dash", "underscore", "none"] }
+                }
+              }
+            }
+          }
+        },
+        "table_body": {
+          "type": "object",
+          "description": "表格内文字样式",
+          "properties": {
+            "paragraph_format": { "$ref": "#/definitions/paragraph_format" },
+            "character_format": { "$ref": "#/definitions/character_format" },
+            "default_borders": { "type": "string", "description": "默认边框样式，如'三线表'" }
+          }
+        }
+      }
+    }
+  },
+
+  "definitions": {
+    "paragraph_format": {
+      "type": "object",
+      "properties": {
+        "alignment": { "type": "string", "enum": ["left", "center", "right", "justify"] },
+        "line_spacing": {
+          "type": "object",
+          "properties": {
+            "rule": { "type": "string", "enum": ["single", "oneAndHalf", "double", "exact", "atLeast", "multiple"] },
+            "value": { "type": "number", "description": "行距值（exact/atLeast为磅值，multiple为倍数）" }
+          }
+        },
+        "space_before_pt": { "type": "number", "description": "段前间距（磅）" },
+        "space_after_pt": { "type": "number", "description": "段后间距（磅）" },
+        "first_line_indent_chars": { "type": "number", "description": "首行缩进（字符数）" },
+        "first_line_indent_twips": { "type": "integer", "description": "首行缩进（缇）" },
+        "left_indent_twips": { "type": "integer", "description": "左缩进（缇）" },
+        "right_indent_twips": { "type": "integer", "description": "右缩进（缇）" },
+        "keep_with_next": { "type": "boolean", "description": "与下段同页" },
+        "widow_control": { "type": "boolean", "description": "孤行控制" }
+      }
+    },
+    "character_format": {
+      "type": "object",
+      "properties": {
+        "font_cn": { "type": "string", "description": "中文字体名称，如'宋体'、'黑体'" },
+        "font_en": { "type": "string", "description": "西文字体名称，如'Times New Roman'" },
+        "font_size_pt": { "type": "number", "description": "字号（磅），如12=小四，10.5=五号" },
+        "font_size_cn": { "type": "string", "description": "中文字号名称，如'小四'、'三号'" },
+        "bold": { "type": "boolean" },
+        "italic": { "type": "boolean" },
+        "underline": { "type": ["string", "null"], "description": "下划线类型" },
+        "color": { "type": ["string", "null"], "description": "字体颜色（十六进制）" },
+        "char_spacing_pt": { "type": "number", "description": "字符间距（磅）" },
+        "superscript": { "type": "boolean" },
+        "subscript": { "type": "boolean" }
+      }
+    },
+    "combined_format": {
+      "type": "object",
+      "properties": {
+        "paragraph_format": { "$ref": "#/definitions/paragraph_format" },
+        "character_format": { "$ref": "#/definitions/character_format" }
+      }
+    },
+    "numbering_format": {
+      "type": "object",
+      "properties": {
+        "format": { "type": "string", "description": "编号格式，如'第%1章'、'%1.%2'" },
+        "num_fmt": { "type": "string", "enum": ["decimal", "upperRoman", "lowerRoman", "upperLetter", "lowerLetter", "chineseCountingThousand"] },
+        "separator": { "type": "string", "description": "编号与标题之间的分隔符" }
+      }
+    },
+    "header_footer_content": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "description": "是否启用" },
+        "content_type": { "type": "string", "enum": ["text", "page_number", "mixed", "empty"], "description": "内容类型" },
+        "text": { "type": "string", "description": "固定文本内容" },
+        "paragraph_format": { "$ref": "#/definitions/paragraph_format" },
+        "character_format": { "$ref": "#/definitions/character_format" },
+        "has_border_bottom": { "type": "boolean", "description": "是否有下边框线（常见于页眉）" },
+        "border_style": { "type": "string", "description": "边框样式" }
+      }
+    }
+  }
+}
