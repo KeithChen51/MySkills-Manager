@@ -23,6 +23,7 @@ pub struct SkillUsageInsight {
 pub struct SkillEvalInsight {
     pub latest_run_at_unix: Option<u64>,
     pub latest_status: Option<String>,
+    pub latest_advisory_level: Option<String>,
     pub latest_pass_rate: Option<f64>,
     pub latest_mode: Option<String>,
     pub latest_model: Option<String>,
@@ -43,6 +44,7 @@ struct EvalHistorySnapshot {
     saved_at_unix: u64,
     path: String,
     status: Option<String>,
+    advisory_level: Option<String>,
     pass_rate: Option<f64>,
     mode: Option<String>,
     model: Option<String>,
@@ -85,6 +87,11 @@ fn parse_eval_history_snapshot(path: &Path, saved_at_unix: u64) -> Option<EvalHi
         .get("summary")
         .and_then(|summary| summary.get("passRate").or_else(|| summary.get("pass_rate")))
         .and_then(|value| value.as_f64());
+    let advisory_level = parsed
+        .get("advisory")
+        .and_then(|advisory| advisory.get("level"))
+        .and_then(|value| value.as_str())
+        .map(std::string::ToString::to_string);
     let mode = parsed
         .get("mode")
         .and_then(|value| value.as_str())
@@ -100,6 +107,7 @@ fn parse_eval_history_snapshot(path: &Path, saved_at_unix: u64) -> Option<EvalHi
         saved_at_unix,
         path: path.to_string_lossy().to_string(),
         status,
+        advisory_level,
         pass_rate,
         mode,
         model,
@@ -156,6 +164,7 @@ fn collect_eval_insight_for_skill(home: &Path, skill_name: &str, now: DateTime<U
     SkillEvalInsight {
         latest_run_at_unix: Some(latest.saved_at_unix),
         latest_status: latest.status,
+        latest_advisory_level: latest.advisory_level,
         latest_pass_rate: latest.pass_rate,
         latest_mode: latest.mode,
         latest_model: latest.model,
@@ -316,6 +325,7 @@ mod tests {
             alpha_dir.join("iteration-2-2.json"),
             r#"{
   "status": "success",
+  "advisory": { "level": "warn", "reasons": ["sample"], "nonBlocking": true },
   "mode": "full",
   "summary": { "passRate": 0.82 },
   "runMeta": { "model": "gpt-4.1" }
@@ -356,6 +366,7 @@ mod tests {
             Some("2026-03-10T01:00:00Z")
         );
         assert_eq!(alpha.eval.latest_status.as_deref(), Some("success"));
+        assert_eq!(alpha.eval.latest_advisory_level.as_deref(), Some("warn"));
         assert_eq!(alpha.eval.latest_mode.as_deref(), Some("full"));
         assert_eq!(alpha.eval.latest_model.as_deref(), Some("gpt-4.1"));
         assert_eq!(alpha.eval.latest_pass_rate, Some(0.82));

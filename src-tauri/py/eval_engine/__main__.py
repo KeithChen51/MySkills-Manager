@@ -32,8 +32,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     trigger_parser = subparsers.add_parser("trigger", help="Run trigger accuracy evaluation")
     trigger_parser.add_argument("--skill-name", required=True, help="Name of the skill to test")
+    trigger_parser.add_argument("--skill-path", type=Path, help="Optional path to target SKILL.md")
     trigger_parser.add_argument("--eval-set-path", required=True, type=Path, help="Path to trigger eval JSON")
     trigger_parser.add_argument("--output-path", required=True, type=Path, help="Path to write trigger result")
+    trigger_parser.add_argument("--evidence-dir", type=Path, help="Directory to persist trigger evidence")
     trigger_parser.add_argument("--env-type", choices=["clean", "complex"], default="clean")
     trigger_parser.add_argument("--installed-skills-dir", type=Path)
     trigger_parser.add_argument("--api-key", required=True)
@@ -46,6 +48,7 @@ def _build_parser() -> argparse.ArgumentParser:
     functional_parser.add_argument("--skill-path", required=True, type=Path, help="Path to SKILL.md")
     functional_parser.add_argument("--eval-set-path", required=True, type=Path, help="Path to functional eval JSON")
     functional_parser.add_argument("--output-dir", required=True, type=Path, help="Directory to write outputs")
+    functional_parser.add_argument("--evidence-dir", type=Path, help="Directory to persist functional evidence")
     functional_parser.add_argument(
         "--compare-mode",
         choices=["none", "no_skill", "without_skill"],

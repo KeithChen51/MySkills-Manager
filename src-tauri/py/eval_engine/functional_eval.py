@@ -1,5 +1,5 @@
 """
-Core module for running functional correctness evaluations.
+Run functional correctness evaluations with real OpenAI-compatible execution traces.
 """
 
 from __future__ import annotations
@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,48 +28,6 @@ def read_text_file(path: Path) -> str:
     raise ValueError(f"Failed to decode file '{path}'. Please save it as UTF-8.") from last_error
 
 
-class LLMClient:
-    """A mock client to simulate running a skill and getting an output."""
-
-    def __init__(self, api_key: str, model: str):
-        self.api_key = api_key
-        self.model = model
-
-    @staticmethod
-    def _tokenize(text: str) -> set[str]:
-        lowered = text.lower()
-        latin_tokens = re.findall(r"[a-z0-9_]{3,}", lowered)
-        cjk_chars = re.findall(r"[\u4e00-\u9fff]", text)
-        cjk_bigrams = [f"{cjk_chars[i]}{cjk_chars[i + 1]}" for i in range(len(cjk_chars) - 1)]
-        return set(latin_tokens + cjk_bigrams)
-
-    def _relevance_score(self, prompt: str, skill_content: str) -> int:
-        prompt_tokens = self._tokenize(prompt)
-        if not prompt_tokens:
-            return 0
-        skill_tokens = self._tokenize(skill_content)
-        return len(prompt_tokens & skill_tokens)
-
-    def run_skill(self, prompt: str, skill_content: str) -> dict[str, Any]:
-        """
-        Simulates running a skill with a prompt and returns a mock output.
-        In a real implementation, this would involve a complex interaction with an LLM.
-        """
-        use_skill = bool(skill_content.strip()) and self._relevance_score(prompt, skill_content) > 0
-        if use_skill:
-            output_text = f"Skill-guided output for prompt: '{prompt}'."
-        else:
-            output_text = f"Baseline output for prompt: '{prompt}'."
-
-        if "fail" in prompt.lower():
-            output_text += "\nAnd it seems to have failed an assertion."
-
-        return {
-            "output_text": output_text,
-            "artifacts": {"output.txt": output_text},
-        }
-
-
 def _extract_json_object(raw: str) -> dict[str, Any]:
     text = raw.strip()
     if text.startswith("```"):
@@ -83,27 +42,18 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
     return json.loads(text[start : end + 1])
 
 
-def _request_openai_compatible_judge(
+def _request_openai_compatible_chat(
     api_key: str,
     model: str,
     base_url: str | None,
-    prompt: str,
-) -> str:
+    messages: list[dict[str, str]],
+    temperature: float = 0.0,
+) -> dict[str, Any]:
     endpoint = (base_url or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
     payload = {
         "model": model,
-        "temperature": 0.0,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a strict evaluator. Return JSON only with keys: "
-                    "dimension_scores (relevance, instruction_following, completeness, each 0-1), "
-                    "rationale, improvement_suggestions (string array)."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
+        "temperature": temperature,
+        "messages": messages,
     }
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
@@ -115,25 +65,44 @@ def _request_openai_compatible_judge(
             "Authorization": f"Bearer {api_key}",
         },
     )
-
+    started = time.perf_counter()
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            raw = response.read().decode("utf-8", errors="replace")
+        with urllib.request.urlopen(request, timeout=90) as response:
+            raw_text = response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:  # pragma: no cover - network path
         details = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Judge HTTP {exc.code}: {details}") from exc
+        raise RuntimeError(f"LLM HTTP {exc.code}: {details}") from exc
     except urllib.error.URLError as exc:  # pragma: no cover - network path
-        raise RuntimeError(f"Judge request failed: {exc.reason}") from exc
+        raise RuntimeError(f"LLM request failed: {exc.reason}") from exc
+    latency_ms = int((time.perf_counter() - started) * 1000)
 
-    parsed = json.loads(raw)
+    parsed = json.loads(raw_text)
     choices = parsed.get("choices")
     if not isinstance(choices, list) or not choices:
-        raise RuntimeError("Judge response missing choices")
+        raise RuntimeError("LLM response missing choices")
     message = choices[0].get("message", {})
     content = message.get("content")
     if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("Judge response content is empty")
-    return content
+        raise RuntimeError("LLM response content is empty")
+    usage = parsed.get("usage") if isinstance(parsed.get("usage"), dict) else {}
+    return {
+        "content": content,
+        "raw": parsed,
+        "trace_id": str(parsed.get("id") or ""),
+        "latency_ms": latency_ms,
+        "input_tokens": int(usage.get("prompt_tokens") or 0),
+        "output_tokens": int(usage.get("completion_tokens") or 0),
+    }
+
+
+def _slug(value: str, fallback: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_-]+", "-", value.strip()).strip("-_").lower()
+    return normalized or fallback
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _tokenize(text: str) -> set[str]:
@@ -209,7 +178,6 @@ def _layer1_checks(prompt: str, output_text: str, assertions: list[str]) -> dict
             }
         )
 
-    # A lightweight structure gate: prompt and output should share at least one semantic token.
     prompt_tokens = _tokenize(prompt)
     output_tokens = _tokenize(output_text)
     overlap = len(prompt_tokens & output_tokens)
@@ -242,6 +210,19 @@ def _grade_assertions(output_text: str, assertions: list[str]) -> list[dict[str,
         )
         graded.append({"assertion": assertion, "passed": passed, "evidence": evidence})
     return graded
+
+
+def _normalize_dimension_scores(payload: dict[str, Any]) -> dict[str, float]:
+    keys = ("relevance", "instruction_following", "completeness")
+    normalized: dict[str, float] = {}
+    for key in keys:
+        value = payload.get(key, 0.0)
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            score = 0.0
+        normalized[key] = round(max(0.0, min(1.0, score)), 4)
+    return normalized
 
 
 def _judge_quality_heuristic(
@@ -286,20 +267,8 @@ def _judge_quality_heuristic(
         "rationale": rationale,
         "improvement_suggestions": suggestions,
         "source": "heuristic",
+        "judge_trace_id": None,
     }
-
-
-def _normalize_dimension_scores(payload: dict[str, Any]) -> dict[str, float]:
-    keys = ("relevance", "instruction_following", "completeness")
-    normalized: dict[str, float] = {}
-    for key in keys:
-        value = payload.get(key, 0.0)
-        try:
-            score = float(value)
-        except (TypeError, ValueError):
-            score = 0.0
-        normalized[key] = round(max(0.0, min(1.0, score)), 4)
-    return normalized
 
 
 def _judge_quality_llm(
@@ -309,6 +278,7 @@ def _judge_quality_llm(
     model: str,
     api_key: str,
     base_url: str | None,
+    evidence_dir: Path | None,
 ) -> dict[str, Any]:
     judge_prompt = (
         "Evaluate the candidate output against the prompt and assertions.\n"
@@ -321,14 +291,26 @@ def _judge_quality_llm(
         "- rationale: concise reason\n"
         "- improvement_suggestions: array of short actionable suggestions\n"
     )
-
-    content = _request_openai_compatible_judge(
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a strict evaluator. Return JSON only with keys: "
+                "dimension_scores, rationale, improvement_suggestions."
+            ),
+        },
+        {"role": "user", "content": judge_prompt},
+    ]
+    response = _request_openai_compatible_chat(
         api_key=api_key,
         model=model,
         base_url=base_url,
-        prompt=judge_prompt,
+        messages=messages,
+        temperature=0.0,
     )
-    payload = _extract_json_object(content)
+    if evidence_dir:
+        _write_json(evidence_dir / f"judge-{_slug(model, 'judge')}-response.json", response["raw"])
+    payload = _extract_json_object(str(response["content"]))
     raw_scores = payload.get("dimension_scores")
     if not isinstance(raw_scores, dict):
         raw_scores = payload
@@ -352,7 +334,64 @@ def _judge_quality_llm(
         "rationale": rationale or "LLM judge returned no rationale.",
         "improvement_suggestions": suggestions[:5],
         "source": "llm",
+        "judge_trace_id": response["trace_id"] or None,
     }
+
+
+class LLMClient:
+    def __init__(self, api_key: str, model: str, provider: str | None, base_url: str | None):
+        self.api_key = api_key.strip()
+        self.model = model.strip()
+        self.provider = (provider or "openai-compatible").strip().lower()
+        self.base_url = base_url.strip() if isinstance(base_url, str) and base_url.strip() else None
+        if self.provider != "openai-compatible":
+            raise ValueError(f"Unsupported provider for functional eval: {self.provider}")
+        if not self.api_key:
+            raise ValueError("API key is required for functional eval")
+        if not self.model:
+            raise ValueError("Model is required for functional eval")
+
+    def run_skill(
+        self,
+        prompt: str,
+        skill_content: str,
+        case_evidence_dir: Path | None,
+        run_label: str,
+    ) -> dict[str, Any]:
+        if skill_content.strip():
+            system_prompt = (
+                "You are an execution assistant. A skill guide is provided below. "
+                "Follow it when producing the final answer.\n\n"
+                f"SKILL GUIDE:\n---\n{skill_content[:12000]}\n---"
+            )
+        else:
+            system_prompt = "You are an execution assistant. Complete the task directly."
+        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
+        response = _request_openai_compatible_chat(
+            api_key=self.api_key,
+            model=self.model,
+            base_url=self.base_url,
+            messages=messages,
+            temperature=0.0,
+        )
+        output_text = str(response["content"])
+
+        raw_response_path: str | None = None
+        if case_evidence_dir:
+            run_dir = case_evidence_dir / run_label
+            _write_json(run_dir / "request.json", {"messages": messages, "model": self.model})
+            _write_json(run_dir / "response.json", response["raw"])
+            raw_response_path = str((run_dir / "response.json").resolve())
+
+        return {
+            "output_text": output_text,
+            "artifacts": {"output.txt": output_text},
+            "latency_ms": int(response["latency_ms"]),
+            "input_tokens": int(response["input_tokens"]),
+            "output_tokens": int(response["output_tokens"]),
+            "judge_trace_id": response["trace_id"] or None,
+            "raw_response_path": raw_response_path,
+        }
 
 
 class JudgeClient:
@@ -367,6 +406,7 @@ class JudgeClient:
         output_text: str,
         assertion_results: list[dict[str, Any]],
         model: str,
+        evidence_dir: Path | None,
     ) -> dict[str, Any]:
         if self.provider == "openai-compatible" and self.api_key:
             try:
@@ -377,6 +417,7 @@ class JudgeClient:
                     model=model,
                     api_key=self.api_key,
                     base_url=self.base_url,
+                    evidence_dir=evidence_dir,
                 )
             except Exception as exc:
                 fallback = _judge_quality_heuristic(prompt, output_text, assertion_results, model)
@@ -384,7 +425,6 @@ class JudgeClient:
                     f"{fallback.get('rationale', '')}; llm_fallback_reason={str(exc)}"
                 )[:1000]
                 return fallback
-
         return _judge_quality_heuristic(prompt, output_text, assertion_results, model)
 
 
@@ -396,6 +436,7 @@ def _aggregate_quality(per_model: list[dict[str, Any]]) -> dict[str, Any]:
             "rationale": "No judge model results.",
             "improvement_suggestions": [],
             "source": "heuristic",
+            "judge_trace_id": None,
             "per_model": [],
         }
 
@@ -423,14 +464,28 @@ def _aggregate_quality(per_model: list[dict[str, Any]]) -> dict[str, Any]:
                 merged_suggestions.append(text)
                 seen.add(text)
     source = "llm" if any(item.get("source") == "llm" for item in per_model) else "heuristic"
+    judge_trace_id = next(
+        (str(item.get("judge_trace_id")) for item in per_model if item.get("judge_trace_id")),
+        None,
+    )
     return {
         "dimension_scores": dimension_scores,
         "overall_score": overall,
         "rationale": " | ".join(rationales[:3]) if rationales else "No rationale provided by judges.",
         "improvement_suggestions": merged_suggestions[:5],
         "source": source,
+        "judge_trace_id": judge_trace_id,
         "per_model": per_model,
     }
+
+
+def _error_type(error: Exception) -> str:
+    text = str(error).lower()
+    if "http" in text or "url" in text or "network" in text:
+        return "network"
+    if "json" in text or "parse" in text:
+        return "parse"
+    return "runtime"
 
 
 def run_single_case(
@@ -441,20 +496,24 @@ def run_single_case(
     client: LLMClient,
     grader: JudgeClient,
     output_dir: Path,
+    evidence_root: Path | None,
 ) -> dict[str, Any]:
-    """
-    Runs a single functional test case.
-    """
     prompt = str(case["prompt"])
     assertions = [str(item) for item in case["assertions"] if isinstance(item, str)]
     case_id = str(case["id"])
+    case_slug = _slug(case_id, "case")
+
+    case_output_dir = output_dir / case_slug
+    case_output_dir.mkdir(parents=True, exist_ok=True)
+    case_evidence_dir = evidence_root / case_slug if evidence_root else None
+    if case_evidence_dir:
+        case_evidence_dir.mkdir(parents=True, exist_ok=True)
 
     skill_payload = "" if compare_mode == "without_skill" else skill_content
-    execution_result = client.run_skill(prompt, skill_payload)
+    execution_label = "without_skill" if compare_mode == "without_skill" else "with_skill"
+    execution_result = client.run_skill(prompt, skill_payload, case_evidence_dir, execution_label)
     output_text = str(execution_result.get("output_text", ""))
 
-    case_output_dir = output_dir / case_id
-    case_output_dir.mkdir(parents=True, exist_ok=True)
     for filename, content in execution_result.get("artifacts", {}).items():
         (case_output_dir / filename).write_text(str(content), encoding="utf-8")
 
@@ -467,7 +526,7 @@ def run_single_case(
             item["evidence"] = f"Layer1 gate blocked: {item['evidence']}"
 
     if compare_mode == "no_skill":
-        baseline_result = client.run_skill(prompt, "")
+        baseline_result = client.run_skill(prompt, "", case_evidence_dir, "baseline_no_skill")
         baseline_text = str(baseline_result.get("output_text", ""))
         if baseline_text == output_text:
             for item in assertion_results:
@@ -480,7 +539,7 @@ def run_single_case(
     passed = bool(layer1["passed"]) and pass_rate == 1.0
 
     quality_per_model = [
-        grader.grade(prompt, output_text, assertion_results, model_name)
+        grader.grade(prompt, output_text, assertion_results, model_name, case_evidence_dir)
         for model_name in judge_models
     ]
     layer2 = _aggregate_quality(quality_per_model)
@@ -507,6 +566,11 @@ def run_single_case(
         "judge_rationale": layer2.get("rationale"),
         "judge_suggestions": layer2.get("improvement_suggestions", []),
         "judge_source": layer2.get("source", "heuristic"),
+        "raw_response_path": execution_result.get("raw_response_path"),
+        "latency_ms": execution_result.get("latency_ms"),
+        "input_tokens": execution_result.get("input_tokens"),
+        "output_tokens": execution_result.get("output_tokens"),
+        "judge_trace_id": execution_result.get("judge_trace_id") or layer2.get("judge_trace_id"),
     }
 
 
@@ -526,12 +590,10 @@ def _aggregate_case_dimension_scores(results: list[dict[str, Any]]) -> dict[str,
             continue
         for key, value in dim.items():
             buckets.setdefault(str(key), []).append(float(value))
-
     return {key: round(mean(values), 4) for key, values in sorted(buckets.items()) if values}
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    """Runs the full functional evaluation set."""
     try:
         eval_set = json.loads(read_text_file(args.eval_set_path))
     except (json.JSONDecodeError, FileNotFoundError, OSError, ValueError) as exc:
@@ -544,14 +606,35 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     except (OSError, ValueError) as exc:
         return {"status": "error", "message": f"Failed to read skill file: {exc}"}
 
-    judge_models = _parse_judge_models(args)
-    client = LLMClient(api_key=args.api_key, model=args.model)
+    try:
+        judge_models = _parse_judge_models(args)
+        client = LLMClient(
+            api_key=args.api_key,
+            model=args.model,
+            provider=getattr(args, "provider", None),
+            base_url=getattr(args, "base_url", None),
+        )
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+
     grader = JudgeClient(
         api_key=args.api_key,
         provider=getattr(args, "provider", None),
         base_url=getattr(args, "base_url", None),
     )
     results: list[dict[str, Any]] = []
+    evidence_root = getattr(args, "evidence_dir", None)
+    if isinstance(evidence_root, Path):
+        evidence_root.mkdir(parents=True, exist_ok=True)
+        _write_json(
+            evidence_root / "meta.json",
+            {
+                "skill_name": args.skill_name,
+                "compare_mode": args.compare_mode,
+                "judge_models": judge_models,
+                "case_count": len(eval_set) if isinstance(eval_set, list) else 0,
+            },
+        )
 
     with ThreadPoolExecutor(max_workers=5) as executor:
         future_to_case = {
@@ -564,8 +647,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 client,
                 grader,
                 args.output_dir,
+                evidence_root,
             ): item
             for item in eval_set
+            if isinstance(item, dict)
         }
 
         for future in as_completed(future_to_case):
@@ -575,16 +660,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             except Exception as exc:
                 results.append(
                     {
-                        "case_id": item["id"],
+                        "case_id": str(item.get("id", "")),
                         "passed": False,
                         "pass_rate": 0.0,
                         "error": str(exc),
+                        "error_type": _error_type(exc),
                         "layer1_pass": False,
                         "quality_score": 0.0,
                         "dimension_scores": {},
                         "judge_rationale": f"case execution failed: {exc}",
                         "judge_suggestions": ["Fix runtime error and rerun this case."],
                         "judge_source": "heuristic",
+                        "raw_response_path": None,
+                        "latency_ms": None,
+                        "input_tokens": None,
+                        "output_tokens": None,
+                        "judge_trace_id": None,
                     }
                 )
 
@@ -618,3 +709,4 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     (args.output_dir / "summary.json").write_text(json.dumps(final_report, indent=2), encoding="utf-8")
     return final_report
+

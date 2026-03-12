@@ -123,3 +123,47 @@ test("tauri API exposes taxonomy metadata on skills and eval pipeline outputs", 
     "Eval pipeline output should include taxonomy message/applied flags",
   );
 });
+
+test("tauri API exposes advisory and evidence fields with backward-compatible defaults", () => {
+  const source = read("src/api/tauri.ts");
+  assert.ok(
+    source.includes("evidenceLevel?: \"simulated\" | \"real\";"),
+    "Eval pipeline output should expose evidence level",
+  );
+  assert.ok(
+    source.includes("advisory?: EvalAdvisory;"),
+    "Eval pipeline output should expose advisory payload",
+  );
+  assert.ok(
+    source.includes("evidenceSummary?: EvalEvidenceSummary;"),
+    "Eval pipeline output should expose evidence summary payload",
+  );
+  assert.ok(
+    source.includes("evidenceLevel: raw.evidenceLevel ?? \"simulated\""),
+    "runEvalPipeline/evalLoadHistory should default missing evidenceLevel to simulated",
+  );
+});
+
+test("tauri API maps trigger and functional evidence details into camelCase fields", () => {
+  const source = read("src/api/tauri.ts");
+  assert.ok(
+    source.includes("rawResponsePath: item.raw_response_path ?? null"),
+    "result mapping should expose rawResponsePath",
+  );
+  assert.ok(
+    source.includes("latencyMs: item.latency_ms ?? null"),
+    "result mapping should expose latencyMs",
+  );
+  assert.ok(
+    source.includes("inputTokens: item.input_tokens ?? null"),
+    "result mapping should expose inputTokens",
+  );
+  assert.ok(
+    source.includes("outputTokens: item.output_tokens ?? null"),
+    "result mapping should expose outputTokens",
+  );
+  assert.ok(
+    source.includes("judgeTraceId: item.judge_trace_id ?? null"),
+    "result mapping should expose judgeTraceId",
+  );
+});

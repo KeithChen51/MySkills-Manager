@@ -416,6 +416,74 @@
   font-size: var(--text-sm);
 }
 
+.eval-advisory-card {
+  display: grid;
+  gap: var(--sp-sm);
+}
+
+.eval-advisory-head {
+  align-items: center;
+  display: flex;
+  gap: var(--sp-sm);
+  justify-content: space-between;
+}
+
+.eval-advisory-note {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  margin: 0;
+}
+
+.eval-advisory-pill {
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1;
+  padding: 4px 10px;
+  text-transform: uppercase;
+}
+
+.eval-advisory-pass {
+  background: var(--success-bg);
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+  color: var(--success);
+}
+
+.eval-advisory-warn {
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+  color: var(--warning);
+}
+
+.eval-advisory-high-risk {
+  background: var(--danger-bg);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+
+.eval-advisory-grid {
+  display: grid;
+  gap: var(--sp-sm) var(--sp-md);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.eval-advisory-grid strong {
+  display: block;
+  font-size: var(--text-sm);
+}
+
+.eval-advisory-reasons {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.eval-advisory-reasons li {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
 .eval-chart {
   width: 100%;
   height: 260px;
@@ -452,6 +520,23 @@
 
 .eval-query-cell {
   max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eval-evidence-cell {
+  max-width: 260px;
+}
+
+.eval-evidence-cell span,
+.eval-evidence-cell small {
+  display: block;
+  line-height: 1.35;
+}
+
+.eval-evidence-cell small {
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

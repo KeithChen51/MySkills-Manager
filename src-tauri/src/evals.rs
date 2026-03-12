@@ -23,6 +23,11 @@ const TAXONOMY_TAG_PREFIX: &str = "taxonomy:";
 const DEFAULT_TRIGGER_CASE_COUNT: usize = 40;
 const DEFAULT_FUNCTIONAL_CASE_COUNT: usize = 20;
 const DEFAULT_PIPELINE_REPEATS: usize = 1;
+const ADVISORY_PASS_PRECISION_THRESHOLD: f64 = 0.80;
+const ADVISORY_PASS_RECALL_THRESHOLD: f64 = 0.75;
+const ADVISORY_HIGH_RISK_PRECISION_THRESHOLD: f64 = 0.60;
+const ADVISORY_HIGH_RISK_RECALL_THRESHOLD: f64 = 0.55;
+const ADVISORY_HIGH_RISK_DELTA_THRESHOLD: f64 = -0.05;
 const ESTIMATED_USD_PER_TRIGGER_CASE: f64 = 0.00001;
 const ESTIMATED_USD_PER_FUNCTIONAL_CASE: f64 = 0.00003;
 const EVAL_PROGRESS_EVENT: &str = "eval://pipeline-progress";
@@ -37,6 +42,12 @@ pub struct TriggerEvalResultItem {
     pub triggered_skill_name: Option<String>,
     pub pass: bool,
     pub error: Option<String>,
+    pub raw_response_path: Option<String>,
+    pub latency_ms: Option<u64>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub judge_trace_id: Option<String>,
+    pub error_type: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -71,6 +82,12 @@ pub struct FunctionalEvalResultItem {
     pub judge_rationale: Option<String>,
     pub judge_suggestions: Option<Vec<String>>,
     pub judge_source: Option<String>,
+    pub raw_response_path: Option<String>,
+    pub latency_ms: Option<u64>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub judge_trace_id: Option<String>,
+    pub error_type: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -264,11 +281,31 @@ pub struct EvalPipelineOutput {
     pub delta_vs_no_skill: Option<EvalDeltaVsNoSkill>,
     pub repeat_stats: EvalRepeatStats,
     pub run_meta: EvalRunMeta,
+    pub evidence_level: Option<String>,
+    pub advisory: Option<EvalAdvisory>,
+    pub evidence_summary: Option<EvalEvidenceSummary>,
     pub taxonomy_status: Option<String>,
     pub taxonomy_message: Option<String>,
     pub taxonomy_applied: Option<bool>,
     pub history_path: Option<String>,
     pub message: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalAdvisory {
+    pub level: String,
+    pub reasons: Vec<String>,
+    pub non_blocking: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalEvidenceSummary {
+    pub total_runs: usize,
+    pub captured_transcripts: usize,
+    pub captured_timing: usize,
+    pub captured_tokens: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -547,6 +584,14 @@ fn eval_history_dir(home: &Path, skill_name: Option<&str>) -> PathBuf {
     } else {
         base
     }
+}
+
+fn eval_pipeline_evidence_dir(home: &Path, skill_name: &str, run_id: &str) -> PathBuf {
+    let safe_run_id = sanitize_path_segment(run_id, "run");
+    let ts = now_unix_secs().unwrap_or(0);
+    eval_history_dir(home, Some(skill_name))
+        .join("evidence")
+        .join(format!("{safe_run_id}-{ts}"))
 }
 
 fn now_unix_secs() -> Result<u64, String> {
@@ -1328,10 +1373,12 @@ where
 
 fn run_trigger_eval_impl(
     skill_name: String,
+    skill_path: Option<PathBuf>,
     eval_set_path: PathBuf,
     env_type: String,
     installed_skills_dir: Option<PathBuf>,
     model: String,
+    evidence_dir: Option<PathBuf>,
     control: Option<&Arc<EvalRunControl>>,
 ) -> Result<TriggerEvalOutput, String> {
     let home = crate::root_dir::default_home_dir();
@@ -1356,6 +1403,11 @@ fn run_trigger_eval_impl(
         normalize_model(&model),
     ];
 
+    if let Some(path) = skill_path.as_ref() {
+        cmd_args.push("--skill-path".to_string());
+        cmd_args.push(path_to_utf8(path)?);
+    }
+
     if let Some(base_url) = config.base_url.as_ref() {
         cmd_args.push("--base-url".to_string());
         cmd_args.push(base_url.clone());
@@ -1363,6 +1415,11 @@ fn run_trigger_eval_impl(
 
     if let Some(dir) = installed_skills_dir {
         cmd_args.push("--installed-skills-dir".to_string());
+        cmd_args.push(path_to_utf8(&dir)?);
+    }
+
+    if let Some(dir) = evidence_dir {
+        cmd_args.push("--evidence-dir".to_string());
         cmd_args.push(path_to_utf8(&dir)?);
     }
 
@@ -1391,6 +1448,7 @@ fn run_functional_eval_impl(
     compare_mode: String,
     model: String,
     judge_models: Option<Vec<String>>,
+    evidence_dir: Option<PathBuf>,
     control: Option<&Arc<EvalRunControl>>,
 ) -> Result<FunctionalEvalOutput, String> {
     let home = crate::root_dir::default_home_dir();
@@ -1433,6 +1491,11 @@ fn run_functional_eval_impl(
             cmd_args.push("--judge-models".to_string());
             cmd_args.push(normalized.join(","));
         }
+    }
+
+    if let Some(dir) = evidence_dir {
+        cmd_args.push("--evidence-dir".to_string());
+        cmd_args.push(path_to_utf8(&dir)?);
     }
 
     let eval_case_count =
@@ -1560,6 +1623,181 @@ fn compute_trigger_metrics(results: &[TriggerEvalResultItem]) -> EvalTriggerMetr
         true_negative: tn,
         false_positive: fp,
         false_negative: fn_count,
+    }
+}
+
+fn summarize_evidence(
+    trigger_clean: &TriggerEvalOutput,
+    trigger_complex: Option<&TriggerEvalOutput>,
+    functional: &FunctionalEvalOutput,
+    functional_without_skill: Option<&FunctionalEvalOutput>,
+) -> EvalEvidenceSummary {
+    let mut total_runs = 0usize;
+    let mut captured_transcripts = 0usize;
+    let mut captured_timing = 0usize;
+    let mut captured_tokens = 0usize;
+
+    let mut ingest_trigger_rows = |rows: &[TriggerEvalResultItem]| -> () {
+        total_runs += rows.len();
+        for row in rows {
+            if row
+                .raw_response_path
+                .as_ref()
+                .is_some_and(|path| !path.trim().is_empty())
+            {
+                captured_transcripts += 1;
+            }
+            if row.latency_ms.is_some() {
+                captured_timing += 1;
+            }
+            if row.input_tokens.is_some() || row.output_tokens.is_some() {
+                captured_tokens += 1;
+            }
+        }
+    };
+
+    if let Some(rows) = trigger_clean.results.as_ref() {
+        ingest_trigger_rows(rows);
+    }
+    if let Some(extra) = trigger_complex {
+        if let Some(rows) = extra.results.as_ref() {
+            ingest_trigger_rows(rows);
+        }
+    }
+    if let Some(rows) = functional.results.as_ref() {
+        total_runs += rows.len();
+        for row in rows {
+            if row
+                .raw_response_path
+                .as_ref()
+                .is_some_and(|path| !path.trim().is_empty())
+            {
+                captured_transcripts += 1;
+            }
+            if row.latency_ms.is_some() {
+                captured_timing += 1;
+            }
+            if row.input_tokens.is_some() || row.output_tokens.is_some() {
+                captured_tokens += 1;
+            }
+        }
+    }
+    if let Some(extra) = functional_without_skill {
+        if let Some(rows) = extra.results.as_ref() {
+            total_runs += rows.len();
+            for row in rows {
+                if row
+                    .raw_response_path
+                    .as_ref()
+                    .is_some_and(|path| !path.trim().is_empty())
+                {
+                    captured_transcripts += 1;
+                }
+                if row.latency_ms.is_some() {
+                    captured_timing += 1;
+                }
+                if row.input_tokens.is_some() || row.output_tokens.is_some() {
+                    captured_tokens += 1;
+                }
+            }
+        }
+    }
+
+    EvalEvidenceSummary {
+        total_runs,
+        captured_transcripts,
+        captured_timing,
+        captured_tokens,
+    }
+}
+
+fn build_eval_advisory(
+    mode: &str,
+    metrics: &EvalTriggerMetrics,
+    functional_delta: Option<f64>,
+) -> EvalAdvisory {
+    let precision = metrics.precision;
+    let recall = metrics.recall;
+    let delta_for_gate = functional_delta.unwrap_or(0.0);
+    let has_functional_gate = mode != "quick";
+
+    let is_high_risk = precision < ADVISORY_HIGH_RISK_PRECISION_THRESHOLD
+        || recall < ADVISORY_HIGH_RISK_RECALL_THRESHOLD
+        || functional_delta.is_some_and(|delta| delta < ADVISORY_HIGH_RISK_DELTA_THRESHOLD);
+
+    let pass_trigger_gate =
+        precision >= ADVISORY_PASS_PRECISION_THRESHOLD && recall >= ADVISORY_PASS_RECALL_THRESHOLD;
+    let pass_delta_gate = !has_functional_gate || delta_for_gate >= 0.0;
+    let is_pass = !is_high_risk && pass_trigger_gate && pass_delta_gate;
+
+    let mut reasons = Vec::new();
+    if precision < ADVISORY_PASS_PRECISION_THRESHOLD {
+        reasons.push(format!(
+            "Trigger precision {:.2} is below pass threshold {:.2}.",
+            precision, ADVISORY_PASS_PRECISION_THRESHOLD
+        ));
+    }
+    if recall < ADVISORY_PASS_RECALL_THRESHOLD {
+        reasons.push(format!(
+            "Trigger recall {:.2} is below pass threshold {:.2}.",
+            recall, ADVISORY_PASS_RECALL_THRESHOLD
+        ));
+    }
+    if has_functional_gate {
+        if functional_delta.is_none() {
+            reasons.push(
+                "Functional delta unavailable; compared using trigger metrics only.".to_string(),
+            );
+        } else if delta_for_gate < 0.0 {
+            reasons.push(format!(
+                "Functional delta {:.3} indicates regression vs no-skill baseline.",
+                delta_for_gate
+            ));
+        } else {
+            reasons.push(format!(
+                "Functional delta {:.3} is non-negative vs no-skill baseline.",
+                delta_for_gate
+            ));
+        }
+    }
+
+    if is_high_risk {
+        if precision < ADVISORY_HIGH_RISK_PRECISION_THRESHOLD {
+            reasons.push(format!(
+                "Precision {:.2} is below high-risk threshold {:.2}.",
+                precision, ADVISORY_HIGH_RISK_PRECISION_THRESHOLD
+            ));
+        }
+        if recall < ADVISORY_HIGH_RISK_RECALL_THRESHOLD {
+            reasons.push(format!(
+                "Recall {:.2} is below high-risk threshold {:.2}.",
+                recall, ADVISORY_HIGH_RISK_RECALL_THRESHOLD
+            ));
+        }
+        if functional_delta.is_some_and(|delta| delta < ADVISORY_HIGH_RISK_DELTA_THRESHOLD) {
+            reasons.push(format!(
+                "Functional delta {:.3} is below high-risk threshold {:.2}.",
+                delta_for_gate, ADVISORY_HIGH_RISK_DELTA_THRESHOLD
+            ));
+        }
+    } else if is_pass {
+        reasons.push(
+            "All advisory pass thresholds are satisfied; keep this skill available.".to_string(),
+        );
+    } else {
+        reasons.push("One or more pass thresholds are not met.".to_string());
+    }
+
+    EvalAdvisory {
+        level: if is_high_risk {
+            "high_risk".to_string()
+        } else if is_pass {
+            "pass".to_string()
+        } else {
+            "warn".to_string()
+        },
+        reasons,
+        non_blocking: true,
     }
 }
 
@@ -1755,6 +1993,10 @@ fn run_eval_pipeline_impl(
         ));
     }
 
+    let evidence_root = eval_pipeline_evidence_dir(&home, &skill_name, &run_id);
+    fs::create_dir_all(&evidence_root)
+        .map_err(|e| format!("Create eval evidence dir failed: {e}"))?;
+
     let start = std::time::Instant::now();
     let mut executed_steps = 0usize;
     push_pipeline_progress(
@@ -1827,10 +2069,16 @@ fn run_eval_pipeline_impl(
         );
         let trigger_clean = run_trigger_eval_impl(
             skill_name.clone(),
+            Some(skill_path.clone()),
             trigger_eval_set_path.clone(),
             "clean".to_string(),
             installed_skills_dir.clone(),
             primary_model.clone(),
+            Some(
+                evidence_root
+                    .join(format!("repeat-{current_repeat:02}"))
+                    .join("trigger-clean"),
+            ),
             Some(&control),
         )
         .map_err(|err| {
@@ -1885,10 +2133,16 @@ fn run_eval_pipeline_impl(
             );
             let trigger_complex = run_trigger_eval_impl(
                 skill_name.clone(),
+                Some(skill_path.clone()),
                 trigger_eval_set_path.clone(),
                 "complex".to_string(),
                 installed_skills_dir.clone(),
                 primary_model.clone(),
+                Some(
+                    evidence_root
+                        .join(format!("repeat-{current_repeat:02}"))
+                        .join("trigger-complex"),
+                ),
                 Some(&control),
             )
             .map_err(|err| {
@@ -1963,6 +2217,11 @@ fn run_eval_pipeline_impl(
                 functional_compare_mode_for_mode(&mode).to_string(),
                 primary_model.clone(),
                 Some(judge_models.clone()),
+                Some(
+                    evidence_root
+                        .join(format!("repeat-{current_repeat:02}"))
+                        .join("functional-with-skill"),
+                ),
                 Some(&control),
             )
             .map_err(|err| {
@@ -2020,6 +2279,11 @@ fn run_eval_pipeline_impl(
                 "without_skill".to_string(),
                 primary_model.clone(),
                 Some(judge_models.clone()),
+                Some(
+                    evidence_root
+                        .join(format!("repeat-{current_repeat:02}"))
+                        .join("functional-without-skill"),
+                ),
                 Some(&control),
             )
             .map_err(|err| {
@@ -2119,6 +2383,19 @@ fn run_eval_pipeline_impl(
         }),
         _ => None,
     };
+    let advisory = build_eval_advisory(
+        &mode,
+        &trigger_metrics,
+        delta_vs_no_skill
+            .as_ref()
+            .map(|item| item.functional_pass_rate_delta),
+    );
+    let evidence_summary = summarize_evidence(
+        &trigger_clean,
+        trigger_complex.as_ref(),
+        &functional,
+        functional_without_skill.as_ref(),
+    );
 
     let robustness = robustness_stats.mean;
     let efficiency =
@@ -2170,6 +2447,9 @@ fn run_eval_pipeline_impl(
             elapsed_ms: start.elapsed().as_millis(),
             skill_hash: compute_skill_hash(&skill_path),
         },
+        evidence_level: Some("real".to_string()),
+        advisory: Some(advisory),
+        evidence_summary: Some(evidence_summary),
         taxonomy_status: Some(taxonomy_result.status.clone()),
         taxonomy_message: Some(taxonomy_result.message.clone()),
         taxonomy_applied: Some(taxonomy_result.applied),
@@ -2517,10 +2797,12 @@ pub async fn run_trigger_eval(
     run_eval_blocking("run_trigger_eval", timeout_secs, move || {
         run_trigger_eval_impl(
             skill_name,
+            None,
             eval_set_path,
             env_type,
             installed_skills_dir,
             model,
+            None,
             None,
         )
     })
@@ -2545,6 +2827,7 @@ pub async fn run_functional_eval(
             eval_set_path,
             compare_mode,
             model,
+            None,
             None,
             None,
         )
@@ -2776,6 +3059,18 @@ mod tests {
                 elapsed_ms: 1234,
                 skill_hash: Some("abc".to_string()),
             },
+            evidence_level: Some("real".to_string()),
+            advisory: Some(EvalAdvisory {
+                level: "pass".to_string(),
+                reasons: vec!["all good".to_string()],
+                non_blocking: true,
+            }),
+            evidence_summary: Some(EvalEvidenceSummary {
+                total_runs: 10,
+                captured_transcripts: 10,
+                captured_timing: 10,
+                captured_tokens: 10,
+            }),
             taxonomy_status: Some("skipped".to_string()),
             taxonomy_message: Some("Taxonomy already present.".to_string()),
             taxonomy_applied: Some(false),
@@ -3060,6 +3355,12 @@ mod tests {
                 triggered_skill_name: Some("myskill".to_string()),
                 pass: true,
                 error: None,
+                raw_response_path: None,
+                latency_ms: None,
+                input_tokens: None,
+                output_tokens: None,
+                judge_trace_id: None,
+                error_type: None,
             },
             TriggerEvalResultItem {
                 query: "n1".to_string(),
@@ -3068,6 +3369,12 @@ mod tests {
                 triggered_skill_name: Some("other".to_string()),
                 pass: false,
                 error: None,
+                raw_response_path: None,
+                latency_ms: None,
+                input_tokens: None,
+                output_tokens: None,
+                judge_trace_id: None,
+                error_type: None,
             },
             TriggerEvalResultItem {
                 query: "n2".to_string(),
@@ -3076,6 +3383,12 @@ mod tests {
                 triggered_skill_name: None,
                 pass: true,
                 error: None,
+                raw_response_path: None,
+                latency_ms: None,
+                input_tokens: None,
+                output_tokens: None,
+                judge_trace_id: None,
+                error_type: None,
             },
             TriggerEvalResultItem {
                 query: "p2".to_string(),
@@ -3084,6 +3397,12 @@ mod tests {
                 triggered_skill_name: None,
                 pass: false,
                 error: None,
+                raw_response_path: None,
+                latency_ms: None,
+                input_tokens: None,
+                output_tokens: None,
+                judge_trace_id: None,
+                error_type: None,
             },
         ];
         let metrics = compute_trigger_metrics(&rows);
@@ -3091,6 +3410,100 @@ mod tests {
         assert_eq!(metrics.false_positive, 1);
         assert_eq!(metrics.true_negative, 1);
         assert_eq!(metrics.false_negative, 1);
+    }
+
+    #[test]
+    fn build_eval_advisory_classifies_pass_warn_and_high_risk() {
+        let pass_metrics = EvalTriggerMetrics {
+            precision: 0.82,
+            recall: 0.78,
+            fpr: 0.1,
+            true_positive: 10,
+            true_negative: 10,
+            false_positive: 2,
+            false_negative: 3,
+        };
+        let pass = build_eval_advisory("standard", &pass_metrics, Some(0.02));
+        assert_eq!(pass.level, "pass");
+        assert!(pass.non_blocking);
+
+        let warn = build_eval_advisory("standard", &pass_metrics, Some(-0.01));
+        assert_eq!(warn.level, "warn");
+        assert!(warn.non_blocking);
+
+        let high_risk_metrics = EvalTriggerMetrics {
+            precision: 0.58,
+            recall: 0.78,
+            ..pass_metrics
+        };
+        let high_risk = build_eval_advisory("standard", &high_risk_metrics, Some(-0.10));
+        assert_eq!(high_risk.level, "high_risk");
+        assert!(high_risk.non_blocking);
+    }
+
+    #[test]
+    fn summarize_evidence_counts_paths_timing_and_tokens() {
+        let trigger_clean = TriggerEvalOutput {
+            status: "success".to_string(),
+            skill_name: Some("demo".to_string()),
+            summary: Some(TriggerEvalSummary {
+                total: 1,
+                passed: 1,
+                failed: 0,
+                pass_rate: 1.0,
+            }),
+            results: Some(vec![TriggerEvalResultItem {
+                query: "q1".to_string(),
+                should_trigger: true,
+                triggered: true,
+                triggered_skill_name: Some("demo".to_string()),
+                pass: true,
+                error: None,
+                raw_response_path: Some("/tmp/trigger.json".to_string()),
+                latency_ms: Some(120),
+                input_tokens: Some(16),
+                output_tokens: Some(8),
+                judge_trace_id: Some("trace-1".to_string()),
+                error_type: None,
+            }]),
+            message: None,
+        };
+        let functional = FunctionalEvalOutput {
+            status: "success".to_string(),
+            skill_name: Some("demo".to_string()),
+            summary: Some(FunctionalEvalSummary {
+                total: 1,
+                passed: 1,
+                failed: 0,
+                pass_rate: 1.0,
+            }),
+            dimension_scores: None,
+            results: Some(vec![FunctionalEvalResultItem {
+                case_id: "case-1".to_string(),
+                passed: true,
+                pass_rate: 1.0,
+                error: None,
+                layer1_pass: Some(true),
+                quality_score: Some(0.9),
+                dimension_scores: None,
+                judge_rationale: None,
+                judge_suggestions: None,
+                judge_source: Some("llm".to_string()),
+                raw_response_path: Some("/tmp/functional.json".to_string()),
+                latency_ms: Some(200),
+                input_tokens: Some(32),
+                output_tokens: Some(24),
+                judge_trace_id: Some("trace-2".to_string()),
+                error_type: None,
+            }]),
+            message: None,
+        };
+
+        let summary = summarize_evidence(&trigger_clean, None, &functional, None);
+        assert_eq!(summary.total_runs, 2);
+        assert_eq!(summary.captured_transcripts, 2);
+        assert_eq!(summary.captured_timing, 2);
+        assert_eq!(summary.captured_tokens, 2);
     }
 
     #[test]

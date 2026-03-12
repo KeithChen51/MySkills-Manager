@@ -47,7 +47,7 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
   const [insights, setInsights] = useState<SkillInsight[]>([]);
   const [insightsLoading, setInsightsLoading] = useState(false);
   const [insightWindow, setInsightWindow] = useState<7 | 30 | 90>(30);
-  const [sortMode, setSortMode] = useState<"name" | "usage" | "eval">("name");
+  const [sortMode, setSortMode] = useState<"name" | "usage" | "eval">("eval");
   const [detailSkillName, setDetailSkillName] = useState<string | null>(null);
   const [detailLogs, setDetailLogs] = useState<LogEntry[]>([]);
   const [detailEvalHistory, setDetailEvalHistory] = useState<EvalHistoryEntry[]>([]);
@@ -265,6 +265,7 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
           <p className="skills-installed">
             {insightsLoading ? t("skills.insights.loading") : t("skills.insights.ready", { count: insights.length })}
           </p>
+          <p className="skills-installed">{t("skills.eval.nonBlockingHint")}</p>
           {actionStatus ? <p className="skills-action-status">{actionStatus}</p> : null}
         </div>
         <div className="skills-header-actions">
