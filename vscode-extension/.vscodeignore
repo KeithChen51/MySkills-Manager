@@ -1,0 +1,9 @@
+﻿src/**
+test/**
+tsconfig.json
+**/*.map
+**/*.ts
+.vscodeignore
+README.md
+media/skillar-activity.svg
+media/skillar-logo-transparent.png

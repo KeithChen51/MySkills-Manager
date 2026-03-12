@@ -12,6 +12,7 @@ mod skills;
 mod skill_insights;
 mod stats;
 mod update_checker;
+mod vscode_extension;
 #[cfg(test)]
 mod test_utils;
 
@@ -93,6 +94,10 @@ pub fn run() {
             update_checker::save_pending_update_notes,
             update_checker::check_version_jump,
             update_checker::update_log,
+            vscode_extension::vscode_extension_install,
+            vscode_extension::vscode_extension_sync_skills_root,
+            vscode_extension::vscode_extension_status,
+            vscode_extension::vscode_extension_uninstall,
             onboarding::onboarding_get_state,
             onboarding::onboarding_set_skills_dir,
             onboarding::onboarding_import_installed_skills,

@@ -5,6 +5,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   evalGetConfig,
   evalSaveConfig,
+  getVscodeExtensionStatus,
+  installVscodeExtension,
+  syncVscodeSkillsRoot,
+  uninstallVscodeExtension,
   type EvalConfig,
   type UpdateSettings,
   onboardingGetState,
@@ -61,6 +65,10 @@ export default function SettingsPage({
   });
   const [busy, setBusy] = useState(false);
   const [apiBusy, setApiBusy] = useState(false);
+  const [vscodeInstalled, setVscodeInstalled] = useState<boolean | null>(null);
+  const [vscodeInstallBusy, setVscodeInstallBusy] = useState(false);
+  const [vscodeUninstallBusy, setVscodeUninstallBusy] = useState(false);
+  const [vscodeInstallStatus, setVscodeInstallStatus] = useState("");
   const [appVersion, setAppVersion] = useState("-");
   const [status, setStatus] = useState("");
 
@@ -71,8 +79,9 @@ export default function SettingsPage({
       setupGetImportMode(),
       evalGetConfig(),
       getVersion().catch(() => "-"),
+      getVscodeExtensionStatus().catch(() => null),
     ])
-      .then(([state, mode, evalConfig, version]) => {
+      .then(([state, mode, evalConfig, version, vscodeStatus]) => {
         setSkillsDir(state.skillsDir);
         setImportMode(mode);
         setApiConfig({
@@ -82,6 +91,11 @@ export default function SettingsPage({
           defaultModel: evalConfig.defaultModel || "gpt-4o-mini",
         });
         setAppVersion(version);
+        if (vscodeStatus) {
+          setVscodeInstalled(vscodeStatus.installed);
+        } else {
+          setVscodeInstalled(null);
+        }
         setStatus("");
       })
       .catch((error: unknown) => {
@@ -125,7 +139,14 @@ export default function SettingsPage({
           throw error;
         }
       }
-      setStatus(`${t("tools.path.saved")} (${result.skills.length})`);
+      let syncNote = "";
+      try {
+        const syncResult = await syncVscodeSkillsRoot(normalized);
+        syncNote = ` ${t("settings.vscode.sync.done", { path: syncResult.settingsPath })}`;
+      } catch (syncError: unknown) {
+        syncNote = ` ${t("settings.vscode.sync.failed")}: ${String(syncError)}`;
+      }
+      setStatus(`${t("tools.path.saved")} (${result.skills.length}).${syncNote}`);
       onSkillsDirChanged();
     } catch (error: unknown) {
       setStatus(formatStatusError(error, t));
@@ -151,6 +172,69 @@ export default function SettingsPage({
       setStatus(`${t("settings.evalConfig.failed")}: ${String(error)}`);
     } finally {
       setApiBusy(false);
+    }
+  }
+
+  async function handleInstallVscodeExtension() {
+    if (!skillsDir.trim()) {
+      const message = formatStatusError("skills dir is required", t);
+      setStatus(message);
+      setVscodeInstallStatus(message);
+      return;
+    }
+
+    if (vscodeInstalled) {
+      const installedMessage = t("settings.vscode.status.installed");
+      setVscodeInstallStatus(installedMessage);
+      setStatus(installedMessage);
+      return;
+    }
+
+    setVscodeInstallBusy(true);
+    setVscodeInstallStatus(t("settings.vscode.installing"));
+    setStatus(t("settings.vscode.installing"));
+    try {
+      const result = await installVscodeExtension(skillsDir);
+      const statusResult = await getVscodeExtensionStatus();
+      setVscodeInstalled(statusResult.installed);
+      const message = `${t("settings.vscode.install.done", {
+        path: result.settingsPath,
+      })} (CLI: ${result.vscodeCli}) ${t("settings.vscode.install.reloadHint")}`;
+      setVscodeInstallStatus(message);
+      setStatus(message);
+    } catch (error: unknown) {
+      const message = `${t("settings.vscode.install.failed")}: ${String(error)}`;
+      setVscodeInstallStatus(message);
+      setStatus(message);
+    } finally {
+      setVscodeInstallBusy(false);
+    }
+  }
+
+  async function handleUninstallVscodeExtension() {
+    if (!vscodeInstalled) {
+      const message = t("settings.vscode.status.notInstalled");
+      setVscodeInstallStatus(message);
+      setStatus(message);
+      return;
+    }
+
+    setVscodeUninstallBusy(true);
+    const uninstallingMessage = t("settings.vscode.uninstalling");
+    setVscodeInstallStatus(uninstallingMessage);
+    setStatus(uninstallingMessage);
+    try {
+      const result = await uninstallVscodeExtension();
+      setVscodeInstalled(false);
+      const message = `${t("settings.vscode.uninstall.done")} (CLI: ${result.vscodeCli})`;
+      setVscodeInstallStatus(message);
+      setStatus(message);
+    } catch (error: unknown) {
+      const message = `${t("settings.vscode.uninstall.failed")}: ${String(error)}`;
+      setVscodeInstallStatus(message);
+      setStatus(message);
+    } finally {
+      setVscodeUninstallBusy(false);
     }
   }
 
@@ -244,6 +328,54 @@ export default function SettingsPage({
             {updateCheckBusy ? t("settings.update.checkingButton") : t("settings.update.checkButton")}
           </button>
         </div>
+      </section>
+
+      <section className="chart-card settings-card">
+        <h2 className="chart-title">{t("settings.vscode.title")}</h2>
+        <p className="settings-help">{t("settings.vscode.help")}</p>
+        <p className="settings-help">{t("settings.vscode.sharedData.note")}</p>
+        <p
+          className={`settings-help settings-vscode-installed ${
+            vscodeInstalled ? "is-installed" : "is-not-installed"
+          }`}
+        >
+          {vscodeInstalled === null
+            ? t("settings.vscode.status.checking")
+            : vscodeInstalled
+              ? t("settings.vscode.status.installed")
+              : t("settings.vscode.status.notInstalled")}
+        </p>
+        <div className="settings-row">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => void handleInstallVscodeExtension()}
+            disabled={busy || vscodeInstallBusy || vscodeUninstallBusy}
+          >
+            {vscodeInstallBusy
+              ? t("settings.vscode.installing")
+              : t("settings.vscode.install.button")}
+          </button>
+          <button
+            type="button"
+            className={`btn ${
+              vscodeInstalled
+                ? "settings-vscode-uninstall-btn"
+                : "settings-vscode-uninstall-btn-disabled"
+            }`}
+            onClick={() => void handleUninstallVscodeExtension()}
+            disabled={busy || vscodeInstallBusy || vscodeUninstallBusy || !vscodeInstalled}
+          >
+            {vscodeUninstallBusy
+              ? t("settings.vscode.uninstalling")
+              : t("settings.vscode.uninstall.button")}
+          </button>
+        </div>
+        {vscodeInstallStatus && (
+          <p className="settings-help settings-vscode-status" role="status" aria-live="polite">
+            {vscodeInstallStatus}
+          </p>
+        )}
       </section>
 
       <section className="chart-card settings-card">

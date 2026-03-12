@@ -1,0 +1,86 @@
+{
+  "name": "skillar-vscode-extension",
+  "displayName": "Skillar",
+  "description": "在 VS Code 内浏览 my-skills，并使用内置 Git 面板管理仓库。",
+  "icon": "media/skillar-icon-centered-light.png",
+  "version": "0.1.4",
+  "publisher": "keithchen51",
+  "private": true,
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:skillarSkills",
+    "onCommand:skillar.openMySkillsFolder",
+    "onCommand:skillar.refreshSkills",
+    "onCommand:skillar.openSkillReadme",
+    "onCommand:skillar.openGitView",
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "skillar.openMySkillsFolder",
+        "title": "Skillar: 打开技能目录"
+      },
+      {
+        "command": "skillar.refreshSkills",
+        "title": "Skillar: 刷新技能索引"
+      },
+      {
+        "command": "skillar.openSkillReadme",
+        "title": "Skillar: 打开技能 README"
+      },
+      {
+        "command": "skillar.openGitView",
+        "title": "Skillar: 打开 Git 面板"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "skillar",
+          "title": "Skillar",
+          "icon": "media/skillar-activity-logo.png"
+        }
+      ]
+    },
+    "views": {
+      "skillar": [
+        {
+          "id": "skillarSkills",
+          "name": "Skillar",
+          "type": "webview"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Skillar",
+      "properties": {
+        "skillar.skillsRoot": {
+          "type": "string",
+          "default": "~/my-skills",
+          "description": "my-skills 根目录路径。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "test": "tsx --test test/**/*.test.ts",
+    "lint": "tsc -p . --noEmit",
+    "package": "npm run build && vsce package --allow-missing-repository --out ../release/skillar-vscode.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^2.27.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

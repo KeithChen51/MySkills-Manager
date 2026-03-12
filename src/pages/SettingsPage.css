@@ -82,6 +82,50 @@
   padding: var(--sp-sm) var(--sp-md);
 }
 
+.settings-vscode-status {
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  padding: var(--sp-xs) var(--sp-sm);
+}
+
+.settings-vscode-installed {
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  padding: var(--sp-xs) var(--sp-sm);
+  width: fit-content;
+}
+
+.settings-vscode-installed.is-installed {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #059669;
+}
+
+.settings-vscode-installed.is-not-installed {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-card);
+  color: var(--text-secondary);
+}
+
+.settings-vscode-uninstall-btn {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+
+.settings-vscode-uninstall-btn:hover:not(:disabled) {
+  background: #b91c1c;
+  border-color: #b91c1c;
+}
+
+.settings-vscode-uninstall-btn-disabled {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-card);
+  color: var(--text-muted);
+}
+
 @media (max-width: 900px) {
   .settings-row {
     align-items: stretch;

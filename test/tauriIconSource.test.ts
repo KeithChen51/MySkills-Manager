@@ -15,6 +15,6 @@ test("desktop build syncs tauri icons from design-pack centered light logo first
   );
   assert.equal(
     scripts["build:desktop"],
-    "npm run sync:tauri-icons && cargo tauri build",
+    "npm run sync:tauri-icons && npm run vscode:resource && cargo tauri build",
   );
 });

@@ -399,6 +399,30 @@ export type OnboardingImportSkillsResult = {
   tools: ToolImportSummary[];
 };
 
+export type VscodeExtensionInstallResult = {
+  success: boolean;
+  vsixPath: string;
+  vscodeCli: string;
+  settingsPath: string;
+};
+
+export type VscodeSettingsSyncResult = {
+  success: boolean;
+  settingsPath: string;
+  skillsDir: string;
+};
+
+export type VscodeExtensionStatusResult = {
+  installed: boolean;
+  detectedBy: string;
+  vscodeCli?: string;
+};
+
+export type VscodeExtensionUninstallResult = {
+  success: boolean;
+  vscodeCli: string;
+};
+
 export type UpdateSettings = {
   auto_check: boolean;
   last_check_time: number;
@@ -1067,6 +1091,32 @@ export async function setupGetImportMode(): Promise<string> {
 
 export async function setupSetImportMode(mode: string): Promise<SetupMutationResult> {
   return invokeWithError<SetupMutationResult>("setup_set_import_mode", { mode });
+}
+
+export async function installVscodeExtension(
+  skillsDir: string,
+): Promise<VscodeExtensionInstallResult> {
+  return invokeWithError<VscodeExtensionInstallResult>("vscode_extension_install", {
+    skillsDir,
+    skills_dir: skillsDir,
+  });
+}
+
+export async function syncVscodeSkillsRoot(
+  skillsDir: string,
+): Promise<VscodeSettingsSyncResult> {
+  return invokeWithError<VscodeSettingsSyncResult>("vscode_extension_sync_skills_root", {
+    skillsDir,
+    skills_dir: skillsDir,
+  });
+}
+
+export async function getVscodeExtensionStatus(): Promise<VscodeExtensionStatusResult> {
+  return invokeWithError<VscodeExtensionStatusResult>("vscode_extension_status");
+}
+
+export async function uninstallVscodeExtension(): Promise<VscodeExtensionUninstallResult> {
+  return invokeWithError<VscodeExtensionUninstallResult>("vscode_extension_uninstall");
 }
 
 export async function shouldCheckUpdates(): Promise<boolean> {
