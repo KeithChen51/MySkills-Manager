@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+﻿import { useMemo, useState } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { UpdateAction, UpdateInfo } from "../updater/types";
 import "./UpdateNotification.css";
@@ -253,11 +253,23 @@ export default function UpdateNotification({
   }
 
   return (
-    <div className="update-overlay" onClick={handleOverlayClick}>
+    <div
+      className="update-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("settings.update.dialog.title")}
+      onClick={handleOverlayClick}
+    >
       <div className="update-modal chart-card" onClick={(event) => event.stopPropagation()}>
         <header className="update-header">
           <h2>{t("settings.update.dialog.title")}</h2>
-          <button type="button" className="update-close-btn" onClick={handleCloseClick}>
+          <button
+            type="button"
+            className="update-close-btn"
+            onClick={handleCloseClick}
+            aria-label={t("settings.update.dialog.close")}
+            title={t("settings.update.dialog.close")}
+          >
             ×
           </button>
         </header>
@@ -267,3 +279,4 @@ export default function UpdateNotification({
     </div>
   );
 }
+

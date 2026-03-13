@@ -1,5 +1,5 @@
-﻿import Editor from "@monaco-editor/react";
-import { useEffect, useState } from "react";
+import Editor, { loader } from "@monaco-editor/react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   setupStatus,
@@ -33,14 +33,14 @@ function formatSize(bytes: number): string {
 }
 
 function fileIcon(path: string): string {
-  if (path.endsWith(".md")) return "📄";
-  if (path.endsWith(".ts") || path.endsWith(".js") || path.endsWith(".mjs")) return "📜";
-  if (path.endsWith(".py")) return "🐍";
-  if (path.endsWith(".sh") || path.endsWith(".ps1")) return "⚙️";
-  if (path.endsWith(".json") || path.endsWith(".yaml") || path.endsWith(".yml")) return "📋";
-  if (path.endsWith(".css")) return "🎨";
-  if (path.includes("/")) return "📁";
-  return "📎";
+  if (path.endsWith(".md")) return "[MD]";
+  if (path.endsWith(".ts") || path.endsWith(".js") || path.endsWith(".mjs")) return "[JS]";
+  if (path.endsWith(".py")) return "[PY]";
+  if (path.endsWith(".sh") || path.endsWith(".ps1")) return "[SH]";
+  if (path.endsWith(".json") || path.endsWith(".yaml") || path.endsWith(".yml")) return "[CFG]";
+  if (path.endsWith(".css")) return "[CSS]";
+  if (path.includes("/")) return "[DIR]";
+  return "[FILE]";
 }
 
 export default function SkillEditor({ skill, onClose, onSaved }: Props) {
@@ -50,6 +50,31 @@ export default function SkillEditor({ skill, onClose, onSaved }: Props) {
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
   const [selectedFile, setSelectedFile] = useState("SKILL.md");
+  const [monacoReady, setMonacoReady] = useState(false);
+  const monacoConfiguredRef = useRef(false);
+
+  useEffect(() => {
+    if (monacoConfiguredRef.current) {
+      return;
+    }
+    monacoConfiguredRef.current = true;
+    let active = true;
+    void import("monaco-editor")
+      .then((monaco) => {
+        loader.config({ monaco });
+        if (active) {
+          setMonacoReady(true);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setMonacoReady(true);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     setDoc(null);
@@ -170,7 +195,7 @@ export default function SkillEditor({ skill, onClose, onSaved }: Props) {
             <input
               className="meta-input"
               value={meta?.category ?? ""}
-              placeholder="—"
+              placeholder="-"
               onChange={(e) => updateFrontmatter("category", e.target.value)}
             />
           </div>
@@ -179,13 +204,13 @@ export default function SkillEditor({ skill, onClose, onSaved }: Props) {
             <input
               className="meta-input"
               value={tags}
-              placeholder="—"
+              placeholder="-"
               onChange={(e) => updateFrontmatter("tags", tagsFromInput(e.target.value))}
             />
           </div>
           <div className="meta-field">
             <span className="meta-label">{t("editor.updatedAt")}</span>
-            <span className="meta-value">{meta?.last_updated || "—"}</span>
+            <span className="meta-value">{meta?.last_updated || "-"}</span>
           </div>
           {extraKeys.map((key) => (
             <div className="meta-field" key={key}>
@@ -202,7 +227,7 @@ export default function SkillEditor({ skill, onClose, onSaved }: Props) {
             <input
               className="meta-input"
               value={meta?.my_notes ?? ""}
-              placeholder="—"
+              placeholder="-"
               onChange={(e) => updateFrontmatter("my_notes", e.target.value)}
             />
           </div>
@@ -218,14 +243,17 @@ export default function SkillEditor({ skill, onClose, onSaved }: Props) {
             </div>
             <ul className="modal-files-list">
               {fileList.map((f) => (
-                <li
-                  key={f.path}
-                  className={`modal-files-item${f.path === selectedFile ? " active" : ""}`}
-                  onClick={() => setSelectedFile(f.path)}
-                >
-                  <span className="modal-files-icon">{fileIcon(f.path)}</span>
-                  <span className="modal-files-name">{f.path}</span>
-                  <span className="modal-files-fsize">{formatSize(f.size)}</span>
+                <li key={f.path} className="modal-files-item">
+                  <button
+                    type="button"
+                    className={`modal-files-item-btn${f.path === selectedFile ? " active" : ""}`}
+                    onClick={() => setSelectedFile(f.path)}
+                    aria-current={f.path === selectedFile ? "true" : undefined}
+                  >
+                    <span className="modal-files-icon">{fileIcon(f.path)}</span>
+                    <span className="modal-files-name">{f.path}</span>
+                    <span className="modal-files-fsize">{formatSize(f.size)}</span>
+                  </button>
                 </li>
               ))}
             </ul>
@@ -234,20 +262,27 @@ export default function SkillEditor({ skill, onClose, onSaved }: Props) {
           {/* Right: editor */}
           <div className="modal-editor">
             {selectedFile === "SKILL.md" ? (
-              <Editor
-                language="markdown"
-                options={{
-                  automaticLayout: true,
-                  fontSize: 13,
-                  minimap: { enabled: false },
-                  scrollBeyondLastLine: false,
-                  wordWrap: "on",
-                }}
-                value={doc?.body ?? ""}
-                onChange={(value) =>
-                  setDoc((prev) => (prev ? { ...prev, body: value ?? "" } : prev))
-                }
-              />
+              monacoReady ? (
+                <Editor
+                  language="markdown"
+                  options={{
+                    automaticLayout: true,
+                    fontSize: 13,
+                    minimap: { enabled: false },
+                    scrollBeyondLastLine: false,
+                    wordWrap: "on",
+                  }}
+                  value={doc?.body ?? ""}
+                  onChange={(value) =>
+                    setDoc((prev) => (prev ? { ...prev, body: value ?? "" } : prev))
+                  }
+                />
+              ) : (
+                <div className="modal-editor-placeholder">
+                  <p className="modal-editor-placeholder-file">SKILL.md</p>
+                  <p className="modal-editor-placeholder-hint">{t("editor.loading")}</p>
+                </div>
+              )
             ) : (
               <div className="modal-editor-placeholder">
                 <p className="modal-editor-placeholder-file">{selectedFile}</p>
@@ -262,3 +297,4 @@ export default function SkillEditor({ skill, onClose, onSaved }: Props) {
     </div>
   );
 }
+

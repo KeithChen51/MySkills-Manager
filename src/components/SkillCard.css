@@ -1,9 +1,10 @@
 .skill-card {
-  background: var(--bg-card);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent 42%),
+    var(--bg-card);
   border: 1px solid var(--border-card);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
-  cursor: pointer;
   display: grid;
   gap: var(--sp-md);
   min-height: 214px;
@@ -18,6 +19,24 @@
   border-color: var(--card-hover-border);
   box-shadow: var(--shadow-card-hover);
   transform: translateY(-2px);
+}
+
+.skill-card:focus-within {
+  border-color: var(--accent-outline);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.skill-card-primary-btn {
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  gap: var(--sp-md);
+  padding: 0;
+  text-align: left;
+  width: 100%;
 }
 
 .skill-card-main {
@@ -193,7 +212,7 @@
 }
 
 .skill-card-detail-btn {
-  min-height: 32px;
+  min-height: 40px;
   padding: 0 10px;
 }
 
@@ -205,13 +224,13 @@
   color: var(--text-secondary);
   cursor: pointer;
   display: inline-flex;
-  height: 32px;
+  height: 40px;
   justify-content: center;
   transition:
     background var(--transition),
     border-color var(--transition),
     color var(--transition);
-  width: 32px;
+  width: 40px;
 }
 
 .skill-card-menu-trigger:hover {
@@ -246,7 +265,7 @@
   font-size: var(--text-sm);
   font-weight: 600;
   gap: 6px;
-  min-height: 30px;
+  min-height: 40px;
   padding: 0 var(--sp-sm);
   text-align: left;
   transition: background var(--transition), color var(--transition);

@@ -63,13 +63,25 @@
 }
 
 .tool-card {
-  background: var(--bg-card);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 5%, transparent), transparent 42%),
+    var(--bg-card);
   border: 1px solid var(--border-card);
   border-radius: 18px;
   box-shadow: var(--shadow-card);
   display: grid;
   gap: var(--sp-sm);
   padding: var(--sp-md);
+  transition:
+    border-color var(--transition),
+    box-shadow var(--transition),
+    transform var(--transition-fast);
+}
+
+.tool-card:hover {
+  border-color: var(--card-hover-border);
+  box-shadow: var(--shadow-card-hover);
+  transform: translateY(-1px);
 }
 
 .tool-card-uninstalled {
@@ -204,11 +216,11 @@
   cursor: pointer;
   display: inline-flex;
   flex-shrink: 0;
-  height: 34px;
+  height: 40px;
   justify-content: flex-start;
   padding: 4px;
   transition: background var(--transition), border-color var(--transition);
-  width: 60px;
+  width: 68px;
 }
 
 .tool-switch.active {
@@ -220,14 +232,14 @@
   background: var(--switch-thumb);
   border-radius: 50%;
   display: block;
-  height: 26px;
+  height: 30px;
   box-shadow: var(--switch-thumb-shadow);
   transition: transform var(--transition);
-  width: 26px;
+  width: 30px;
 }
 
 .tool-switch.active .tool-switch-thumb {
-  transform: translateX(26px);
+  transform: translateX(30px);
 }
 
 .tool-card-divider {
@@ -346,7 +358,7 @@
 }
 
 .tool-card-action-btn {
-  min-height: 36px;
+  min-height: 40px;
 }
 
 .tool-card-health-actions {
@@ -374,7 +386,7 @@
 }
 
 .tools-form-hide-btn {
-  min-height: 36px;
+  min-height: 40px;
 }
 
 .tools-form-grid {

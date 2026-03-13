@@ -95,10 +95,10 @@
   color: var(--text-muted);
   cursor: pointer;
   display: flex;
-  height: 32px;
+  height: 40px;
   justify-content: center;
   transition: all 0.15s;
-  width: 32px;
+  width: 40px;
 }
 
 .modal-close-btn:hover {
@@ -215,19 +215,34 @@
 }
 
 .modal-files-item {
+  margin: 0;
+}
+
+.modal-files-item-btn {
   align-items: center;
+  background: transparent;
+  border: none;
+  color: inherit;
   cursor: pointer;
   display: flex;
   gap: 6px;
+  min-height: 40px;
   padding: 6px 14px;
+  text-align: left;
   transition: background 0.12s;
+  width: 100%;
 }
 
-.modal-files-item:hover {
+.modal-files-item-btn:hover {
   background: rgba(128, 128, 128, 0.08);
 }
 
-.modal-files-item.active {
+.modal-files-item-btn:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent-outline);
+  outline: none;
+}
+
+.modal-files-item-btn.active {
   background: var(--prism-aqua-bg, rgba(0, 188, 212, 0.1));
   border-left: 2px solid var(--prism-aqua, #00bcd4);
   padding-left: 12px;

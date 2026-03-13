@@ -37,9 +37,9 @@
   color: var(--text-secondary);
   cursor: pointer;
   font-size: var(--text-lg);
-  height: 32px;
+  height: 40px;
   line-height: 1;
-  width: 32px;
+  width: 40px;
 }
 
 .update-close-btn:hover {

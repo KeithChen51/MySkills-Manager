@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+﻿import { useMemo } from "react";
 import { useI18n } from "../i18n/I18nProvider";
 import type { VersionJumpInfo } from "../api/tauri";
 import "./VersionJumpNotification.css";
@@ -19,11 +19,23 @@ export default function VersionJumpNotification({ info, onClose }: Props) {
   }, [info.release_notes, info.release_notes_zh, locale]);
 
   return (
-    <div className="version-jump-overlay" onClick={onClose}>
+    <div
+      className="version-jump-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("settings.update.versionJump.title")}
+      onClick={onClose}
+    >
       <div className="version-jump-modal chart-card" onClick={(event) => event.stopPropagation()}>
         <header className="version-jump-header">
           <h2>{t("settings.update.versionJump.title")}</h2>
-          <button type="button" className="version-jump-close" onClick={onClose}>
+          <button
+            type="button"
+            className="version-jump-close"
+            onClick={onClose}
+            aria-label={t("settings.update.dialog.close")}
+            title={t("settings.update.dialog.close")}
+          >
             ×
           </button>
         </header>
@@ -49,3 +61,4 @@ export default function VersionJumpNotification({ info, onClose }: Props) {
     </div>
   );
 }
+

@@ -124,41 +124,43 @@ export default function SkillCard({
   }
 
   return (
-    <article className="skill-card" onClick={onEdit}>
-      <div className="skill-card-main">
-        <div className={`skill-card-avatar skill-card-avatar-${avatarVariant}`} aria-hidden="true">
-          <span className="skill-card-avatar-label">{avatarLabel}</span>
+    <article className="skill-card">
+      <button type="button" className="skill-card-primary-btn" onClick={onEdit} aria-label={t("skill.edit")}>
+        <div className="skill-card-main">
+          <div className={`skill-card-avatar skill-card-avatar-${avatarVariant}`} aria-hidden="true">
+            <span className="skill-card-avatar-label">{avatarLabel}</span>
+          </div>
+          <div className="skill-card-copy">
+            <h3 className="skill-card-name">{name}</h3>
+            <p className="skill-card-desc">{description || t("skill.noDesc")}</p>
+          </div>
         </div>
-        <div className="skill-card-copy">
-          <h3 className="skill-card-name">{name}</h3>
-          <p className="skill-card-desc">{description || t("skill.noDesc")}</p>
-        </div>
-      </div>
 
-      <div className="skill-card-insights">
-        <div className="skill-card-insight-row">
-          <span className="skill-card-insight-label">
-            {t("skills.insights.usage.window", { days: insightWindow })}
-          </span>
-          <strong className="skill-card-insight-value">{usageCount ?? "--"}</strong>
-          <span className={`skill-card-insight-trend ${usageTrend}`}>
-            {trendGlyph(usageTrend)} {trendText(usageTrend)}
-          </span>
+        <div className="skill-card-insights">
+          <div className="skill-card-insight-row">
+            <span className="skill-card-insight-label">
+              {t("skills.insights.usage.window", { days: insightWindow })}
+            </span>
+            <strong className="skill-card-insight-value">{usageCount ?? "--"}</strong>
+            <span className={`skill-card-insight-trend ${usageTrend}`}>
+              {trendGlyph(usageTrend)} {trendText(usageTrend)}
+            </span>
+          </div>
+          <div className="skill-card-insight-row">
+            <span className="skill-card-insight-label">{t("skills.insights.eval.passRate")}</span>
+            <strong className="skill-card-insight-value">
+              {evalPassRate === null ? "--" : `${Math.round(evalPassRate * 100)}%`}
+            </strong>
+            <span className={`skill-card-insight-trend ${evalTrendDirection}`}>
+              {trendGlyph(evalTrendDirection)} {trendText(evalTrendDirection)}
+            </span>
+          </div>
+          <div className="skill-card-insight-meta">
+            <span>{t("skills.insights.usage.lastUsed", { time: lastUsedText })}</span>
+            <span>{t("skills.insights.eval.latestStatus", { status: evalStatusText })}</span>
+          </div>
         </div>
-        <div className="skill-card-insight-row">
-          <span className="skill-card-insight-label">{t("skills.insights.eval.passRate")}</span>
-          <strong className="skill-card-insight-value">
-            {evalPassRate === null ? "--" : `${Math.round(evalPassRate * 100)}%`}
-          </strong>
-          <span className={`skill-card-insight-trend ${evalTrendDirection}`}>
-            {trendGlyph(evalTrendDirection)} {trendText(evalTrendDirection)}
-          </span>
-        </div>
-        <div className="skill-card-insight-meta">
-          <span>{t("skills.insights.usage.lastUsed", { time: lastUsedText })}</span>
-          <span>{t("skills.insights.eval.latestStatus", { status: evalStatusText })}</span>
-        </div>
-      </div>
+      </button>
 
       <div className="skill-card-divider" />
 
@@ -182,10 +184,7 @@ export default function SkillCard({
         </div>
         <button
           className="btn btn-ghost skill-card-detail-btn"
-          onClick={(event) => {
-            event.stopPropagation();
-            onViewInsights();
-          }}
+          onClick={onViewInsights}
         >
           {t("skills.insights.detail")}
         </button>
