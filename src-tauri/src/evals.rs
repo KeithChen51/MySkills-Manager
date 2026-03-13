@@ -528,6 +528,10 @@ struct EvalPipelineProgressEvent {
     total_steps: usize,
     step_name: String,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_args: Option<serde_json::Value>,
     elapsed_ms: u128,
 }
 
@@ -548,6 +552,18 @@ fn runtime_label(runtime: &PythonRuntime) -> String {
 fn run_controls_registry() -> &'static Mutex<HashMap<String, Arc<EvalRunControl>>> {
     static REGISTRY: OnceLock<Mutex<HashMap<String, Arc<EvalRunControl>>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn eval_engine_execution_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn lock_eval_engine_execution() -> std::sync::MutexGuard<'static, ()> {
+    match eval_engine_execution_lock().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 fn register_eval_run_control(run_id: &str) -> Result<Arc<EvalRunControl>, String> {
@@ -617,6 +633,37 @@ fn push_pipeline_progress(
     message: &str,
     elapsed_ms: u128,
 ) {
+    push_pipeline_progress_with_i18n(
+        app_handle,
+        run_id,
+        status,
+        current_repeat,
+        total_repeats,
+        step_index,
+        total_steps,
+        step_name,
+        message,
+        None,
+        None,
+        elapsed_ms,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_pipeline_progress_with_i18n(
+    app_handle: &tauri::AppHandle,
+    run_id: &str,
+    status: &str,
+    current_repeat: usize,
+    total_repeats: usize,
+    step_index: usize,
+    total_steps: usize,
+    step_name: &str,
+    message: &str,
+    message_key: Option<&str>,
+    message_args: Option<serde_json::Value>,
+    elapsed_ms: u128,
+) {
     emit_pipeline_progress(
         app_handle,
         EvalPipelineProgressEvent {
@@ -628,6 +675,8 @@ fn push_pipeline_progress(
             total_steps,
             step_name: step_name.to_string(),
             message: message.to_string(),
+            message_key: message_key.map(|key| key.to_string()),
+            message_args,
             elapsed_ms,
         },
     );
@@ -648,7 +697,7 @@ fn wait_if_paused_or_cancelled(
     let mut pause_notified = false;
     loop {
         if control.cancelled.load(Ordering::Relaxed) {
-            push_pipeline_progress(
+            push_pipeline_progress_with_i18n(
                 app_handle,
                 run_id,
                 "cancelled",
@@ -658,13 +707,15 @@ fn wait_if_paused_or_cancelled(
                 total_steps,
                 step_name,
                 "Evaluation cancelled by user.",
+                Some("eval.progress.cancelled"),
+                None,
                 elapsed_ms,
             );
             return Err("Evaluation cancelled by user.".to_string());
         }
         if !control.paused.load(Ordering::Relaxed) {
             if pause_notified {
-                push_pipeline_progress(
+                push_pipeline_progress_with_i18n(
                     app_handle,
                     run_id,
                     "running",
@@ -674,13 +725,15 @@ fn wait_if_paused_or_cancelled(
                     total_steps,
                     step_name,
                     "Resume requested. Continuing with next step.",
+                    Some("eval.progress.resumed"),
+                    None,
                     elapsed_ms,
                 );
             }
             return Ok(());
         }
         if !pause_notified {
-            push_pipeline_progress(
+            push_pipeline_progress_with_i18n(
                 app_handle,
                 run_id,
                 "paused",
@@ -690,6 +743,8 @@ fn wait_if_paused_or_cancelled(
                 total_steps,
                 step_name,
                 "Paused. Waiting for resume.",
+                Some("eval.progress.paused"),
+                None,
                 elapsed_ms,
             );
             pause_notified = true;
@@ -1239,6 +1294,7 @@ fn run_eval_engine(
     control: Option<&Arc<EvalRunControl>>,
     timeout_secs: u64,
 ) -> Result<std::process::Output, String> {
+    let _engine_guard = lock_eval_engine_execution();
     let workdir = resolve_python_workdir()?;
     let runtime = detect_python_runtime(&workdir)?;
     let runtime_name = runtime_label(&runtime);
@@ -1249,6 +1305,7 @@ fn run_eval_engine(
         .args(args)
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .current_dir(&workdir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -3414,7 +3471,7 @@ fn run_eval_pipeline_impl(
 
     let start = std::time::Instant::now();
     let mut executed_steps = 0usize;
-    push_pipeline_progress(
+    push_pipeline_progress_with_i18n(
         &app_handle,
         &run_id,
         "running",
@@ -3424,6 +3481,8 @@ fn run_eval_pipeline_impl(
         total_steps,
         "pipeline",
         "Evaluation pipeline started.",
+        Some("eval.progress.pipelineStarted"),
+        None,
         start.elapsed().as_millis(),
     );
     if !quick_checks.all_passed {
@@ -3600,7 +3659,7 @@ fn run_eval_pipeline_impl(
             "trigger_clean",
             start.elapsed().as_millis(),
         )?;
-        push_pipeline_progress(
+        push_pipeline_progress_with_i18n(
             &app_handle,
             &run_id,
             "running",
@@ -3610,6 +3669,8 @@ fn run_eval_pipeline_impl(
             total_steps,
             "trigger_clean",
             &format!("Round {current_repeat}/{repeats}: running trigger eval (clean)."),
+            None,
+            None,
             start.elapsed().as_millis(),
         );
         let trigger_clean = run_trigger_eval_impl(
@@ -3877,7 +3938,7 @@ fn run_eval_pipeline_impl(
             });
         }
 
-        push_pipeline_progress(
+        push_pipeline_progress_with_i18n(
             &app_handle,
             &run_id,
             "running",
@@ -3887,6 +3948,11 @@ fn run_eval_pipeline_impl(
             total_steps,
             "repeat_complete",
             &format!("Round {current_repeat}/{repeats} completed."),
+            Some("eval.progress.repeatCompleted"),
+            Some(serde_json::json!({
+                "current": current_repeat,
+                "total": repeats,
+            })),
             start.elapsed().as_millis(),
         );
     }
@@ -4043,7 +4109,7 @@ fn run_eval_pipeline_impl(
     };
 
     output.history_path = persist_pipeline_history(&home, &skill_name, &output)?;
-    push_pipeline_progress(
+    push_pipeline_progress_with_i18n(
         &app_handle,
         &run_id,
         "completed",
@@ -4053,6 +4119,8 @@ fn run_eval_pipeline_impl(
         total_steps,
         "pipeline",
         "Evaluation pipeline completed.",
+        Some("eval.progress.pipelineCompleted"),
+        None,
         start.elapsed().as_millis(),
     );
     Ok(output)
@@ -4154,21 +4222,24 @@ fn eval_generate_samples_impl(
         ));
     }
 
-    let trigger_draft = fs::read_to_string(&trigger_path)
-        .map_err(|e| format!("Read trigger sample draft failed: {e}"))?;
-    let functional_draft = fs::read_to_string(&functional_path)
-        .map_err(|e| format!("Read functional sample draft failed: {e}"))?;
+    let result = (|| -> Result<EvalSampleDrafts, String> {
+        let trigger_draft = fs::read_to_string(&trigger_path)
+            .map_err(|e| format!("Read trigger sample draft failed: {e}"))?;
+        let functional_draft = fs::read_to_string(&functional_path)
+            .map_err(|e| format!("Read functional sample draft failed: {e}"))?;
 
-    let trigger_case_count = parse_json_case_count(&trigger_draft)?;
-    let functional_case_count = parse_json_case_count(&functional_draft)?;
+        let trigger_case_count = parse_json_case_count(&trigger_draft)?;
+        let functional_case_count = parse_json_case_count(&functional_draft)?;
+
+        Ok(EvalSampleDrafts {
+            trigger_draft,
+            functional_draft,
+            trigger_count: trigger_case_count,
+            functional_count: functional_case_count,
+        })
+    })();
     let _ = fs::remove_dir_all(&output_dir);
-
-    Ok(EvalSampleDrafts {
-        trigger_draft,
-        functional_draft,
-        trigger_count: trigger_case_count,
-        functional_count: functional_case_count,
-    })
+    result
 }
 
 fn resolve_eval_dataset_path(
@@ -5550,5 +5621,58 @@ description: A skill that declares agent shape but misses openai metadata.
         assert!((stats.mean - 0.75).abs() < f64::EPSILON);
         assert!((stats.median - 0.75).abs() < f64::EPSILON);
         assert!((stats.std_dev - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn progress_event_serializes_message_key_and_args() {
+        let event = EvalPipelineProgressEvent {
+            run_id: "run-1".to_string(),
+            status: "running".to_string(),
+            current_repeat: 1,
+            total_repeats: 2,
+            step_index: 1,
+            total_steps: 4,
+            step_name: "pipeline".to_string(),
+            message: "Evaluation pipeline started.".to_string(),
+            message_key: Some("eval.progress.pipelineStarted".to_string()),
+            message_args: Some(serde_json::json!({ "current": 1, "total": 2 })),
+            elapsed_ms: 123,
+        };
+        let serialized = serde_json::to_value(event).expect("serialize progress event");
+        assert_eq!(
+            serialized
+                .get("messageKey")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default(),
+            "eval.progress.pipelineStarted"
+        );
+        assert_eq!(
+            serialized
+                .get("messageArgs")
+                .and_then(|value| value.get("current"))
+                .and_then(|value| value.as_i64())
+                .unwrap_or_default(),
+            1
+        );
+    }
+
+    #[test]
+    fn progress_event_omits_message_key_fields_when_absent() {
+        let event = EvalPipelineProgressEvent {
+            run_id: "run-2".to_string(),
+            status: "running".to_string(),
+            current_repeat: 1,
+            total_repeats: 1,
+            step_index: 1,
+            total_steps: 1,
+            step_name: "pipeline".to_string(),
+            message: "ok".to_string(),
+            message_key: None,
+            message_args: None,
+            elapsed_ms: 1,
+        };
+        let serialized = serde_json::to_value(event).expect("serialize progress event");
+        assert!(serialized.get("messageKey").is_none());
+        assert!(serialized.get("messageArgs").is_none());
     }
 }
