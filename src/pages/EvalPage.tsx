@@ -1,7 +1,7 @@
 ﻿import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import ReactECharts from "echarts-for-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import {
   evalGenerateSamples,
@@ -24,6 +24,7 @@ import {
 } from "../api/tauri";
 import KpiCard from "../components/KpiCard";
 import { useI18n } from "../i18n/I18nProvider";
+import type { MessageKey } from "../i18n/messages";
 import { useTheme } from "../theme/ThemeProvider";
 import "./EvalPage.css";
 
@@ -64,7 +65,18 @@ type EvalProgressEvent = {
   totalSteps: number;
   stepName: string;
   message: string;
+  messageKey?: string;
+  messageArgs?: Record<string, string | number | boolean>;
   elapsedMs: number;
+};
+
+const EVAL_PROGRESS_STEP_KEYS: Record<string, MessageKey> = {
+  pipeline: "eval.progress.step.pipeline",
+  quick_checks: "eval.progress.step.quickChecks",
+  trigger_clean: "eval.progress.step.triggerClean",
+  trigger_complex: "eval.progress.step.triggerComplex",
+  functional_with_skill: "eval.progress.step.functionalWithSkill",
+  functional_without_skill: "eval.progress.step.functionalWithoutSkill",
 };
 
 const MODEL_PRESETS = [
@@ -311,6 +323,14 @@ export default function EvalPage({ skills }: Props) {
   const [preflightEstimate, setPreflightEstimate] = useState<EvalPipelineEstimate | null>(null);
   const [preflightEstimateError, setPreflightEstimateError] = useState("");
   const [preflightEstimating, setPreflightEstimating] = useState(false);
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+  const [stepOverride, setStepOverride] = useState<1 | 2 | 3 | null>(null);
+  const pageRef = useRef<HTMLDivElement | null>(null);
+  const pageHeaderRef = useRef<HTMLElement | null>(null);
+  const runDockRef = useRef<HTMLElement | null>(null);
+  const [headerTopPx, setHeaderTopPx] = useState(56);
+  const [headerOffsetPx, setHeaderOffsetPx] = useState(96);
+  const [runDockOffsetPx, setRunDockOffsetPx] = useState(280);
 
   const selectedSkillMeta = useMemo(
     () => skills.find((item) => item.name === selectedSkill),
@@ -450,6 +470,7 @@ export default function EvalPage({ skills }: Props) {
       }
       setProgressEvent(payload);
       setProgressStartedAtMs(Date.now() - payload.elapsedMs);
+      setProgressElapsedMs(payload.elapsedMs);
       if (payload.status === "cancelled") {
         setStatus(t("eval.status.cancelled"));
       }
@@ -468,8 +489,7 @@ export default function EvalPage({ skills }: Props) {
   }, [t]);
 
   useEffect(() => {
-    if (!running || progressStartedAtMs === null) {
-      setProgressElapsedMs(0);
+    if (!(running || generating) || progressStartedAtMs === null) {
       return;
     }
     const updateElapsed = () => {
@@ -480,7 +500,7 @@ export default function EvalPage({ skills }: Props) {
     return () => {
       window.clearInterval(timer);
     };
-  }, [running, progressStartedAtMs]);
+  }, [running, generating, progressStartedAtMs]);
 
   useEffect(() => {
     const docPath = skillDocPath(selectedSkillMeta);
@@ -656,6 +676,9 @@ export default function EvalPage({ skills }: Props) {
   }
 
   async function handleGenerateSamples() {
+    if (generating) {
+      return;
+    }
     if (!selectedSkill) {
       setStatus(t("eval.error.selectSkill"));
       return;
@@ -671,6 +694,9 @@ export default function EvalPage({ skills }: Props) {
     }
 
     setGenerating(true);
+    setProgressEvent(null);
+    setProgressElapsedMs(0);
+    setProgressStartedAtMs(Date.now());
     setStatus(t("eval.samples.generating"));
     try {
       const drafts = await evalGenerateSamples({
@@ -696,6 +722,7 @@ export default function EvalPage({ skills }: Props) {
       setStatus(`${t("eval.error.generateFailed")}: ${String(error)}`);
     } finally {
       setGenerating(false);
+      setProgressStartedAtMs(null);
     }
   }
 
@@ -820,6 +847,7 @@ export default function EvalPage({ skills }: Props) {
     setControlBusy(false);
     setReport(null);
     setProgressEvent(null);
+    setProgressElapsedMs(0);
     setProgressStartedAtMs(Date.now());
     setShowSamples(false);
     setShowHistory(false);
@@ -973,17 +1001,17 @@ export default function EvalPage({ skills }: Props) {
       case "taxonomy":
         return t("eval.preflight.step.taxonomy");
       case "quick-taxonomy-validity":
-        return "quick-taxonomy-validity";
+        return t("eval.preflight.step.quickTaxonomyValidity");
       case "quick-structure-syntax":
-        return "quick-structure-syntax";
+        return t("eval.preflight.step.quickStructureSyntax");
       case "quick-generation-guardrail":
-        return "quick-generation-guardrail";
+        return t("eval.preflight.step.quickGenerationGuardrail");
       case "quick-ui-metadata-consistency":
-        return "quick-ui-metadata-consistency";
+        return t("eval.preflight.step.quickUiMetadataConsistency");
       case "quick-script-smoke":
-        return "quick-script-smoke";
+        return t("eval.preflight.step.quickScriptSmoke");
       case "quick-trigger-bucket-coverage":
-        return "quick-trigger-bucket-coverage";
+        return t("eval.preflight.step.quickTriggerBucketCoverage");
       case "trigger-clean":
         return t("eval.preflight.step.triggerClean");
       case "trigger-complex":
@@ -993,7 +1021,7 @@ export default function EvalPage({ skills }: Props) {
       case "functional-without-skill":
         return t("eval.preflight.step.functionalWithoutSkill");
       case "auditability-check":
-        return "auditability-check";
+        return t("eval.preflight.step.auditabilityCheck");
       default:
         return stepKey;
     }
@@ -1153,38 +1181,42 @@ export default function EvalPage({ skills }: Props) {
     if (!quickChecks && !gate) return null;
     return (
       <article className="chart-card eval-gate-card">
-        <h3 className="chart-title">Gate & Quick Checks</h3>
+        <h3 className="chart-title">{t("eval.gate.title")}</h3>
         {gate && (
           <div className="eval-gate-grid">
             <div>
-              <span className="eval-history-item-label">quick_blocking_pass</span>
-              <strong>{gate.quickBlockingPass ? "PASS" : "FAIL"}</strong>
+              <span className="eval-history-item-label">{t("eval.gate.quickBlockingPass")}</span>
+              <strong>{gate.quickBlockingPass ? t("eval.result.pass") : t("eval.result.fail")}</strong>
             </div>
             <div>
-              <span className="eval-history-item-label">full_release_pass</span>
+              <span className="eval-history-item-label">{t("eval.gate.fullReleasePass")}</span>
               <strong>
                 {typeof gate.fullReleasePass === "boolean"
                   ? gate.fullReleasePass
-                    ? "PASS"
-                    : "FAIL"
-                  : "--"}
+                    ? t("eval.result.pass")
+                    : t("eval.result.fail")
+                  : naLabel}
               </strong>
             </div>
             <div>
-              <span className="eval-history-item-label">partial_release</span>
+              <span className="eval-history-item-label">{t("eval.gate.partialRelease")}</span>
               <strong>
-                {typeof gate.partialRelease === "boolean" ? (gate.partialRelease ? "YES" : "NO") : "--"}
+                {typeof gate.partialRelease === "boolean"
+                  ? gate.partialRelease
+                    ? t("eval.option.yes")
+                    : t("eval.option.no")
+                  : naLabel}
               </strong>
             </div>
             <div>
-              <span className="eval-history-item-label">failed_modules</span>
-              <strong>{gate.failedModules.length > 0 ? gate.failedModules.join(", ") : "--"}</strong>
+              <span className="eval-history-item-label">{t("eval.gate.failedModules")}</span>
+              <strong>{gate.failedModules.length > 0 ? gate.failedModules.join(", ") : naLabel}</strong>
             </div>
           </div>
         )}
         {quickChecks && (
           <div className="eval-quick-check-list">
-            <span className="eval-history-item-label">Stage0 quick checks</span>
+            <span className="eval-history-item-label">{t("eval.gate.quickChecksStage0")}</span>
             <ul>
               {quickChecks.checks.map((item) => (
                 <li key={item.key} className={item.passed ? "eval-quick-pass" : "eval-quick-fail"}>
@@ -1216,8 +1248,12 @@ export default function EvalPage({ skills }: Props) {
               <span className="eval-history-item-label">
                 {resolveModuleTitle(item.key, item.title)}
               </span>
-              <strong>{item.status.toUpperCase()}</strong>
-              {typeof item.score === "number" && <span>score: {Math.round(item.score * 100)}%</span>}
+              <strong>{resolveResultLabel(item.status)}</strong>
+              {typeof item.score === "number" && (
+                <span>
+                  {t("eval.modules.score")}: {Math.round(item.score * 100)}%
+                </span>
+              )}
               {item.message && <small>{item.message}</small>}
             </div>
           ))}
@@ -1231,38 +1267,38 @@ export default function EvalPage({ skills }: Props) {
     if (!economics) return null;
     return (
       <article className="chart-card eval-economics-card">
-        <h3 className="chart-title">Economics</h3>
+        <h3 className="chart-title">{t("eval.economics.title")}</h3>
         <div className="eval-economics-grid">
           <div>
-            <span className="eval-history-item-label">Gross time saved (ms)</span>
+            <span className="eval-history-item-label">{t("eval.economics.grossTimeSavedMs")}</span>
             <strong>{Math.round(economics.grossTimeSavedMs)}</strong>
           </div>
           <div>
-            <span className="eval-history-item-label">Gross token saved</span>
+            <span className="eval-history-item-label">{t("eval.economics.grossTokenSaved")}</span>
             <strong>{Math.round(economics.grossTokenSaved)}</strong>
           </div>
           <div>
-            <span className="eval-history-item-label">Negative time waste (ms)</span>
+            <span className="eval-history-item-label">{t("eval.economics.negativeTimeWasteMs")}</span>
             <strong>{Math.round(economics.negativeTimeWasteMs)}</strong>
           </div>
           <div>
-            <span className="eval-history-item-label">Negative token waste</span>
+            <span className="eval-history-item-label">{t("eval.economics.negativeTokenWaste")}</span>
             <strong>{Math.round(economics.negativeTokenWaste)}</strong>
           </div>
           <div>
-            <span className="eval-history-item-label">Net time saved (ms)</span>
+            <span className="eval-history-item-label">{t("eval.economics.netTimeSavedMs")}</span>
             <strong>{Math.round(economics.netTimeSavedMs)}</strong>
           </div>
           <div>
-            <span className="eval-history-item-label">Net token saved</span>
+            <span className="eval-history-item-label">{t("eval.economics.netTokenSaved")}</span>
             <strong>{Math.round(economics.netTokenSaved)}</strong>
           </div>
           <div>
-            <span className="eval-history-item-label">Net USD</span>
-            <strong>{typeof economics.netUsd === "number" ? economics.netUsd.toFixed(4) : "--"}</strong>
+            <span className="eval-history-item-label">{t("eval.economics.netUsd")}</span>
+            <strong>{typeof economics.netUsd === "number" ? economics.netUsd.toFixed(4) : naLabel}</strong>
           </div>
           <div>
-            <span className="eval-history-item-label">Pairs</span>
+            <span className="eval-history-item-label">{t("eval.economics.pairs")}</span>
             <strong>{`${economics.evaluatedPairs}/${economics.baselineSamples}`}</strong>
           </div>
         </div>
@@ -1387,21 +1423,21 @@ export default function EvalPage({ skills }: Props) {
               {results.map((item, index) => (
                 <tr key={`${item.query}-${index}`} className={item.pass ? "" : "eval-row-fail"}>
                   <td className="eval-query-cell">{item.query}</td>
-                  <td>{item.shouldTrigger ? "Yes" : "No"}</td>
-                  <td>{item.triggered ? "Yes" : "No"}</td>
-                  <td>{item.triggeredSkillName ?? "-"}</td>
+                  <td>{item.shouldTrigger ? t("eval.option.yes") : t("eval.option.no")}</td>
+                  <td>{item.triggered ? t("eval.option.yes") : t("eval.option.no")}</td>
+                  <td>{item.triggeredSkillName ?? naLabel}</td>
                   <td className="eval-evidence-cell">
                     <span>
-                      {(typeof item.latencyMs === "number" ? `${item.latencyMs}ms` : "--")} /{" "}
-                      {formatTokenPair(item.inputTokens, item.outputTokens)} tok
+                      {(typeof item.latencyMs === "number" ? `${item.latencyMs}ms` : naLabel)} /{" "}
+                      {formatTokenPair(item.inputTokens, item.outputTokens)} {t("eval.table.tokenPairSuffix")}
                     </span>
                     <small title={item.rawResponsePath ?? undefined}>
-                      {item.rawResponsePath ? compactPath(item.rawResponsePath) : "--"}
+                      {item.rawResponsePath ? compactPath(item.rawResponsePath) : naLabel}
                     </small>
                   </td>
                   <td>
                     <span className={`eval-badge ${item.pass ? "eval-badge-pass" : "eval-badge-fail"}`}>
-                      {item.pass ? "PASS" : "FAIL"}
+                      {item.pass ? t("eval.result.pass") : t("eval.result.fail")}
                     </span>
                   </td>
                 </tr>
@@ -1465,25 +1501,25 @@ export default function EvalPage({ skills }: Props) {
                 <tr key={item.caseId} className={item.passed ? "" : "eval-row-fail"}>
                   <td>{item.caseId}</td>
                   <td>{Math.round(item.passRate * 100)}%</td>
-                  <td>{typeof item.qualityScore === "number" ? `${Math.round(item.qualityScore * 100)}%` : "--"}</td>
-                  <td className="eval-query-cell">{item.judgeRationale || "-"}</td>
+                  <td>{typeof item.qualityScore === "number" ? `${Math.round(item.qualityScore * 100)}%` : naLabel}</td>
+                  <td className="eval-query-cell">{item.judgeRationale || naLabel}</td>
                   <td className="eval-query-cell">
                     {item.judgeSuggestions && item.judgeSuggestions.length > 0
                       ? item.judgeSuggestions.join("; ")
-                      : "-"}
+                      : naLabel}
                   </td>
                   <td className="eval-evidence-cell">
                     <span>
-                      {(typeof item.latencyMs === "number" ? `${item.latencyMs}ms` : "--")} /{" "}
-                      {formatTokenPair(item.inputTokens, item.outputTokens)} tok
+                      {(typeof item.latencyMs === "number" ? `${item.latencyMs}ms` : naLabel)} /{" "}
+                      {formatTokenPair(item.inputTokens, item.outputTokens)} {t("eval.table.tokenPairSuffix")}
                     </span>
                     <small title={item.rawResponsePath ?? undefined}>
-                      {item.rawResponsePath ? compactPath(item.rawResponsePath) : "--"}
+                      {item.rawResponsePath ? compactPath(item.rawResponsePath) : naLabel}
                     </small>
                   </td>
                   <td>
                     <span className={`eval-badge ${item.passed ? "eval-badge-pass" : "eval-badge-fail"}`}>
-                      {item.passed ? "PASS" : "FAIL"}
+                      {item.passed ? t("eval.result.pass") : t("eval.result.fail")}
                     </span>
                   </td>
                 </tr>
@@ -1501,180 +1537,445 @@ export default function EvalPage({ skills }: Props) {
   const totalSteps = Math.max(progressEvent?.totalSteps ?? 1, 1);
   const currentStep = Math.min(progressEvent?.stepIndex ?? 0, totalSteps);
   const progressPercent = running ? Math.round((currentStep / totalSteps) * 100) : report ? 100 : 0;
-  const progressDetail = progressEvent
-    ? `${progressEvent.message} (${progressEvent.stepIndex}/${Math.max(progressEvent.totalSteps, 1)}, ${elapsedSeconds}s)`
-    : running
-      ? t("eval.running")
+  const progressStepLabel = (stepName: string) => {
+    const messageKey = EVAL_PROGRESS_STEP_KEYS[stepName];
+    if (!messageKey) {
+      return t("eval.progress.step.unknown", { step: stepName });
+    }
+    return t(messageKey);
+  };
+  const progressMessage = progressEvent
+    ? (() => {
+        if (progressEvent.messageKey?.trim()) {
+          return t(
+            progressEvent.messageKey as MessageKey,
+            progressEvent.messageArgs as Record<string, string | number>,
+          );
+        }
+        if (progressEvent.stepName === "repeat_complete") {
+          return t("eval.progress.repeatCompleted", {
+            current: progressEvent.currentRepeat,
+            total: Math.max(progressEvent.totalRepeats, 1),
+          });
+        }
+        if (progressEvent.status === "paused") {
+          return t("eval.progress.paused");
+        }
+        if (progressEvent.status === "cancelled") {
+          return t("eval.progress.cancelled");
+        }
+        if (progressEvent.status === "completed") {
+          return t("eval.progress.pipelineCompleted");
+        }
+        if (progressEvent.status === "running" && progressEvent.stepName === "pipeline" && progressEvent.stepIndex <= 0) {
+          return t("eval.progress.pipelineStarted");
+        }
+        if (progressEvent.status === "running") {
+          return t("eval.progress.step.running", {
+            current: progressEvent.currentRepeat,
+            total: Math.max(progressEvent.totalRepeats, 1),
+            step: progressStepLabel(progressEvent.stepName),
+          });
+        }
+        if (progressEvent.status === "error") {
+          return t("eval.progress.failed", {
+            reason: progressEvent.message?.trim() || t("eval.common.na"),
+          });
+        }
+        return progressEvent.message || t("eval.running");
+      })()
+    : running || generating
+      ? status || (running ? t("eval.running") : t("eval.samples.generating"))
       : "";
+  const progressDetail = progressEvent
+    ? t("eval.progress.detail", {
+        message: progressMessage,
+        current: progressEvent.stepIndex,
+        total: Math.max(progressEvent.totalSteps, 1),
+        seconds: elapsedSeconds,
+      })
+    : progressMessage;
+  const hasSelectedSkill = selectedSkill.trim().length > 0;
+  const hasModel = model.trim().length > 0;
+  const hasTriggerDataset = triggerSetPath.trim().length > 0;
+  const hasFunctionalDataset = !requiresFunctionalByModules || functionalSetPath.trim().length > 0;
+  const repeatsValid = Number.isFinite(parsedRepeats) && parsedRepeats >= 1;
+  const budgetValue = maxCostUsdInput.trim() ? Number(maxCostUsdInput.trim()) : undefined;
+  const budgetValid =
+    budgetValue === undefined || (Number.isFinite(budgetValue) && budgetValue > 0);
+  const setupReady = hasSelectedSkill && hasModel && repeatsValid && budgetValid;
+  const datasetReady = hasTriggerDataset && hasFunctionalDataset;
+  const readyToRun = setupReady && datasetReady;
+  const autoStep: 1 | 2 | 3 = !setupReady ? 1 : !datasetReady ? 2 : 3;
+  const activeStep: 1 | 2 | 3 =
+    stepOverride === null
+      ? autoStep
+      : stepOverride === 3 && !datasetReady
+        ? 2
+        : stepOverride >= 2 && !setupReady
+          ? 1
+          : stepOverride;
+  const runBlockedReason = !hasSelectedSkill
+    ? t("eval.error.selectSkill")
+    : !hasModel
+      ? t("eval.error.modelRequired")
+      : !repeatsValid
+        ? t("eval.error.repeatsInvalid")
+        : !budgetValid
+          ? t("eval.error.maxCostInvalid")
+          : !hasTriggerDataset
+            ? t("eval.error.datasetRequired", { type: t("eval.dataset.trigger") })
+            : !hasFunctionalDataset
+            ? t("eval.error.datasetRequired", { type: t("eval.dataset.functional") })
+              : "";
+  const flowNextMessage = readyToRun
+    ? t("eval.flow.ready")
+    : t("eval.flow.next", { reason: runBlockedReason });
+  const runPrimaryLabel = running ? t("eval.running") : t("eval.run");
+  const naLabel = t("eval.common.na");
+
+  useEffect(() => {
+    if (stepOverride === null) return;
+    if (stepOverride >= 2 && !setupReady) {
+      setStepOverride(null);
+      return;
+    }
+    if (stepOverride === 3 && !datasetReady) {
+      setStepOverride(null);
+    }
+  }, [stepOverride, setupReady, datasetReady]);
+
+  useEffect(() => {
+    const headerEl = pageHeaderRef.current;
+    const dockEl = runDockRef.current;
+    const statusBarEl = document.querySelector<HTMLElement>(".app-status-bar");
+    if (!headerEl || !dockEl) return;
+
+    const updateOffsets = () => {
+      const statusBarHeight = Math.ceil(statusBarEl?.getBoundingClientRect().height ?? 0);
+      const nextHeaderTop = Math.max(0, statusBarHeight + 8);
+      const nextHeaderOffset = Math.max(
+        80,
+        nextHeaderTop + Math.ceil(headerEl.getBoundingClientRect().height) + 8,
+      );
+      const nextDockOffset = Math.max(220, Math.ceil(dockEl.getBoundingClientRect().height) + 24);
+      setHeaderTopPx((current) => (current === nextHeaderTop ? current : nextHeaderTop));
+      setHeaderOffsetPx((current) => (current === nextHeaderOffset ? current : nextHeaderOffset));
+      setRunDockOffsetPx((current) => (current === nextDockOffset ? current : nextDockOffset));
+    };
+
+    updateOffsets();
+    window.addEventListener("resize", updateOffsets);
+    if (typeof ResizeObserver === "undefined") {
+      return () => {
+        window.removeEventListener("resize", updateOffsets);
+      };
+    }
+
+    const observer = new ResizeObserver(updateOffsets);
+    observer.observe(headerEl);
+    observer.observe(dockEl);
+    if (statusBarEl) {
+      observer.observe(statusBarEl);
+    }
+    return () => {
+      window.removeEventListener("resize", updateOffsets);
+      observer.disconnect();
+    };
+  }, [activeStep, progressDetail, running, showAdvancedSettings, status, t]);
+
+  function jumpToStep(step: 1 | 2 | 3) {
+    if (step === 1) {
+      setStepOverride(1);
+      return;
+    }
+    if (step === 2) {
+      if (!setupReady) return;
+      setStepOverride(2);
+      return;
+    }
+    if (!setupReady || !datasetReady) return;
+    setStepOverride(3);
+  }
+
+  function handleSelectSkill(nextSkill: string) {
+    if (nextSkill !== selectedSkill) {
+      setTriggerSetPath("");
+      setFunctionalSetPath("");
+      setTriggerDraftRows([]);
+      setFunctionalDraftRows([]);
+      setShowSamples(false);
+      setShowHistory(false);
+      setPreflightEstimate(null);
+      setPreflightEstimateError("");
+    }
+    setSelectedSkill(nextSkill);
+    if (!nextSkill.trim()) {
+      setStepOverride(1);
+      return;
+    }
+    if (hasModel && repeatsValid && budgetValid) {
+      setStepOverride(2);
+      return;
+    }
+    setStepOverride(1);
+  }
+
+  function resolveResultLabel(status: string): string {
+    switch (status.trim().toLowerCase()) {
+      case "pass":
+        return t("eval.result.pass");
+      case "fail":
+        return t("eval.result.fail");
+      case "skipped":
+        return t("eval.result.skipped");
+      default:
+        return status.toUpperCase();
+    }
+  }
+
+  const pageStyle = useMemo<CSSProperties>(
+    () =>
+      ({
+        "--eval-header-top": `${headerTopPx}px`,
+        "--eval-header-offset": `${headerOffsetPx}px`,
+        "--eval-run-dock-offset": `${runDockOffsetPx}px`,
+      }) as CSSProperties,
+    [headerOffsetPx, headerTopPx, runDockOffsetPx],
+  );
 
   return (
-    <div className="page animate-fadein">
-      <header className="page-header">
-        <h1 className="page-title eval-page-title">
-          <span>{t("eval.title")}</span>
-          <span className="eval-beta-badge">BETA</span>
-        </h1>
+    <div className="page animate-fadein eval-page" ref={pageRef} style={pageStyle}>
+      <header className="page-header eval-page-header" ref={pageHeaderRef}>
+        <div className="eval-page-header-main">
+          <h1 className="page-title eval-page-title">
+            <span>{t("eval.title")}</span>
+            <span className="eval-beta-badge">{t("eval.beta")}</span>
+          </h1>
+          <p className="eval-page-header-hint">{flowNextMessage}</p>
+        </div>
+        <button
+          className="btn btn-primary eval-page-run-btn"
+          onClick={() => void handleRunEval()}
+          disabled={running || generating || !readyToRun}
+          title={!readyToRun ? runBlockedReason : undefined}
+        >
+          {runPrimaryLabel}
+        </button>
       </header>
 
       <article className="chart-card eval-config-card">
         <h3 className="chart-title">{t("eval.config.title")}</h3>
         <p className="eval-advisory-note">{t("eval.notice.nonBlocking")}</p>
+        <div className="eval-flow-sticky">
+          <section className="eval-flow-guide" aria-label={t("eval.flow.aria")}>
+            <div className={`eval-flow-step ${activeStep === 1 ? "is-active" : setupReady ? "is-done" : ""}`}>
+              <span className="eval-flow-index">1</span>
+              <div>
+                <strong>{t("eval.flow.step1.title")}</strong>
+                <small>{t("eval.flow.step1.desc")}</small>
+              </div>
+            </div>
+            <div className={`eval-flow-step ${activeStep === 2 ? "is-active" : datasetReady ? "is-done" : ""}`}>
+              <span className="eval-flow-index">2</span>
+              <div>
+                <strong>{t("eval.flow.step2.title")}</strong>
+                <small>{t("eval.flow.step2.desc")}</small>
+              </div>
+            </div>
+            <div className={`eval-flow-step ${activeStep === 3 ? "is-active" : report ? "is-done" : ""}`}>
+              <span className="eval-flow-index">3</span>
+              <div>
+                <strong>{t("eval.flow.step3.title")}</strong>
+                <small>{t("eval.flow.step3.desc")}</small>
+              </div>
+            </div>
+          </section>
+          <div className="eval-flow-jump">
+            {activeStep > 1 && (
+              <button className="btn btn-ghost eval-action-btn" onClick={() => jumpToStep(1)}>
+                {t("eval.flow.edit.step1")}
+              </button>
+            )}
+            {activeStep === 1 && setupReady && (
+              <button className="btn btn-ghost eval-action-btn" onClick={() => jumpToStep(2)}>
+                {t("eval.flow.continue.step2")}
+              </button>
+            )}
+            {activeStep === 2 && datasetReady && (
+              <button className="btn btn-ghost eval-action-btn" onClick={() => jumpToStep(3)}>
+                {t("eval.flow.continue.step3")}
+              </button>
+            )}
+            {activeStep === 3 && (
+              <button className="btn btn-ghost eval-action-btn" onClick={() => jumpToStep(2)}>
+                {t("eval.flow.edit.step2")}
+              </button>
+            )}
+          </div>
+        </div>
         <div className="eval-config-grid">
-          <div className="field">
-            <label className="field-label">{t("eval.config.skill")}</label>
-            <select
-              className="filter-select"
-              value={selectedSkill}
-              onChange={(e) => setSelectedSkill(e.target.value)}
-            >
-              <option value="">{t("eval.config.selectSkill")}</option>
-              {skills.map((skill) => (
-                <option key={skill.name} value={skill.name}>
-                  {skill.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          {activeStep === 1 && (
+            <>
+              <p className="eval-config-group-title">{t("eval.flow.group.step1")}</p>
+              <div className="field">
+                <label className="field-label">{t("eval.config.skill")}</label>
+                <select
+                  className="filter-select"
+                  value={selectedSkill}
+                  onChange={(e) => handleSelectSkill(e.target.value)}
+                >
+                  <option value="">{t("eval.config.selectSkill")}</option>
+                  {skills.map((skill) => (
+                    <option key={skill.name} value={skill.name}>
+                      {skill.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-          <div className="field">
-            <label className="field-label">{t("eval.config.mode")}</label>
-            <select
-              className="filter-select"
-              value={evalMode}
-              onChange={(e) => setEvalMode(e.target.value as EvalMode)}
-            >
-              <option value="quick">{t("eval.config.mode.quick")}</option>
-              <option value="full">{t("eval.config.mode.full")}</option>
-            </select>
-          </div>
+              <div className="field">
+                <label className="field-label">{t("eval.config.mode")}</label>
+                <select
+                  className="filter-select"
+                  value={evalMode}
+                  onChange={(e) => setEvalMode(e.target.value as EvalMode)}
+                >
+                  <option value="quick">{t("eval.config.mode.quick")}</option>
+                  <option value="full">{t("eval.config.mode.full")}</option>
+                </select>
+              </div>
 
-          <div className="field">
-            <label className="field-label">{t("eval.config.modelPreset")}</label>
-            <select
-              className="filter-select"
-              value={MODEL_PRESETS.includes(model) ? model : ""}
-              onChange={(e) => {
-                if (e.target.value) {
-                  setModel(e.target.value);
-                }
-              }}
-            >
-              <option value="">{t("eval.config.modelPreset.custom")}</option>
-              {MODEL_PRESETS.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </div>
+              <div className="field">
+                <label className="field-label">{t("eval.config.model")}</label>
+                <input
+                  className="field-input"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={t("eval.config.model.placeholder")}
+                />
+              </div>
 
-          <div className="field">
-            <label className="field-label">{t("eval.config.model")}</label>
-            <input
-              className="field-input"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder={t("eval.config.model.placeholder")}
-            />
-          </div>
+              <div className="eval-advanced-toggle-wrap">
+                <button
+                  className="btn btn-ghost eval-action-btn"
+                  onClick={() => setShowAdvancedSettings((prev) => !prev)}
+                  aria-expanded={showAdvancedSettings}
+                >
+                  {showAdvancedSettings ? t("eval.advanced.hide") : t("eval.advanced.show")}
+                </button>
+                <p className="eval-path-hint">{t("eval.advanced.hint")}</p>
+              </div>
 
-          <div className="field">
-            <label className="field-label">{t("eval.config.repeats")}</label>
-            <input
-              className="field-input"
-              type="number"
-              min={1}
-              step={1}
-              value={repeatsInput}
-              onChange={(e) => setRepeatsInput(e.target.value)}
-            />
-          </div>
+              {showAdvancedSettings && (
+                <>
+                  <div className="field">
+                    <label className="field-label">{t("eval.config.modelPreset")}</label>
+                    <select
+                      className="filter-select"
+                      value={MODEL_PRESETS.includes(model) ? model : ""}
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          setModel(e.target.value);
+                        }
+                      }}
+                    >
+                      <option value="">{t("eval.config.modelPreset.custom")}</option>
+                      {MODEL_PRESETS.map((item) => (
+                        <option key={item} value={item}>
+                          {item}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-          <div className="field">
-            <label className="field-label">{t("eval.config.maxCost", { currency: costCurrency })}</label>
-            <input
-              className="field-input"
-              type="number"
-              min={0}
-              step="0.01"
-              value={maxCostUsdInput}
-              onChange={(e) => setMaxCostUsdInput(e.target.value)}
-              placeholder={t("eval.config.maxCost.placeholder", { currency: costCurrency })}
-            />
-          </div>
+                  <div className="field">
+                    <label className="field-label">{t("eval.config.repeats")}</label>
+                    <input
+                      className="field-input"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={repeatsInput}
+                      onChange={(e) => setRepeatsInput(e.target.value)}
+                    />
+                  </div>
 
-          <div className="field">
-            <label className="field-label">{t("eval.dataset.trigger")}</label>
-            <div className="eval-path-row">
-              <input
-                className="field-input"
-                value={triggerSetPath}
-                onChange={(e) => setTriggerSetPath(e.target.value)}
-                placeholder="...trigger-eval.json"
-              />
-              <button className="btn btn-ghost" onClick={() => void pickEvalSet("trigger")}>
-                {t("eval.dataset.pick")}
-              </button>
-            </div>
-            <p className="eval-path-hint">
-              {t("eval.dataset.defaultPath", { path: storagePaths?.datasetDir ?? "--" })}
-            </p>
-          </div>
+                  <div className="field">
+                    <label className="field-label">{t("eval.config.maxCost", { currency: costCurrency })}</label>
+                    <input
+                      className="field-input"
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={maxCostUsdInput}
+                      onChange={(e) => setMaxCostUsdInput(e.target.value)}
+                      placeholder={t("eval.config.maxCost.placeholder", { currency: costCurrency })}
+                    />
+                  </div>
 
-          <div className="field">
-            <label className="field-label">{t("eval.dataset.functional")}</label>
-            <div className="eval-path-row">
-              <input
-                className="field-input"
-                value={functionalSetPath}
-                onChange={(e) => setFunctionalSetPath(e.target.value)}
-                placeholder="...functional-eval.json"
-                disabled={!requiresFunctionalByModules}
-              />
-              <button
-                className="btn btn-ghost"
-                onClick={() => void pickEvalSet("functional")}
-                disabled={!requiresFunctionalByModules}
-              >
-                {t("eval.dataset.pick")}
-              </button>
-            </div>
-            <p className="eval-path-hint">
-              {t("eval.history.path", { path: storagePaths?.historyDir ?? "--" })}
-            </p>
-          </div>
+                  {renderModuleSelector()}
+                </>
+              )}
+            </>
+          )}
 
-          {renderPreflightEstimate()}
-          {renderModuleSelector()}
+          {activeStep === 2 && (
+            <>
+              <p className="eval-config-group-title">{t("eval.flow.group.step2")}</p>
 
-          <div className="eval-config-actions">
-            <section className="eval-action-group" aria-label={t("eval.actions.primary")}>
-              <span className="eval-action-group-label">{t("eval.actions.primary")}</span>
-              <div className="eval-action-row">
+              <div className="field eval-field-wide">
+                <label className="field-label">{t("eval.dataset.trigger")}</label>
+                <div className="eval-path-row">
+                  <input
+                    className="field-input"
+                    value={triggerSetPath}
+                    onChange={(e) => setTriggerSetPath(e.target.value)}
+                    placeholder="...trigger-eval.json"
+                  />
+                  <button className="btn btn-ghost" onClick={() => void pickEvalSet("trigger")}>
+                    {t("eval.dataset.pick")}
+                  </button>
+                </div>
+                <p className="eval-path-hint">
+                  {t("eval.dataset.defaultPath", { path: storagePaths?.datasetDir ?? "--" })}
+                </p>
+              </div>
+
+              <div className="field eval-field-wide">
+                <label className="field-label">{t("eval.dataset.functional")}</label>
+                <div className="eval-path-row">
+                  <input
+                    className="field-input"
+                    value={functionalSetPath}
+                    onChange={(e) => setFunctionalSetPath(e.target.value)}
+                    placeholder="...functional-eval.json"
+                    disabled={!requiresFunctionalByModules}
+                  />
+                  <button
+                    className="btn btn-ghost"
+                    onClick={() => void pickEvalSet("functional")}
+                    disabled={!requiresFunctionalByModules}
+                  >
+                    {t("eval.dataset.pick")}
+                  </button>
+                </div>
+                <p className="eval-path-hint">
+                  {t("eval.history.path", { path: storagePaths?.historyDir ?? "--" })}
+                </p>
+              </div>
+
+              <div className="eval-dataset-actions">
                 <button
                   className="btn btn-ghost eval-action-btn"
                   onClick={() => void handleGenerateSamples()}
-                  disabled={running || generating || !selectedSkill}
+                  disabled={running || generating || !hasSelectedSkill || !hasModel}
                 >
-                  {generating
-                    ? t("eval.samples.generating")
-                    : t("eval.samples.generate", {
-                        trigger: DEFAULT_TRIGGER_SAMPLE_COUNT,
-                        functional: FUNCTIONAL_MIN_SAMPLES,
-                      })}
+                  {t("eval.samples.generate", {
+                    trigger: DEFAULT_TRIGGER_SAMPLE_COUNT,
+                    functional: FUNCTIONAL_MIN_SAMPLES,
+                  })}
                 </button>
-                <button
-                  className="btn btn-primary eval-action-btn eval-action-btn-run"
-                  onClick={() => void handleRunEval()}
-                  disabled={running || generating}
-                >
-                  {running ? t("eval.running") : t("eval.run")}
-                </button>
-              </div>
-            </section>
-            <section className="eval-action-group" aria-label={t("eval.actions.secondary")}>
-              <span className="eval-action-group-label">{t("eval.actions.secondary")}</span>
-              <div className="eval-action-row">
                 <button
                   className="btn btn-ghost eval-action-btn"
                   onClick={() => {
@@ -1689,27 +1990,39 @@ export default function EvalPage({ skills }: Props) {
                   {showSamples ? t("eval.samples.hide") : t("eval.samples.view")} ({triggerDraftCount}/
                   {functionalDraftCount})
                 </button>
-                <button
-                  className="btn btn-ghost eval-action-btn"
-                  onClick={() => {
-                    const next = !showHistory;
-                    setShowHistory(next);
-                    if (next && selectedSkill) {
-                      setShowSamples(false);
-                      void refreshHistory(selectedSkill);
-                    }
-                  }}
-                  disabled={!selectedSkill}
-                >
-                  {t("eval.history.view")} ({historyEntries.length})
-                </button>
               </div>
-            </section>
-          </div>
+            </>
+          )}
+
+          {activeStep === 3 && (
+            <>
+              <p className="eval-config-group-title">{t("eval.flow.group.step3")}</p>
+              {renderPreflightEstimate()}
+              <div className="eval-config-actions">
+                <span className="eval-action-group-label">{t("eval.flow.actions.secondary")}</span>
+                <div className="eval-action-row">
+                  <button
+                    className="btn btn-ghost eval-action-btn"
+                    onClick={() => {
+                      const next = !showHistory;
+                      setShowHistory(next);
+                      if (next && selectedSkill) {
+                        setShowSamples(false);
+                        void refreshHistory(selectedSkill);
+                      }
+                    }}
+                    disabled={!selectedSkill}
+                  >
+                    {t("eval.history.view")} ({historyEntries.length})
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </article>
 
-      <article className="eval-run-dock">
+      <article className="eval-run-dock" ref={runDockRef}>
         <div className="eval-run-dock-head">
           <h3 className="chart-title">{t("eval.runDock.title")}</h3>
           <div className="eval-run-dock-actions">
@@ -1751,7 +2064,18 @@ export default function EvalPage({ skills }: Props) {
           </span>
           <span>{t("eval.runDock.elapsed", { seconds: elapsedSeconds })}</span>
         </div>
-        <div className="eval-run-dock-progress" role="progressbar" aria-valuenow={progressPercent}>
+        <div
+          className="eval-run-dock-progress"
+          role="progressbar"
+          aria-label={t("eval.runDock.progressAria")}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progressPercent}
+          aria-valuetext={t("eval.runDock.steps", {
+            current: progressEvent?.stepIndex ?? 0,
+            total: progressEvent?.totalSteps ?? 0,
+          })}
+        >
           <span style={{ width: `${progressPercent}%` }} />
         </div>
       </article>
@@ -1819,7 +2143,7 @@ export default function EvalPage({ skills }: Props) {
                           <th>#</th>
                           <th>{t("eval.table.query")}</th>
                           <th>{t("eval.table.expected")}</th>
-                          <th>Bucket</th>
+                          <th>{t("eval.table.bucket")}</th>
                           <th>{t("eval.samples.actions")}</th>
                         </tr>
                       </thead>
@@ -2004,12 +2328,6 @@ export default function EvalPage({ skills }: Props) {
             </div>
           </article>
         </div>
-      )}
-
-      {status && (
-        <p className="settings-status" role="status" aria-live="polite">
-          {status}
-        </p>
       )}
 
       {showHistory && selectedSkill && (
