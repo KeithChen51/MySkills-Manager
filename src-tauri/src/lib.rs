@@ -8,13 +8,13 @@ mod root_dir;
 mod router_seed;
 mod rules;
 mod setup;
-mod skills;
 mod skill_insights;
+mod skills;
 mod stats;
-mod update_checker;
-mod vscode_extension;
 #[cfg(test)]
 mod test_utils;
+mod update_checker;
+mod vscode_extension;
 
 #[tauri::command]
 fn app_ping() -> String {
@@ -47,6 +47,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_ping,
             skills::skills_list,
+            skills::skills_rescan_shape_tags,
             skill_insights::skills_get_insights,
             skills::skills_get_content,
             skills::skills_save_content,
@@ -104,6 +105,7 @@ pub fn run() {
             onboarding::onboarding_complete,
             evals::eval_get_config,
             evals::eval_get_storage_paths,
+            evals::eval_estimate_pipeline,
             evals::eval_list_history,
             evals::eval_load_history,
             evals::eval_save_config,

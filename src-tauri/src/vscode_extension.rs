@@ -305,7 +305,11 @@ fn vscode_settings_path_with_home(home: &Path) -> PathBuf {
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        return home.join(".config").join("Code").join("User").join("settings.json");
+        return home
+            .join(".config")
+            .join("Code")
+            .join("User")
+            .join("settings.json");
     }
 }
 
@@ -319,8 +323,8 @@ fn read_settings_object(path: &Path) -> Result<Map<String, Value>, String> {
         return Ok(Map::new());
     }
 
-    let parsed =
-        serde_json::from_str::<Value>(&raw).map_err(|e| format!("Parse VS Code settings failed: {e}"))?;
+    let parsed = serde_json::from_str::<Value>(&raw)
+        .map_err(|e| format!("Parse VS Code settings failed: {e}"))?;
     let object = parsed
         .as_object()
         .ok_or_else(|| "VS Code settings JSON root must be an object".to_string())?;
@@ -642,10 +646,16 @@ fn normalize_skills_dir(skills_dir: &str) -> Result<PathBuf, String> {
     }
     let path = PathBuf::from(normalized);
     if !path.exists() {
-        return Err(format!("skills dir does not exist: {}", path.to_string_lossy()));
+        return Err(format!(
+            "skills dir does not exist: {}",
+            path.to_string_lossy()
+        ));
     }
     if !path.is_dir() {
-        return Err(format!("skills dir is not a directory: {}", path.to_string_lossy()));
+        return Err(format!(
+            "skills dir is not a directory: {}",
+            path.to_string_lossy()
+        ));
     }
     Ok(fs::canonicalize(&path).unwrap_or(path))
 }
@@ -923,19 +933,28 @@ mod tests {
     #[test]
     fn extension_list_contains_matches_exact_id() {
         let raw = "foo.bar\nkeithchen51.skillar-vscode-extension\n";
-        assert!(extension_list_contains(raw, "keithchen51.skillar-vscode-extension"));
+        assert!(extension_list_contains(
+            raw,
+            "keithchen51.skillar-vscode-extension"
+        ));
     }
 
     #[test]
     fn extension_list_contains_matches_id_with_version_suffix() {
         let raw = "foo.bar@1.0.0\nkeithchen51.skillar-vscode-extension@0.1.0\n";
-        assert!(extension_list_contains(raw, "keithchen51.skillar-vscode-extension"));
+        assert!(extension_list_contains(
+            raw,
+            "keithchen51.skillar-vscode-extension"
+        ));
     }
 
     #[test]
     fn extension_list_contains_is_case_insensitive() {
         let raw = "KEITHCHEN51.SKILLAR-VSCODE-EXTENSION\n";
-        assert!(extension_list_contains(raw, "keithchen51.skillar-vscode-extension"));
+        assert!(extension_list_contains(
+            raw,
+            "keithchen51.skillar-vscode-extension"
+        ));
     }
 
     #[test]
@@ -975,10 +994,8 @@ mod tests {
         let home = temp_home();
         let extension_dir = home.join(".vscode").join("extensions");
         fs::create_dir_all(&extension_dir).expect("create extension dir");
-        fs::create_dir_all(
-            extension_dir.join("keithchen51.skillar-vscode-extension-0.1.1"),
-        )
-        .expect("create extension folder");
+        fs::create_dir_all(extension_dir.join("keithchen51.skillar-vscode-extension-0.1.1"))
+            .expect("create extension folder");
 
         assert!(extension_installed_in_home(
             &home,
@@ -1010,10 +1027,8 @@ mod tests {
         let home = temp_home();
         let extension_dir = home.join(".vscode").join("extensions");
         fs::create_dir_all(&extension_dir).expect("create extension dir");
-        fs::create_dir_all(
-            extension_dir.join("keithchen51.skillar-vscode-extension-0.1.1"),
-        )
-        .expect("create extension folder");
+        fs::create_dir_all(extension_dir.join("keithchen51.skillar-vscode-extension-0.1.1"))
+            .expect("create extension folder");
 
         let status = vscode_extension_status_with_home(&home);
         assert!(status.installed);
@@ -1073,12 +1088,13 @@ mod tests {
     fn find_preferred_existing_vsix_path_returns_newest_candidate() {
         let home = temp_home();
         fs::create_dir_all(&home).expect("create home dir");
-        let older = home.join("src-tauri").join("resources").join("skillar-vscode.vsix");
+        let older = home
+            .join("src-tauri")
+            .join("resources")
+            .join("skillar-vscode.vsix");
         let newer = home.join("release").join("skillar-vscode.vsix");
-        fs::create_dir_all(older.parent().expect("older parent"))
-            .expect("create parent");
-        fs::create_dir_all(newer.parent().expect("newer parent"))
-            .expect("create parent");
+        fs::create_dir_all(older.parent().expect("older parent")).expect("create parent");
+        fs::create_dir_all(newer.parent().expect("newer parent")).expect("create parent");
         fs::write(&older, "older").expect("write older vsix");
         std::thread::sleep(std::time::Duration::from_millis(20));
         fs::write(&newer, "newer").expect("write newer vsix");
@@ -1098,11 +1114,15 @@ mod tests {
     #[test]
     fn is_supported_vscode_cli_command_filters_gui_executables() {
         assert!(is_supported_vscode_cli_command("code.cmd"));
-        assert!(is_supported_vscode_cli_command("C:\\Tools\\Code\\bin\\code.cmd"));
+        assert!(is_supported_vscode_cli_command(
+            "C:\\Tools\\Code\\bin\\code.cmd"
+        ));
         assert!(is_supported_vscode_cli_command("code"));
 
         assert!(!is_supported_vscode_cli_command(""));
-        assert!(!is_supported_vscode_cli_command("C:\\Tools\\Code\\Code.exe"));
+        assert!(!is_supported_vscode_cli_command(
+            "C:\\Tools\\Code\\Code.exe"
+        ));
         assert!(!is_supported_vscode_cli_command("Code.exe"));
         assert!(!is_supported_vscode_cli_command("notepad.exe"));
     }

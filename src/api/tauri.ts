@@ -111,6 +111,12 @@ export type SkillDeleteEverywhereResult = {
   failedRoots: SkillDeleteFailure[];
 };
 
+export type SkillShapeTagScanResult = {
+  scannedSkills: number;
+  updatedEntries: number;
+  indexPath: string;
+};
+
 export type RulesContent = {
   content: string;
 };
@@ -445,6 +451,8 @@ export type UpdateSettings = {
   last_run_version: string;
 };
 
+export type CostCurrency = "USD" | "CNY";
+
 export type VersionJumpInfo = {
   previous_version: string;
   current_version: string;
@@ -457,6 +465,7 @@ export type EvalConfig = {
   provider: string;
   baseUrl?: string;
   defaultModel: string;
+  costCurrency: CostCurrency;
 };
 
 type TriggerEvalResultItemRaw = {
@@ -680,12 +689,53 @@ export type EvalDimensionScores = {
 
 export type EvalCostEstimate = {
   estimatedUsd: number;
+  estimatedUsdMin?: number;
+  estimatedUsdMax?: number;
   actualUsdEstimate: number;
   triggerCases: number;
   functionalCases: number;
   apiCallsEstimate: number;
   budgetLimitUsd?: number;
   budgetExceeded: boolean;
+};
+
+export type EvalEstimateStep = {
+  key: string;
+  title: string;
+  stage?: string;
+  moduleKey?: EvalModuleKey;
+  caseCount: number;
+  runs: number;
+  llmCalls: number;
+  estimatedInputTokens: number;
+  estimatedOutputTokens: number;
+  estimatedTotalTokens: number;
+  estimatedSeconds: number;
+};
+
+export type EvalModuleKey =
+  | "trigger_accuracy"
+  | "execution_correctness"
+  | "robustness_security"
+  | "economics"
+  | "auditability";
+
+export type EvalPipelineEstimate = {
+  mode: EvalPipelineMode | string;
+  model: string;
+  judgeModels: string[];
+  selectedModules: EvalModuleKey[];
+  repeats: number;
+  triggerCases: number;
+  functionalCases: number;
+  taxonomyPending: boolean;
+  estimatedInputTokens: number;
+  estimatedOutputTokens: number;
+  estimatedTotalTokens: number;
+  estimatedSeconds: number;
+  estimatedMinutes: number;
+  costEstimate: EvalCostEstimate;
+  steps: EvalEstimateStep[];
 };
 
 export type EvalDeltaVsNoSkill = {
@@ -733,14 +783,74 @@ export type EvalEvidenceSummary = {
   capturedTokens: number;
 };
 
+export type EvalQuickCheckItem = {
+  key: string;
+  title: string;
+  blocking: boolean;
+  passed: boolean;
+  message: string;
+  elapsedMs: number;
+  evidencePath?: string;
+};
+
+export type EvalTriggerBucketCoverage = {
+  minRequiredPerBucket: number;
+  positiveTrigger: number;
+  negativeTrigger: number;
+  boundaryAmbiguous: number;
+  adjacentSkillConfusion: number;
+  allBucketsMet: boolean;
+  failedBuckets: string[];
+};
+
+export type EvalQuickChecks = {
+  allPassed: boolean;
+  checks: EvalQuickCheckItem[];
+  bucketCoverage?: EvalTriggerBucketCoverage;
+};
+
+export type EvalModuleResult = {
+  key: EvalModuleKey | string;
+  title: string;
+  selected: boolean;
+  status: "pass" | "fail" | "skipped" | string;
+  passed?: boolean;
+  score?: number;
+  message?: string;
+};
+
+export type EvalGate = {
+  quickBlockingPass: boolean;
+  fullReleasePass?: boolean;
+  partialRelease?: boolean;
+  selectedModules: string[];
+  failedModules: string[];
+};
+
+export type EvalEconomics = {
+  grossTimeSavedMs: number;
+  grossTokenSaved: number;
+  negativeTimeWasteMs: number;
+  negativeTokenWaste: number;
+  netTimeSavedMs: number;
+  netTokenSaved: number;
+  netUsd?: number;
+  baselineSamples: number;
+  evaluatedPairs: number;
+};
+
 export type EvalPipelineOutput = {
   status: string;
   mode: EvalPipelineMode | string;
   summary: EvalPipelineSummary;
+  quickChecks?: EvalQuickChecks;
   triggerClean: TriggerEvalOutput;
   triggerComplex?: TriggerEvalOutput;
   functional: FunctionalEvalOutput;
   functionalWithoutSkill?: FunctionalEvalOutput;
+  moduleResults?: EvalModuleResult[];
+  gate?: EvalGate;
+  economics?: EvalEconomics;
   dimensionScores: EvalDimensionScores;
   triggerMetrics: EvalTriggerMetrics;
   costEstimate: EvalCostEstimate;
@@ -761,10 +871,14 @@ type EvalPipelineOutputRaw = {
   status: string;
   mode: EvalPipelineMode | string;
   summary: EvalPipelineSummary;
+  quickChecks?: EvalQuickChecks;
   triggerClean: TriggerEvalOutputRaw;
   triggerComplex?: TriggerEvalOutputRaw;
   functional: FunctionalEvalOutputRaw;
   functionalWithoutSkill?: FunctionalEvalOutputRaw;
+  moduleResults?: EvalModuleResult[];
+  gate?: EvalGate;
+  economics?: EvalEconomics;
   dimensionScores: EvalDimensionScores;
   triggerMetrics: EvalTriggerMetrics;
   costEstimate: EvalCostEstimate;
@@ -794,7 +908,21 @@ export type EvalPipelineRequest = {
   seed?: number;
   temperature?: number;
   maxCostUsd?: number;
+  selectedModules?: EvalModuleKey[];
   runId?: string;
+};
+
+export type EvalPipelineEstimateRequest = {
+  skillName: string;
+  skillPath: string;
+  triggerEvalSetPath: string;
+  functionalEvalSetPath: string;
+  mode: EvalPipelineMode;
+  model: string;
+  judgeModels?: string[];
+  repeats?: number;
+  maxCostUsd?: number;
+  selectedModules?: EvalModuleKey[];
 };
 
 export type EvalControlAction = "pause" | "resume" | "cancel";
@@ -870,6 +998,10 @@ export async function appPing(): Promise<string> {
 
 export async function skillsList(): Promise<SkillMeta[]> {
   return invokeWithError<SkillMeta[]>("skills_list");
+}
+
+export async function skillsRescanShapeTags(): Promise<SkillShapeTagScanResult> {
+  return invokeWithError<SkillShapeTagScanResult>("skills_rescan_shape_tags");
 }
 
 export async function skillsGetInsights(): Promise<SkillInsight[]> {
@@ -1249,6 +1381,34 @@ export async function evalGetStoragePaths(skillName?: string): Promise<EvalStora
   });
 }
 
+export async function evalEstimatePipeline(
+  request: EvalPipelineEstimateRequest,
+): Promise<EvalPipelineEstimate> {
+  return invokeWithError<EvalPipelineEstimate>(
+    "eval_estimate_pipeline",
+    {
+      skillName: request.skillName,
+      skill_name: request.skillName,
+      skillPath: request.skillPath,
+      skill_path: request.skillPath,
+      triggerEvalSetPath: request.triggerEvalSetPath,
+      trigger_eval_set_path: request.triggerEvalSetPath,
+      functionalEvalSetPath: request.functionalEvalSetPath,
+      functional_eval_set_path: request.functionalEvalSetPath,
+      mode: request.mode,
+      model: request.model,
+      judgeModels: request.judgeModels,
+      judge_models: request.judgeModels,
+      repeats: request.repeats,
+      maxCostUsd: request.maxCostUsd,
+      max_cost_usd: request.maxCostUsd,
+      selectedModules: request.selectedModules,
+      selected_modules: request.selectedModules,
+    },
+    { reportGlobal: true },
+  );
+}
+
 export async function evalListHistory(
   skillName: string,
   limit = 20,
@@ -1287,6 +1447,8 @@ export async function evalSaveConfig(config: EvalConfig): Promise<SetupMutationR
     base_url: config.baseUrl,
     defaultModel: config.defaultModel,
     default_model: config.defaultModel,
+    costCurrency: config.costCurrency,
+    cost_currency: config.costCurrency,
   });
 }
 
@@ -1338,6 +1500,8 @@ export async function runEvalPipeline(request: EvalPipelineRequest): Promise<Eva
       seed: request.seed,
       temperature: request.temperature,
       maxCostUsd: request.maxCostUsd,
+      selectedModules: request.selectedModules,
+      selected_modules: request.selectedModules,
       runId: request.runId,
       run_id: request.runId,
     },

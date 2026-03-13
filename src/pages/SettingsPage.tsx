@@ -9,6 +9,7 @@ import {
   installVscodeExtension,
   syncVscodeSkillsRoot,
   uninstallVscodeExtension,
+  type CostCurrency,
   type EvalConfig,
   type UpdateSettings,
   onboardingGetState,
@@ -45,6 +46,10 @@ function formatStatusError(
   return raw;
 }
 
+function normalizeCostCurrency(value: string | undefined): CostCurrency {
+  return value === "CNY" ? "CNY" : "USD";
+}
+
 export default function SettingsPage({
   onSkillsDirChanged,
   updaterSettings,
@@ -62,6 +67,7 @@ export default function SettingsPage({
     apiKey: "",
     provider: "openai-compatible",
     defaultModel: "gpt-4o-mini",
+    costCurrency: "USD",
   });
   const [busy, setBusy] = useState(false);
   const [apiBusy, setApiBusy] = useState(false);
@@ -89,6 +95,7 @@ export default function SettingsPage({
           provider: evalConfig.provider || "openai-compatible",
           baseUrl: evalConfig.baseUrl,
           defaultModel: evalConfig.defaultModel || "gpt-4o-mini",
+          costCurrency: normalizeCostCurrency(evalConfig.costCurrency),
         });
         setAppVersion(version);
         if (vscodeStatus) {
@@ -164,6 +171,7 @@ export default function SettingsPage({
         provider: "openai-compatible",
         baseUrl: apiConfig.baseUrl?.trim() || undefined,
         defaultModel: apiConfig.defaultModel.trim() || "gpt-4o-mini",
+        costCurrency: normalizeCostCurrency(apiConfig.costCurrency),
       };
       await evalSaveConfig(normalized);
       setApiConfig(normalized);
@@ -482,6 +490,24 @@ export default function SettingsPage({
             autoComplete="off"
             disabled={busy || apiBusy}
           />
+        </div>
+        <div className="field">
+          <label className="field-label">{t("settings.evalConfig.costCurrency")}</label>
+          <select
+            className="filter-select settings-eval-currency-select"
+            value={apiConfig.costCurrency}
+            onChange={(e) =>
+              setApiConfig((prev) => ({
+                ...prev,
+                costCurrency: normalizeCostCurrency(e.target.value),
+              }))
+            }
+            disabled={busy || apiBusy}
+          >
+            <option value="USD">{t("settings.evalConfig.costCurrency.usd")}</option>
+            <option value="CNY">{t("settings.evalConfig.costCurrency.cny")}</option>
+          </select>
+          <p className="settings-help">{t("settings.evalConfig.costCurrency.help")}</p>
         </div>
         <div className="settings-row">
           <button

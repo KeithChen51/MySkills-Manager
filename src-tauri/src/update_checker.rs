@@ -115,7 +115,8 @@ fn load_pending_update_notes_with_home(home: &Path) -> Result<Option<PendingUpda
     if !path.exists() {
         return Ok(None);
     }
-    let raw = fs::read_to_string(&path).map_err(|e| format!("Read pending update notes failed: {e}"))?;
+    let raw =
+        fs::read_to_string(&path).map_err(|e| format!("Read pending update notes failed: {e}"))?;
     if raw.trim().is_empty() {
         return Ok(None);
     }
@@ -160,8 +161,8 @@ pub fn load_update_settings_with_home(home: &Path) -> Result<UpdateSettings, Str
         return Ok(UpdateSettings::default());
     }
 
-    let parsed =
-        serde_json::from_str::<UpdateSettings>(&raw).map_err(|e| format!("Parse update settings failed: {e}"))?;
+    let parsed = serde_json::from_str::<UpdateSettings>(&raw)
+        .map_err(|e| format!("Parse update settings failed: {e}"))?;
     let normalized = normalize_settings(parsed.clone());
     if normalized != parsed {
         save_update_settings_with_home(home, &normalized)?;
@@ -169,7 +170,10 @@ pub fn load_update_settings_with_home(home: &Path) -> Result<UpdateSettings, Str
     Ok(normalized)
 }
 
-pub fn save_update_settings_with_home(home: &Path, settings: &UpdateSettings) -> Result<(), String> {
+pub fn save_update_settings_with_home(
+    home: &Path,
+    settings: &UpdateSettings,
+) -> Result<(), String> {
     ensure_config_dir_with_home(home)?;
     let normalized = normalize_settings(settings.clone());
     let content = serde_json::to_string_pretty(&normalized)
@@ -229,7 +233,9 @@ pub fn check_version_jump_with_home(home: &Path) -> Result<Option<VersionJumpInf
 
     if !is_newer_version(&current_version, &previous_version) {
         if let Ok(Some(notes)) = load_pending_update_notes_with_home(home) {
-            if notes.version == current_version || is_newer_version(&current_version, &notes.version) {
+            if notes.version == current_version
+                || is_newer_version(&current_version, &notes.version)
+            {
                 let _ = remove_pending_update_notes_file_with_home(home);
             }
         }
@@ -412,7 +418,8 @@ mod tests {
     #[test]
     fn update_last_check_time_persists_timestamp() {
         let home = temp_home();
-        save_update_settings_with_home(&home, &UpdateSettings::default()).expect("save default settings");
+        save_update_settings_with_home(&home, &UpdateSettings::default())
+            .expect("save default settings");
         update_last_check_time_with_home(&home).expect("update check time");
         let settings = load_update_settings_with_home(&home).expect("reload settings");
         assert!(settings.last_check_time > 0);
@@ -421,7 +428,8 @@ mod tests {
     #[test]
     fn check_version_jump_first_run_only_records_version() {
         let home = temp_home();
-        save_update_settings_with_home(&home, &UpdateSettings::default()).expect("save default settings");
+        save_update_settings_with_home(&home, &UpdateSettings::default())
+            .expect("save default settings");
         let jump = check_version_jump_with_home(&home).expect("check version jump");
         assert!(jump.is_none());
         let settings = load_update_settings_with_home(&home).expect("load settings");

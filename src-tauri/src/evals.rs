@@ -15,14 +15,35 @@ use tauri::Emitter;
 
 const DEFAULT_PROVIDER: &str = "openai-compatible";
 const DEFAULT_MODEL: &str = "gpt-4o-mini";
+const DEFAULT_COST_CURRENCY: &str = "USD";
 const EVAL_TIMEOUT_SECS: u64 = 300;
 const MAX_EVAL_TIMEOUT_SECS: u64 = 10800;
 const EVAL_TIMEOUT_PER_CASE_SECS: u64 = 12;
 const TAXONOMY_TIMEOUT_SECS: u64 = 180;
-const TAXONOMY_TAG_PREFIX: &str = "taxonomy:";
-const DEFAULT_TRIGGER_CASE_COUNT: usize = 40;
-const DEFAULT_FUNCTIONAL_CASE_COUNT: usize = 20;
+const SAMPLE_GENERATION_REQUEST_TIMEOUT_BASE_SECS: u64 = 120;
+const SAMPLE_GENERATION_REQUEST_TIMEOUT_PER_CASE_SECS: u64 = 6;
+const SAMPLE_GENERATION_REQUEST_TIMEOUT_MIN_SECS: u64 = 180;
+const SAMPLE_GENERATION_REQUEST_TIMEOUT_MAX_SECS: u64 = 900;
+const DEFAULT_TRIGGER_CASE_COUNT: usize = 48;
+const DEFAULT_FUNCTIONAL_CASE_COUNT: usize = 24;
 const DEFAULT_PIPELINE_REPEATS: usize = 1;
+const TRIGGER_BUCKET_MIN_SAMPLES: usize = 12;
+const TRIGGER_BUCKET_POSITIVE: &str = "positive_trigger";
+const TRIGGER_BUCKET_NEGATIVE: &str = "negative_trigger";
+const TRIGGER_BUCKET_BOUNDARY: &str = "boundary_ambiguous";
+const TRIGGER_BUCKET_ADJACENT: &str = "adjacent_skill_confusion";
+const EVAL_MODULE_TRIGGER_ACCURACY: &str = "trigger_accuracy";
+const EVAL_MODULE_EXECUTION_CORRECTNESS: &str = "execution_correctness";
+const EVAL_MODULE_ROBUSTNESS_SECURITY: &str = "robustness_security";
+const EVAL_MODULE_ECONOMICS: &str = "economics";
+const EVAL_MODULE_AUDITABILITY: &str = "auditability";
+const EVAL_ALL_MODULE_KEYS: [&str; 5] = [
+    EVAL_MODULE_TRIGGER_ACCURACY,
+    EVAL_MODULE_EXECUTION_CORRECTNESS,
+    EVAL_MODULE_ROBUSTNESS_SECURITY,
+    EVAL_MODULE_ECONOMICS,
+    EVAL_MODULE_AUDITABILITY,
+];
 const ADVISORY_PASS_PRECISION_THRESHOLD: f64 = 0.80;
 const ADVISORY_PASS_RECALL_THRESHOLD: f64 = 0.75;
 const ADVISORY_HIGH_RISK_PRECISION_THRESHOLD: f64 = 0.60;
@@ -30,6 +51,24 @@ const ADVISORY_HIGH_RISK_RECALL_THRESHOLD: f64 = 0.55;
 const ADVISORY_HIGH_RISK_DELTA_THRESHOLD: f64 = -0.05;
 const ESTIMATED_USD_PER_TRIGGER_CASE: f64 = 0.00001;
 const ESTIMATED_USD_PER_FUNCTIONAL_CASE: f64 = 0.00003;
+const ESTIMATED_USD_PER_TOKEN: f64 = 0.0000005;
+const ESTIMATED_COST_RANGE_LOW_FACTOR: f64 = 0.8;
+const ESTIMATED_COST_RANGE_HIGH_FACTOR: f64 = 1.2;
+const ESTIMATE_TRIGGER_INPUT_TOKENS_PER_CALL: usize = 900;
+const ESTIMATE_TRIGGER_OUTPUT_TOKENS_PER_CALL: usize = 40;
+const ESTIMATE_FUNCTIONAL_EXEC_INPUT_TOKENS_PER_CALL: usize = 2200;
+const ESTIMATE_FUNCTIONAL_EXEC_OUTPUT_TOKENS_PER_CALL: usize = 450;
+const ESTIMATE_FUNCTIONAL_BASELINE_INPUT_TOKENS_PER_CALL: usize = 700;
+const ESTIMATE_FUNCTIONAL_BASELINE_OUTPUT_TOKENS_PER_CALL: usize = 420;
+const ESTIMATE_JUDGE_INPUT_TOKENS_PER_CALL: usize = 1800;
+const ESTIMATE_JUDGE_OUTPUT_TOKENS_PER_CALL: usize = 180;
+const ESTIMATE_TAXONOMY_INPUT_TOKENS_PER_CALL: usize = 1600;
+const ESTIMATE_TAXONOMY_OUTPUT_TOKENS_PER_CALL: usize = 120;
+const ESTIMATE_TRIGGER_SECONDS_PER_CALL: u64 = 3;
+const ESTIMATE_FUNCTIONAL_EXEC_SECONDS_PER_CALL: u64 = 8;
+const ESTIMATE_FUNCTIONAL_BASELINE_SECONDS_PER_CALL: u64 = 6;
+const ESTIMATE_JUDGE_SECONDS_PER_CALL: u64 = 5;
+const ESTIMATE_TAXONOMY_SECONDS_PER_CALL: u64 = 8;
 const EVAL_PROGRESS_EVENT: &str = "eval://pipeline-progress";
 static EVAL_TMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -117,6 +156,7 @@ pub struct EvalConfig {
     pub provider: String,
     pub base_url: Option<String>,
     pub default_model: String,
+    pub cost_currency: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -126,6 +166,7 @@ struct RawEvalConfig {
     provider: Option<String>,
     base_url: Option<String>,
     default_model: Option<String>,
+    cost_currency: Option<String>,
 }
 
 impl Default for EvalConfig {
@@ -135,6 +176,7 @@ impl Default for EvalConfig {
             provider: DEFAULT_PROVIDER.to_string(),
             base_url: None,
             default_model: DEFAULT_MODEL.to_string(),
+            cost_currency: DEFAULT_COST_CURRENCY.to_string(),
         }
     }
 }
@@ -217,12 +259,118 @@ pub struct EvalDimensionScores {
 #[serde(rename_all = "camelCase")]
 pub struct EvalCostEstimate {
     pub estimated_usd: f64,
+    pub estimated_usd_min: Option<f64>,
+    pub estimated_usd_max: Option<f64>,
     pub actual_usd_estimate: f64,
     pub trigger_cases: usize,
     pub functional_cases: usize,
     pub api_calls_estimate: usize,
     pub budget_limit_usd: Option<f64>,
     pub budget_exceeded: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalEstimateStep {
+    pub key: String,
+    pub title: String,
+    pub stage: Option<String>,
+    pub module_key: Option<String>,
+    pub case_count: usize,
+    pub runs: usize,
+    pub llm_calls: usize,
+    pub estimated_input_tokens: usize,
+    pub estimated_output_tokens: usize,
+    pub estimated_total_tokens: usize,
+    pub estimated_seconds: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalPipelineEstimate {
+    pub mode: String,
+    pub model: String,
+    pub judge_models: Vec<String>,
+    pub selected_modules: Vec<String>,
+    pub repeats: usize,
+    pub trigger_cases: usize,
+    pub functional_cases: usize,
+    pub taxonomy_pending: bool,
+    pub estimated_input_tokens: usize,
+    pub estimated_output_tokens: usize,
+    pub estimated_total_tokens: usize,
+    pub estimated_seconds: u64,
+    pub estimated_minutes: f64,
+    pub cost_estimate: EvalCostEstimate,
+    pub steps: Vec<EvalEstimateStep>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalQuickCheckItem {
+    pub key: String,
+    pub title: String,
+    pub blocking: bool,
+    pub passed: bool,
+    pub message: String,
+    pub elapsed_ms: u128,
+    pub evidence_path: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalTriggerBucketCoverage {
+    pub min_required_per_bucket: usize,
+    pub positive_trigger: usize,
+    pub negative_trigger: usize,
+    pub boundary_ambiguous: usize,
+    pub adjacent_skill_confusion: usize,
+    pub all_buckets_met: bool,
+    pub failed_buckets: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalQuickChecks {
+    pub all_passed: bool,
+    pub checks: Vec<EvalQuickCheckItem>,
+    pub bucket_coverage: Option<EvalTriggerBucketCoverage>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalModuleResult {
+    pub key: String,
+    pub title: String,
+    pub selected: bool,
+    pub status: String,
+    pub passed: Option<bool>,
+    pub score: Option<f64>,
+    pub message: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalGate {
+    pub quick_blocking_pass: bool,
+    pub full_release_pass: Option<bool>,
+    pub partial_release: Option<bool>,
+    pub selected_modules: Vec<String>,
+    pub failed_modules: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalEconomics {
+    pub gross_time_saved_ms: f64,
+    pub gross_token_saved: f64,
+    pub negative_time_waste_ms: f64,
+    pub negative_token_waste: f64,
+    pub net_time_saved_ms: f64,
+    pub net_token_saved: f64,
+    pub net_usd: Option<f64>,
+    pub baseline_samples: usize,
+    pub evaluated_pairs: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -271,10 +419,14 @@ pub struct EvalPipelineOutput {
     pub status: String,
     pub mode: String,
     pub summary: EvalPipelineSummary,
+    pub quick_checks: Option<EvalQuickChecks>,
     pub trigger_clean: TriggerEvalOutput,
     pub trigger_complex: Option<TriggerEvalOutput>,
     pub functional: FunctionalEvalOutput,
     pub functional_without_skill: Option<FunctionalEvalOutput>,
+    pub module_results: Option<Vec<EvalModuleResult>>,
+    pub gate: Option<EvalGate>,
+    pub economics: Option<EvalEconomics>,
     pub dimension_scores: EvalDimensionScores,
     pub trigger_metrics: EvalTriggerMetrics,
     pub cost_estimate: EvalCostEstimate,
@@ -336,6 +488,22 @@ struct EnsureSkillTaxonomyResult {
     message: String,
     applied: bool,
     taxonomy: Option<SkillTaxonomyClassification>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SkillTaxonomyRegistryEntry {
+    skill_name: String,
+    skill_path: String,
+    taxonomy: SkillTaxonomyClassification,
+    updated_at: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+struct SkillTaxonomyRegistry {
+    version: u32,
+    entries: HashMap<String, SkillTaxonomyRegistryEntry>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -542,6 +710,96 @@ fn eval_config_file(home: &Path) -> PathBuf {
     crate::root_dir::app_config_dir(home).join("eval-config.json")
 }
 
+fn taxonomy_registry_file(home: &Path) -> PathBuf {
+    crate::root_dir::app_config_dir(home).join("skill-taxonomy-index.json")
+}
+
+fn normalize_skill_path_key(skill_path: &Path) -> String {
+    let absolute = if skill_path.is_absolute() {
+        skill_path.to_path_buf()
+    } else {
+        crate::root_dir::default_root_dir().join(skill_path)
+    };
+    let canonical = absolute.canonicalize().unwrap_or(absolute);
+    let normalized = canonical.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        normalized.to_lowercase()
+    } else {
+        normalized
+    }
+}
+
+fn read_taxonomy_registry_with_home(home: &Path) -> Result<SkillTaxonomyRegistry, String> {
+    let path = taxonomy_registry_file(home);
+    if !path.exists() {
+        return Ok(SkillTaxonomyRegistry {
+            version: 1,
+            entries: HashMap::new(),
+        });
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| format!("Read taxonomy index failed: {e}"))?;
+    if raw.trim().is_empty() {
+        return Ok(SkillTaxonomyRegistry {
+            version: 1,
+            entries: HashMap::new(),
+        });
+    }
+    let mut parsed = serde_json::from_str::<SkillTaxonomyRegistry>(&raw)
+        .map_err(|e| format!("Invalid taxonomy index file: {e}"))?;
+    if parsed.version == 0 {
+        parsed.version = 1;
+    }
+    Ok(parsed)
+}
+
+fn write_taxonomy_registry_with_home(
+    home: &Path,
+    registry: &SkillTaxonomyRegistry,
+) -> Result<(), String> {
+    fs::create_dir_all(crate::root_dir::app_config_dir(home))
+        .map_err(|e| format!("Create app config dir failed: {e}"))?;
+    let content = serde_json::to_string_pretty(registry)
+        .map_err(|e| format!("Serialize taxonomy index failed: {e}"))?;
+    fs::write(taxonomy_registry_file(home), format!("{content}\n"))
+        .map_err(|e| format!("Write taxonomy index failed: {e}"))
+}
+
+fn load_registry_taxonomy(
+    home: &Path,
+    skill_path: &Path,
+) -> Result<Option<SkillTaxonomyClassification>, String> {
+    let registry = read_taxonomy_registry_with_home(home)?;
+    let key = normalize_skill_path_key(skill_path);
+    Ok(registry
+        .entries
+        .get(&key)
+        .map(|entry| entry.taxonomy.clone()))
+}
+
+fn save_registry_taxonomy(
+    home: &Path,
+    skill_name: &str,
+    skill_path: &Path,
+    taxonomy: &SkillTaxonomyClassification,
+) -> Result<(), String> {
+    let mut registry = read_taxonomy_registry_with_home(home)?;
+    if registry.version == 0 {
+        registry.version = 1;
+    }
+    let key = normalize_skill_path_key(skill_path);
+    let updated_at = now_unix_secs().unwrap_or(0).to_string();
+    registry.entries.insert(
+        key,
+        SkillTaxonomyRegistryEntry {
+            skill_name: skill_name.trim().to_string(),
+            skill_path: skill_path.to_string_lossy().to_string(),
+            taxonomy: taxonomy.clone(),
+            updated_at,
+        },
+    );
+    write_taxonomy_registry_with_home(home, &registry)
+}
+
 fn sanitize_path_segment(raw: &str, fallback: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut last_dash = false;
@@ -637,12 +895,24 @@ fn normalize_base_url(value: Option<String>) -> Option<String> {
     })
 }
 
+fn normalize_cost_currency(value: &str) -> String {
+    match value.trim().to_uppercase().as_str() {
+        "CNY" => "CNY".to_string(),
+        _ => DEFAULT_COST_CURRENCY.to_string(),
+    }
+}
+
 fn sanitize_eval_config(raw: RawEvalConfig) -> EvalConfig {
     EvalConfig {
         api_key: raw.api_key.unwrap_or_default().trim().to_string(),
         provider: normalize_provider(raw.provider.as_deref().unwrap_or(DEFAULT_PROVIDER)),
         base_url: normalize_base_url(raw.base_url),
         default_model: normalize_model(raw.default_model.as_deref().unwrap_or(DEFAULT_MODEL)),
+        cost_currency: normalize_cost_currency(
+            raw.cost_currency
+                .as_deref()
+                .unwrap_or(DEFAULT_COST_CURRENCY),
+        ),
     }
 }
 
@@ -722,16 +992,6 @@ fn split_skill_frontmatter(raw: &str) -> Result<(Mapping, String), String> {
     Ok((frontmatter, body))
 }
 
-fn build_skill_markdown(frontmatter: &Mapping, body: &str) -> Result<String, String> {
-    let yaml =
-        serde_yaml::to_string(frontmatter).map_err(|e| format!("Serialize YAML failed: {e}"))?;
-    Ok(format!(
-        "---\n{}---\n\n{}",
-        yaml,
-        body.trim_start_matches('\n')
-    ))
-}
-
 fn yaml_get_string(map: &Mapping, key: &str) -> Option<String> {
     map.get(YamlValue::String(key.to_string()))
         .and_then(|v| v.as_str().map(std::string::ToString::to_string))
@@ -747,17 +1007,6 @@ fn yaml_get_string_any(map: &Mapping, keys: &[&str]) -> Option<String> {
         }
     }
     None
-}
-
-fn yaml_get_tags(map: &Mapping) -> Vec<String> {
-    map.get(YamlValue::String("tags".to_string()))
-        .and_then(|value| value.as_sequence())
-        .map(|seq| {
-            seq.iter()
-                .filter_map(|item| item.as_str().map(std::string::ToString::to_string))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
 }
 
 fn normalize_difficulty_core(value: &str) -> Option<String> {
@@ -811,7 +1060,7 @@ fn normalize_taxonomy(
         && !taxonomy.sok_representation.is_empty()
         && !taxonomy.sok_scope.is_empty()
     {
-        taxonomy.sok_group = format!("{} × {}", taxonomy.sok_representation, taxonomy.sok_scope);
+        taxonomy.sok_group = format!("{} 脳 {}", taxonomy.sok_representation, taxonomy.sok_scope);
     }
 
     taxonomy.skillsbench_difficulty_core =
@@ -875,143 +1124,6 @@ fn taxonomy_from_frontmatter(frontmatter: &Mapping) -> Option<SkillTaxonomyClass
         classifier_model: yaml_get_string_any(taxonomy, &["classifierModel", "classifier_model"])?,
     };
     normalize_taxonomy(raw).ok()
-}
-
-fn slugify_taxonomy_value(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    let mut last_dash = false;
-    for ch in value.trim().chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-            last_dash = false;
-        } else if !last_dash {
-            out.push('-');
-            last_dash = true;
-        }
-    }
-    out.trim_matches('-').to_string()
-}
-
-fn taxonomy_tags(taxonomy: &SkillTaxonomyClassification) -> Vec<String> {
-    vec![
-        format!(
-            "{TAXONOMY_TAG_PREFIX}sok-representation:{}",
-            slugify_taxonomy_value(&taxonomy.sok_representation)
-        ),
-        format!(
-            "{TAXONOMY_TAG_PREFIX}sok-scope:{}",
-            slugify_taxonomy_value(&taxonomy.sok_scope)
-        ),
-        format!(
-            "{TAXONOMY_TAG_PREFIX}sok-group:{}",
-            slugify_taxonomy_value(&taxonomy.sok_group)
-        ),
-        format!(
-            "{TAXONOMY_TAG_PREFIX}anthropic-category:{}",
-            slugify_taxonomy_value(&taxonomy.anthropic_category)
-        ),
-        format!(
-            "{TAXONOMY_TAG_PREFIX}skillsbench-domain:{}",
-            slugify_taxonomy_value(&taxonomy.skillsbench_domain)
-        ),
-        format!(
-            "{TAXONOMY_TAG_PREFIX}skillsbench-difficulty-core:{}",
-            slugify_taxonomy_value(&taxonomy.skillsbench_difficulty_core)
-        ),
-        format!(
-            "{TAXONOMY_TAG_PREFIX}skillsbench-difficulty-level:{}",
-            slugify_taxonomy_value(&taxonomy.skillsbench_difficulty_level)
-        ),
-    ]
-}
-
-fn merge_taxonomy_tags(
-    existing_tags: &[String],
-    taxonomy: &SkillTaxonomyClassification,
-) -> Vec<String> {
-    let mut out = Vec::<String>::new();
-    for tag in existing_tags {
-        let trimmed = tag.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if trimmed.to_lowercase().starts_with(TAXONOMY_TAG_PREFIX) {
-            continue;
-        }
-        if !out.iter().any(|item| item == trimmed) {
-            out.push(trimmed.to_string());
-        }
-    }
-    for tag in taxonomy_tags(taxonomy) {
-        if !out.iter().any(|item| item == &tag) {
-            out.push(tag);
-        }
-    }
-    out
-}
-
-fn build_taxonomy_mapping(taxonomy: &SkillTaxonomyClassification) -> Mapping {
-    let mut mapping = Mapping::new();
-    mapping.insert(
-        YamlValue::String("sokRepresentation".to_string()),
-        YamlValue::String(taxonomy.sok_representation.clone()),
-    );
-    mapping.insert(
-        YamlValue::String("sokScope".to_string()),
-        YamlValue::String(taxonomy.sok_scope.clone()),
-    );
-    mapping.insert(
-        YamlValue::String("sokGroup".to_string()),
-        YamlValue::String(taxonomy.sok_group.clone()),
-    );
-    mapping.insert(
-        YamlValue::String("anthropicCategory".to_string()),
-        YamlValue::String(taxonomy.anthropic_category.clone()),
-    );
-    mapping.insert(
-        YamlValue::String("skillsbenchDomain".to_string()),
-        YamlValue::String(taxonomy.skillsbench_domain.clone()),
-    );
-    mapping.insert(
-        YamlValue::String("skillsbenchDifficultyCore".to_string()),
-        YamlValue::String(taxonomy.skillsbench_difficulty_core.clone()),
-    );
-    mapping.insert(
-        YamlValue::String("skillsbenchDifficultyLevel".to_string()),
-        YamlValue::String(taxonomy.skillsbench_difficulty_level.clone()),
-    );
-    mapping.insert(
-        YamlValue::String("classifiedAt".to_string()),
-        YamlValue::String(taxonomy.classified_at.clone()),
-    );
-    mapping.insert(
-        YamlValue::String("classifierModel".to_string()),
-        YamlValue::String(taxonomy.classifier_model.clone()),
-    );
-    mapping
-}
-
-fn apply_taxonomy_to_frontmatter(
-    frontmatter: &mut Mapping,
-    taxonomy: &SkillTaxonomyClassification,
-) {
-    frontmatter.insert(
-        YamlValue::String("skillar_taxonomy".to_string()),
-        YamlValue::Mapping(build_taxonomy_mapping(taxonomy)),
-    );
-    let merged_tags = merge_taxonomy_tags(&yaml_get_tags(frontmatter), taxonomy);
-    if merged_tags.is_empty() {
-        frontmatter.remove(&YamlValue::String("tags".to_string()));
-    } else {
-        let tags = merged_tags
-            .into_iter()
-            .map(YamlValue::String)
-            .collect::<Vec<_>>();
-        frontmatter.insert(
-            YamlValue::String("tags".to_string()),
-            YamlValue::Sequence(tags),
-        );
-    }
 }
 
 fn python_workdir_candidates() -> Vec<PathBuf> {
@@ -1239,6 +1351,27 @@ fn ensure_skill_taxonomy(
     model: &str,
     control: Option<&Arc<EvalRunControl>>,
 ) -> EnsureSkillTaxonomyResult {
+    let home = crate::root_dir::default_home_dir();
+    match load_registry_taxonomy(&home, skill_path) {
+        Ok(Some(existing)) => {
+            return EnsureSkillTaxonomyResult {
+                status: "skipped".to_string(),
+                message: "Taxonomy already present in local software index.".to_string(),
+                applied: false,
+                taxonomy: Some(existing),
+            };
+        }
+        Ok(None) => {}
+        Err(err) => {
+            return EnsureSkillTaxonomyResult {
+                status: "failed".to_string(),
+                message: format!("Read local taxonomy index failed: {err}"),
+                applied: false,
+                taxonomy: None,
+            };
+        }
+    }
+
     let raw = match fs::read_to_string(skill_path) {
         Ok(value) => value,
         Err(err) => {
@@ -1250,7 +1383,7 @@ fn ensure_skill_taxonomy(
             };
         }
     };
-    let (mut frontmatter, body) = match split_skill_frontmatter(&raw) {
+    let (frontmatter, _) = match split_skill_frontmatter(&raw) {
         Ok(value) => value,
         Err(err) => {
             return EnsureSkillTaxonomyResult {
@@ -1263,9 +1396,18 @@ fn ensure_skill_taxonomy(
     };
 
     if let Some(existing) = taxonomy_from_frontmatter(&frontmatter) {
+        if let Err(err) = save_registry_taxonomy(&home, skill_name, skill_path, &existing) {
+            return EnsureSkillTaxonomyResult {
+                status: "failed".to_string(),
+                message: format!("Persist taxonomy to local index failed: {err}"),
+                applied: false,
+                taxonomy: None,
+            };
+        }
         return EnsureSkillTaxonomyResult {
             status: "skipped".to_string(),
-            message: "Taxonomy already present.".to_string(),
+            message: "Taxonomy loaded from SKILL.md and stored in local software index."
+                .to_string(),
             applied: false,
             taxonomy: Some(existing),
         };
@@ -1288,37 +1430,18 @@ fn ensure_skill_taxonomy(
         }
     };
 
-    apply_taxonomy_to_frontmatter(&mut frontmatter, &classified);
-    let next = match build_skill_markdown(&frontmatter, &body) {
-        Ok(value) => value,
-        Err(err) => {
-            return EnsureSkillTaxonomyResult {
-                status: "failed".to_string(),
-                message: err,
-                applied: false,
-                taxonomy: None,
-            };
-        }
-    };
-    if let Err(err) = fs::write(skill_path, next) {
+    if let Err(err) = save_registry_taxonomy(&home, skill_name, skill_path, &classified) {
         return EnsureSkillTaxonomyResult {
             status: "failed".to_string(),
-            message: format!("Write SKILL.md failed: {err}"),
+            message: format!("Persist taxonomy to local index failed: {err}"),
             applied: false,
             taxonomy: None,
         };
     }
-    let home = crate::root_dir::default_home_dir();
-    let skills_root = crate::root_dir::default_root_dir();
-    if let Err(err) =
-        crate::setup::sync_saved_skill_to_copy_tools_with_home(&home, &skills_root, skill_name)
-    {
-        eprintln!("copy-mode incremental sync failed after taxonomy write: {err}");
-    }
 
     EnsureSkillTaxonomyResult {
         status: "applied".to_string(),
-        message: "Taxonomy applied from AI classifier.".to_string(),
+        message: "Taxonomy classified and stored in local software index.".to_string(),
         applied: true,
         taxonomy: Some(classified),
     }
@@ -1530,6 +1653,801 @@ fn normalize_eval_mode(value: &str) -> Result<&'static str, String> {
 fn functional_compare_mode_for_mode(mode: &str) -> &'static str {
     let _ = mode;
     "no_skill"
+}
+
+fn normalize_eval_module_key(value: &str) -> Option<&'static str> {
+    let normalized = value
+        .trim()
+        .to_lowercase()
+        .replace('-', "_")
+        .replace(' ', "_");
+    match normalized.as_str() {
+        EVAL_MODULE_TRIGGER_ACCURACY => Some(EVAL_MODULE_TRIGGER_ACCURACY),
+        EVAL_MODULE_EXECUTION_CORRECTNESS => Some(EVAL_MODULE_EXECUTION_CORRECTNESS),
+        EVAL_MODULE_ROBUSTNESS_SECURITY => Some(EVAL_MODULE_ROBUSTNESS_SECURITY),
+        EVAL_MODULE_ECONOMICS => Some(EVAL_MODULE_ECONOMICS),
+        EVAL_MODULE_AUDITABILITY => Some(EVAL_MODULE_AUDITABILITY),
+        _ => None,
+    }
+}
+
+fn normalize_selected_modules(mode: &str, selected_modules: Option<Vec<String>>) -> Vec<String> {
+    if mode == "quick" {
+        return Vec::new();
+    }
+    let mut out = selected_modules
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| normalize_eval_module_key(&item).map(std::string::ToString::to_string))
+        .collect::<Vec<_>>();
+    out.sort();
+    out.dedup();
+    if out.is_empty() {
+        EVAL_ALL_MODULE_KEYS
+            .iter()
+            .map(|item| (*item).to_string())
+            .collect::<Vec<_>>()
+    } else {
+        out
+    }
+}
+
+fn module_title(module_key: &str) -> &'static str {
+    match module_key {
+        EVAL_MODULE_TRIGGER_ACCURACY => "Trigger Accuracy",
+        EVAL_MODULE_EXECUTION_CORRECTNESS => "Execution Correctness",
+        EVAL_MODULE_ROBUSTNESS_SECURITY => "Robustness & Security",
+        EVAL_MODULE_ECONOMICS => "Economics",
+        EVAL_MODULE_AUDITABILITY => "Auditability",
+        _ => "Unknown Module",
+    }
+}
+
+fn contains_module(selected_modules: &[String], module_key: &str) -> bool {
+    selected_modules.iter().any(|item| item == module_key)
+}
+
+fn should_run_trigger_complex(mode: &str, selected_modules: &[String]) -> bool {
+    mode == "full"
+        && (contains_module(selected_modules, EVAL_MODULE_TRIGGER_ACCURACY)
+            || contains_module(selected_modules, EVAL_MODULE_ROBUSTNESS_SECURITY))
+}
+
+fn should_run_functional_with_skill(mode: &str, selected_modules: &[String]) -> bool {
+    mode != "quick"
+        && (contains_module(selected_modules, EVAL_MODULE_EXECUTION_CORRECTNESS)
+            || contains_module(selected_modules, EVAL_MODULE_ECONOMICS))
+}
+
+fn should_run_functional_without_skill(mode: &str, selected_modules: &[String]) -> bool {
+    mode != "quick" && contains_module(selected_modules, EVAL_MODULE_ECONOMICS)
+}
+
+fn ensure_functional_case_floor(case_count: usize) -> Result<(), String> {
+    if case_count < DEFAULT_FUNCTIONAL_CASE_COUNT {
+        return Err(format!(
+            "Functional eval dataset requires at least {} cases in current modular mode, got {}.",
+            DEFAULT_FUNCTIONAL_CASE_COUNT, case_count
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_trigger_bucket(value: &str) -> Option<&'static str> {
+    let normalized = value
+        .trim()
+        .to_lowercase()
+        .replace('-', "_")
+        .replace(' ', "_");
+    match normalized.as_str() {
+        "positive_trigger" | "positive" => Some(TRIGGER_BUCKET_POSITIVE),
+        "negative_trigger" | "negative" => Some(TRIGGER_BUCKET_NEGATIVE),
+        "boundary_ambiguous" | "boundary" | "ambiguous" => Some(TRIGGER_BUCKET_BOUNDARY),
+        "adjacent_skill_confusion" | "adjacent" | "confusion" => Some(TRIGGER_BUCKET_ADJACENT),
+        _ => None,
+    }
+}
+
+fn parse_trigger_bucket_coverage(path: &Path) -> Result<EvalTriggerBucketCoverage, String> {
+    let raw = fs::read_to_string(path).map_err(|e| format!("Read trigger eval set failed: {e}"))?;
+    let value = serde_json::from_str::<serde_json::Value>(&raw)
+        .map_err(|e| format!("Parse trigger eval set failed: {e}"))?;
+    let Some(items) = value.as_array() else {
+        return Err("Expected trigger eval dataset top-level JSON array".to_string());
+    };
+    let mut positive = 0usize;
+    let mut negative = 0usize;
+    let mut boundary = 0usize;
+    let mut adjacent = 0usize;
+    for (index, item) in items.iter().enumerate() {
+        let Some(obj) = item.as_object() else {
+            return Err(format!("Trigger dataset item #{} must be an object", index + 1));
+        };
+        let query = obj
+            .get("query")
+            .and_then(|v| v.as_str())
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| format!("Trigger dataset item #{} missing non-empty query", index + 1))?;
+        let _ = query;
+        let should_trigger = obj.get("should_trigger").and_then(|v| v.as_bool()).ok_or_else(|| {
+            format!(
+                "Trigger dataset item #{} missing boolean should_trigger",
+                index + 1
+            )
+        })?;
+        let bucket = obj
+            .get("test_bucket")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("Trigger dataset item #{} missing test_bucket", index + 1))?;
+        let normalized_bucket = normalize_trigger_bucket(bucket).ok_or_else(|| {
+            format!(
+                "Trigger dataset item #{} has invalid test_bucket '{}'",
+                index + 1,
+                bucket
+            )
+        })?;
+        if normalized_bucket == TRIGGER_BUCKET_POSITIVE && !should_trigger {
+            return Err(format!(
+                "Trigger dataset item #{} bucket '{}' requires should_trigger=true",
+                index + 1,
+                normalized_bucket
+            ));
+        }
+        if normalized_bucket == TRIGGER_BUCKET_NEGATIVE && should_trigger {
+            return Err(format!(
+                "Trigger dataset item #{} bucket '{}' requires should_trigger=false",
+                index + 1,
+                normalized_bucket
+            ));
+        }
+        match normalized_bucket {
+            TRIGGER_BUCKET_POSITIVE => positive += 1,
+            TRIGGER_BUCKET_NEGATIVE => negative += 1,
+            TRIGGER_BUCKET_BOUNDARY => boundary += 1,
+            TRIGGER_BUCKET_ADJACENT => adjacent += 1,
+            _ => {}
+        }
+    }
+    let mut failed_buckets = Vec::<String>::new();
+    if positive < TRIGGER_BUCKET_MIN_SAMPLES {
+        failed_buckets.push(TRIGGER_BUCKET_POSITIVE.to_string());
+    }
+    if negative < TRIGGER_BUCKET_MIN_SAMPLES {
+        failed_buckets.push(TRIGGER_BUCKET_NEGATIVE.to_string());
+    }
+    if boundary < TRIGGER_BUCKET_MIN_SAMPLES {
+        failed_buckets.push(TRIGGER_BUCKET_BOUNDARY.to_string());
+    }
+    if adjacent < TRIGGER_BUCKET_MIN_SAMPLES {
+        failed_buckets.push(TRIGGER_BUCKET_ADJACENT.to_string());
+    }
+    Ok(EvalTriggerBucketCoverage {
+        min_required_per_bucket: TRIGGER_BUCKET_MIN_SAMPLES,
+        positive_trigger: positive,
+        negative_trigger: negative,
+        boundary_ambiguous: boundary,
+        adjacent_skill_confusion: adjacent,
+        all_buckets_met: failed_buckets.is_empty(),
+        failed_buckets,
+    })
+}
+
+fn taxonomy_enum_allowed(value: &str, allowed: &[&str]) -> bool {
+    allowed.iter().any(|item| value == *item)
+}
+
+fn validate_taxonomy_classification(taxonomy: &SkillTaxonomyClassification) -> Result<(), String> {
+    if !taxonomy_enum_allowed(
+        &taxonomy.sok_representation,
+        &["Natural-language", "Tool macros", "Code-as-skill", "Hybrid"],
+    ) {
+        return Err(format!(
+            "Invalid taxonomy.sok_representation '{}'",
+            taxonomy.sok_representation
+        ));
+    }
+    if !taxonomy_enum_allowed(
+        &taxonomy.sok_scope,
+        &[
+            "Single-tool",
+            "Multi-tool",
+            "Web",
+            "OS/Desktop",
+            "Software Engineering",
+            "Robotics/Physical",
+        ],
+    ) {
+        return Err(format!("Invalid taxonomy.sok_scope '{}'", taxonomy.sok_scope));
+    }
+    if !taxonomy_enum_allowed(
+        &taxonomy.anthropic_category,
+        &[
+            "Document & Asset Creation",
+            "Workflow Automation",
+            "MCP Enhancement",
+        ],
+    ) {
+        return Err(format!(
+            "Invalid taxonomy.anthropic_category '{}'",
+            taxonomy.anthropic_category
+        ));
+    }
+    if !taxonomy_enum_allowed(
+        &taxonomy.skillsbench_domain,
+        &[
+            "Healthcare",
+            "Manufacturing",
+            "Cybersecurity",
+            "Natural Science",
+            "Energy",
+            "Office & White Collar",
+            "Finance",
+            "Media & Content Production",
+            "Robotics",
+            "Mathematics",
+            "Software Engineering",
+        ],
+    ) {
+        return Err(format!(
+            "Invalid taxonomy.skillsbench_domain '{}'",
+            taxonomy.skillsbench_domain
+        ));
+    }
+    if !taxonomy_enum_allowed(
+        &taxonomy.skillsbench_difficulty_core,
+        &["Core", "Extended", "Extreme"],
+    ) {
+        return Err(format!(
+            "Invalid taxonomy.skillsbench_difficulty_core '{}'",
+            taxonomy.skillsbench_difficulty_core
+        ));
+    }
+    if !taxonomy_enum_allowed(
+        &taxonomy.skillsbench_difficulty_level,
+        &["Easy", "Medium", "Hard"],
+    ) {
+        return Err(format!(
+            "Invalid taxonomy.skillsbench_difficulty_level '{}'",
+            taxonomy.skillsbench_difficulty_level
+        ));
+    }
+    Ok(())
+}
+
+fn is_skill_name_valid_for_generation(name: &str) -> bool {
+    let trimmed = name.trim();
+    !trimmed.is_empty()
+        && trimmed.len() <= 64
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+}
+
+fn read_openai_interface_fields(skill_path: &Path) -> Result<(PathBuf, String, String), String> {
+    let Some(skill_dir) = skill_path.parent() else {
+        return Err("Skill path has no parent directory".to_string());
+    };
+    let openai_yaml_path = skill_dir.join("agents").join("openai.yaml");
+    if !openai_yaml_path.exists() {
+        return Err(format!(
+            "Missing agents/openai.yaml at {}",
+            openai_yaml_path.to_string_lossy()
+        ));
+    }
+    let raw = fs::read_to_string(&openai_yaml_path)
+        .map_err(|e| format!("Read openai.yaml failed: {e}"))?;
+    let root =
+        serde_yaml::from_str::<YamlValue>(&raw).map_err(|e| format!("Parse openai.yaml failed: {e}"))?;
+    let root_map = root
+        .as_mapping()
+        .ok_or_else(|| "openai.yaml root must be a mapping".to_string())?;
+    let interface = root_map
+        .get(YamlValue::String("interface".to_string()))
+        .and_then(|value| value.as_mapping())
+        .ok_or_else(|| "openai.yaml must include interface mapping".to_string())?;
+    let display_name = yaml_get_string_any(interface, &["display_name", "displayName"])
+        .ok_or_else(|| "openai.yaml interface.display_name is required".to_string())?;
+    let short_description =
+        yaml_get_string_any(interface, &["short_description", "shortDescription"]).ok_or_else(|| {
+            "openai.yaml interface.short_description is required".to_string()
+        })?;
+    Ok((openai_yaml_path, display_name, short_description))
+}
+
+fn validate_structure_and_syntax(skill_path: &Path) -> Result<String, String> {
+    let raw = fs::read_to_string(skill_path).map_err(|e| format!("Read SKILL.md failed: {e}"))?;
+    let (frontmatter, _) = split_skill_frontmatter(&raw)?;
+    let name = yaml_get_string_any(&frontmatter, &["name"])
+        .ok_or_else(|| "SKILL.md frontmatter missing name".to_string())?;
+    let description = yaml_get_string_any(&frontmatter, &["description"])
+        .ok_or_else(|| "SKILL.md frontmatter missing description".to_string())?;
+    if name.trim().is_empty() || description.trim().is_empty() {
+        return Err("SKILL.md frontmatter has empty name/description".to_string());
+    }
+    Ok("SKILL.md frontmatter structure is valid.".to_string())
+}
+
+fn validate_generation_guardrail(skill_path: &Path) -> Result<String, String> {
+    let raw = fs::read_to_string(skill_path).map_err(|e| format!("Read SKILL.md failed: {e}"))?;
+    let (frontmatter, _) = split_skill_frontmatter(&raw)?;
+    let name = yaml_get_string_any(&frontmatter, &["name"])
+        .ok_or_else(|| "SKILL.md frontmatter missing name".to_string())?;
+    if !is_skill_name_valid_for_generation(&name) {
+        return Err(format!(
+            "Skill name '{}' must use lowercase letters, digits, hyphens and <=64 chars",
+            name
+        ));
+    }
+    let (_path, display_name, short_description) = read_openai_interface_fields(skill_path)?;
+    if display_name.trim().is_empty() || short_description.trim().is_empty() {
+        return Err("openai.yaml interface fields must be non-empty".to_string());
+    }
+    Ok("Generation guardrails passed (name + openai interface fields).".to_string())
+}
+
+fn validate_ui_metadata_consistency(skill_path: &Path) -> Result<String, String> {
+    let raw = fs::read_to_string(skill_path).map_err(|e| format!("Read SKILL.md failed: {e}"))?;
+    let (frontmatter, _) = split_skill_frontmatter(&raw)?;
+    let name = yaml_get_string_any(&frontmatter, &["name"])
+        .ok_or_else(|| "SKILL.md frontmatter missing name".to_string())?;
+    let description = yaml_get_string_any(&frontmatter, &["description"])
+        .ok_or_else(|| "SKILL.md frontmatter missing description".to_string())?;
+    let (_path, display_name, short_description) = read_openai_interface_fields(skill_path)?;
+    if short_description.len() > 160 {
+        return Err("openai.yaml short_description exceeds 160 characters".to_string());
+    }
+    let name_tokens = name
+        .split('-')
+        .filter(|token| !token.trim().is_empty())
+        .collect::<Vec<_>>();
+    if !name_tokens.is_empty() {
+        let lowered_display = display_name.to_lowercase();
+        let has_overlap = name_tokens
+            .iter()
+            .any(|token| lowered_display.contains(&token.to_lowercase()));
+        if !has_overlap {
+            return Err(
+                "openai.yaml display_name should reflect SKILL.md name tokens for UI consistency"
+                    .to_string(),
+            );
+        }
+    }
+    if description.trim().len() < 10 {
+        return Err("SKILL.md description is too short for reliable UI metadata alignment".to_string());
+    }
+    Ok("SKILL.md and openai.yaml metadata consistency checks passed.".to_string())
+}
+
+#[derive(Debug, Clone)]
+struct SkillShapeProfile {
+    shape: &'static str,
+    has_agents_dir: bool,
+    has_openai_yaml: bool,
+    has_scripts_dir: bool,
+    has_references_dir: bool,
+    has_assets_dir: bool,
+}
+
+impl SkillShapeProfile {
+    fn is_agent_shape(&self) -> bool {
+        self.has_agents_dir || self.has_openai_yaml
+    }
+}
+
+fn analyze_skill_shape(skill_path: &Path) -> Result<SkillShapeProfile, String> {
+    let Some(skill_dir) = skill_path.parent() else {
+        return Err("Skill path has no parent directory".to_string());
+    };
+    let has_agents_dir = skill_dir.join("agents").is_dir();
+    let has_openai_yaml = skill_dir.join("agents").join("openai.yaml").is_file();
+    let has_scripts_dir = skill_dir.join("scripts").is_dir();
+    let has_references_dir = skill_dir.join("references").is_dir();
+    let has_assets_dir = skill_dir.join("assets").is_dir();
+    let extra_components = usize::from(has_scripts_dir)
+        + usize::from(has_references_dir)
+        + usize::from(has_assets_dir);
+    let shape = if has_agents_dir || has_openai_yaml {
+        if extra_components > 0 {
+            "agent-hybrid"
+        } else {
+            "agent"
+        }
+    } else if has_scripts_dir && (has_references_dir || has_assets_dir) {
+        "hybrid"
+    } else if has_scripts_dir {
+        "scripted"
+    } else if has_references_dir || has_assets_dir {
+        "resource"
+    } else {
+        "markdown-only"
+    };
+    Ok(SkillShapeProfile {
+        shape,
+        has_agents_dir,
+        has_openai_yaml,
+        has_scripts_dir,
+        has_references_dir,
+        has_assets_dir,
+    })
+}
+
+fn validate_script_smoke_requirements(skill_path: &Path) -> Result<String, String> {
+    let Some(skill_dir) = skill_path.parent() else {
+        return Err("Skill path has no parent directory".to_string());
+    };
+    let scripts_dir = skill_dir.join("scripts");
+    if !scripts_dir.exists() {
+        return Ok("No scripts directory found; script smoke requirement skipped.".to_string());
+    }
+    let script_files = fs::read_dir(&scripts_dir)
+        .map_err(|e| format!("Read scripts directory failed: {e}"))?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_file())
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| {
+                    matches!(
+                        ext.to_ascii_lowercase().as_str(),
+                        "py" | "ps1" | "sh" | "bat" | "cmd"
+                    )
+                })
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>();
+    if script_files.is_empty() {
+        return Ok("No executable scripts found; script smoke requirement skipped.".to_string());
+    }
+    let raw = fs::read_to_string(skill_path).map_err(|e| format!("Read SKILL.md failed: {e}"))?;
+    let (_frontmatter, body) = split_skill_frontmatter(&raw)?;
+    let mut missing_examples = Vec::<String>::new();
+    for file in &script_files {
+        let file_name = file.file_name().to_string_lossy().to_string();
+        if !body.contains(&file_name) {
+            missing_examples.push(file_name);
+        }
+    }
+    if !missing_examples.is_empty() {
+        return Err(format!(
+            "Missing script-level usage examples in SKILL.md for: {}",
+            missing_examples.join(", ")
+        ));
+    }
+    Ok(format!(
+        "Script smoke requirement passed for {} scripts.",
+        script_files.len()
+    ))
+}
+
+fn quick_check_item(
+    key: &str,
+    title: &str,
+    blocking: bool,
+    passed: bool,
+    message: String,
+    elapsed_ms: u128,
+    evidence_path: Option<String>,
+) -> EvalQuickCheckItem {
+    EvalQuickCheckItem {
+        key: key.to_string(),
+        title: title.to_string(),
+        blocking,
+        passed,
+        message,
+        elapsed_ms,
+        evidence_path,
+    }
+}
+
+fn run_stage0_quick_checks(
+    skill_path: &Path,
+    trigger_eval_set_path: &Path,
+    taxonomy_result: &EnsureSkillTaxonomyResult,
+) -> EvalQuickChecks {
+    let mut checks = Vec::<EvalQuickCheckItem>::new();
+    let mut all_passed = true;
+    let skill_evidence_path = path_to_utf8(skill_path).ok();
+    let trigger_evidence_path = path_to_utf8(trigger_eval_set_path).ok();
+    let mut bucket_coverage: Option<EvalTriggerBucketCoverage> = None;
+    let mut skill_shape: Option<SkillShapeProfile> = None;
+
+    {
+        let started = std::time::Instant::now();
+        let result = analyze_skill_shape(skill_path);
+        let elapsed_ms = started.elapsed().as_millis();
+        match result {
+            Ok(profile) => {
+                let message = format!(
+                    "Detected skill shape '{}' (agents_dir={}, openai_yaml={}, scripts_dir={}, references_dir={}, assets_dir={}).",
+                    profile.shape,
+                    profile.has_agents_dir,
+                    profile.has_openai_yaml,
+                    profile.has_scripts_dir,
+                    profile.has_references_dir,
+                    profile.has_assets_dir
+                );
+                checks.push(quick_check_item(
+                    "skill-shape-analysis",
+                    "skill-shape-analysis",
+                    true,
+                    true,
+                    message,
+                    elapsed_ms,
+                    skill_evidence_path.clone(),
+                ));
+                skill_shape = Some(profile);
+            }
+            Err(message) => {
+                all_passed = false;
+                checks.push(quick_check_item(
+                    "skill-shape-analysis",
+                    "skill-shape-analysis",
+                    true,
+                    false,
+                    message,
+                    elapsed_ms,
+                    skill_evidence_path.clone(),
+                ));
+            }
+        }
+    }
+
+    {
+        let started = std::time::Instant::now();
+        let result = if taxonomy_result.status == "failed" {
+            Err(format!(
+                "Taxonomy classification failed before quick checks: {}",
+                taxonomy_result.message
+            ))
+        } else if let Some(taxonomy) = taxonomy_result.taxonomy.as_ref() {
+            validate_taxonomy_classification(taxonomy)
+                .map(|_| "Taxonomy classification fields and enum values are valid.".to_string())
+        } else {
+            Err("Taxonomy payload missing.".to_string())
+        };
+        let elapsed_ms = started.elapsed().as_millis();
+        match result {
+            Ok(message) => checks.push(quick_check_item(
+                "taxonomy-validity",
+                "taxonomy-validity",
+                true,
+                true,
+                message,
+                elapsed_ms,
+                skill_evidence_path.clone(),
+            )),
+            Err(message) => {
+                all_passed = false;
+                checks.push(quick_check_item(
+                    "taxonomy-validity",
+                    "taxonomy-validity",
+                    true,
+                    false,
+                    message,
+                    elapsed_ms,
+                    skill_evidence_path.clone(),
+                ));
+            }
+        }
+    }
+
+    {
+        let started = std::time::Instant::now();
+        let result = validate_structure_and_syntax(skill_path);
+        let elapsed_ms = started.elapsed().as_millis();
+        match result {
+            Ok(message) => checks.push(quick_check_item(
+                "structure-syntax",
+                "structure-syntax",
+                true,
+                true,
+                message,
+                elapsed_ms,
+                skill_evidence_path.clone(),
+            )),
+            Err(message) => {
+                all_passed = false;
+                checks.push(quick_check_item(
+                    "structure-syntax",
+                    "structure-syntax",
+                    true,
+                    false,
+                    message,
+                    elapsed_ms,
+                    skill_evidence_path.clone(),
+                ));
+            }
+        }
+    }
+
+    let should_run_agent_checks = skill_shape
+        .as_ref()
+        .map(SkillShapeProfile::is_agent_shape)
+        .unwrap_or(true);
+
+    {
+        let started = std::time::Instant::now();
+        if should_run_agent_checks {
+            let result = validate_generation_guardrail(skill_path);
+            let elapsed_ms = started.elapsed().as_millis();
+            match result {
+                Ok(message) => checks.push(quick_check_item(
+                    "generation-guardrail",
+                    "generation-guardrail",
+                    true,
+                    true,
+                    message,
+                    elapsed_ms,
+                    skill_evidence_path.clone(),
+                )),
+                Err(message) => {
+                    all_passed = false;
+                    checks.push(quick_check_item(
+                        "generation-guardrail",
+                        "generation-guardrail",
+                        true,
+                        false,
+                        message,
+                        elapsed_ms,
+                        skill_evidence_path.clone(),
+                    ));
+                }
+            }
+        } else {
+            let elapsed_ms = started.elapsed().as_millis();
+            let shape = skill_shape
+                .as_ref()
+                .map(|profile| profile.shape)
+                .unwrap_or("unknown");
+            checks.push(quick_check_item(
+                "generation-guardrail",
+                "generation-guardrail",
+                false,
+                true,
+                format!(
+                    "Skipped: skill shape '{}' does not require agents/openai.yaml generation interface checks.",
+                    shape
+                ),
+                elapsed_ms,
+                skill_evidence_path.clone(),
+            ));
+        }
+    }
+
+    {
+        let started = std::time::Instant::now();
+        if should_run_agent_checks {
+            let result = validate_ui_metadata_consistency(skill_path);
+            let elapsed_ms = started.elapsed().as_millis();
+            match result {
+                Ok(message) => checks.push(quick_check_item(
+                    "ui-metadata-consistency",
+                    "ui-metadata-consistency",
+                    true,
+                    true,
+                    message,
+                    elapsed_ms,
+                    skill_evidence_path.clone(),
+                )),
+                Err(message) => {
+                    all_passed = false;
+                    checks.push(quick_check_item(
+                        "ui-metadata-consistency",
+                        "ui-metadata-consistency",
+                        true,
+                        false,
+                        message,
+                        elapsed_ms,
+                        skill_evidence_path.clone(),
+                    ));
+                }
+            }
+        } else {
+            let elapsed_ms = started.elapsed().as_millis();
+            let shape = skill_shape
+                .as_ref()
+                .map(|profile| profile.shape)
+                .unwrap_or("unknown");
+            checks.push(quick_check_item(
+                "ui-metadata-consistency",
+                "ui-metadata-consistency",
+                false,
+                true,
+                format!(
+                    "Skipped: skill shape '{}' does not require agents/openai.yaml UI metadata checks.",
+                    shape
+                ),
+                elapsed_ms,
+                skill_evidence_path.clone(),
+            ));
+        }
+    }
+
+    {
+        let started = std::time::Instant::now();
+        let result = validate_script_smoke_requirements(skill_path);
+        let elapsed_ms = started.elapsed().as_millis();
+        match result {
+            Ok(message) => checks.push(quick_check_item(
+                "script-smoke",
+                "script-smoke",
+                true,
+                true,
+                message,
+                elapsed_ms,
+                skill_evidence_path.clone(),
+            )),
+            Err(message) => {
+                all_passed = false;
+                checks.push(quick_check_item(
+                    "script-smoke",
+                    "script-smoke",
+                    true,
+                    false,
+                    message,
+                    elapsed_ms,
+                    skill_evidence_path.clone(),
+                ));
+            }
+        }
+    }
+
+    {
+        let started = std::time::Instant::now();
+        let result = parse_trigger_bucket_coverage(trigger_eval_set_path);
+        let elapsed_ms = started.elapsed().as_millis();
+        match result {
+            Ok(coverage) => {
+                let coverage_ok = coverage.all_buckets_met;
+                bucket_coverage = Some(coverage.clone());
+                if !coverage_ok {
+                    all_passed = false;
+                }
+                let message = if coverage_ok {
+                    format!(
+                        "Trigger bucket coverage passed with minimum {} per bucket.",
+                        TRIGGER_BUCKET_MIN_SAMPLES
+                    )
+                } else {
+                    format!(
+                        "Trigger bucket coverage failed. Buckets below minimum {}: {}",
+                        TRIGGER_BUCKET_MIN_SAMPLES,
+                        coverage.failed_buckets.join(", ")
+                    )
+                };
+                checks.push(quick_check_item(
+                    "trigger-bucket-coverage",
+                    "trigger-bucket-coverage",
+                    true,
+                    coverage_ok,
+                    message,
+                    elapsed_ms,
+                    trigger_evidence_path.clone(),
+                ));
+            }
+            Err(message) => {
+                all_passed = false;
+                checks.push(quick_check_item(
+                    "trigger-bucket-coverage",
+                    "trigger-bucket-coverage",
+                    true,
+                    false,
+                    message,
+                    elapsed_ms,
+                    trigger_evidence_path.clone(),
+                ));
+            }
+        }
+    }
+
+    EvalQuickChecks {
+        all_passed,
+        checks,
+        bucket_coverage,
+    }
 }
 
 fn safe_trigger_summary(output: &TriggerEvalOutput) -> TriggerEvalSummary {
@@ -1801,6 +2719,245 @@ fn build_eval_advisory(
     }
 }
 
+fn compute_economics(
+    functional_with_skill: Option<&FunctionalEvalOutput>,
+    functional_without_skill: Option<&FunctionalEvalOutput>,
+) -> EvalEconomics {
+    let with_rows = functional_with_skill
+        .and_then(|output| output.results.as_ref())
+        .cloned()
+        .unwrap_or_default();
+    let without_rows = functional_without_skill
+        .and_then(|output| output.results.as_ref())
+        .cloned()
+        .unwrap_or_default();
+    let with_map = with_rows
+        .into_iter()
+        .map(|item| (item.case_id.clone(), item))
+        .collect::<HashMap<_, _>>();
+    let mut gross_time_saved_ms = 0.0_f64;
+    let mut gross_token_saved = 0.0_f64;
+    let mut negative_time_waste_ms = 0.0_f64;
+    let mut negative_token_waste = 0.0_f64;
+    let mut baseline_samples = 0usize;
+    let mut evaluated_pairs = 0usize;
+    for base in without_rows {
+        if !base.passed {
+            continue;
+        }
+        baseline_samples += 1;
+        let Some(with_item) = with_map.get(&base.case_id) else {
+            continue;
+        };
+        evaluated_pairs += 1;
+        let t0 = base.latency_ms.unwrap_or(0) as f64;
+        let u0 = (base.input_tokens.unwrap_or(0) + base.output_tokens.unwrap_or(0)) as f64;
+        let t1 = with_item.latency_ms.unwrap_or(0) as f64;
+        let u1 =
+            (with_item.input_tokens.unwrap_or(0) + with_item.output_tokens.unwrap_or(0)) as f64;
+        if with_item.passed {
+            gross_time_saved_ms += t0 - t1;
+            gross_token_saved += u0 - u1;
+        } else {
+            negative_time_waste_ms += t1;
+            negative_token_waste += u1;
+        }
+    }
+    let net_time_saved_ms = gross_time_saved_ms - negative_time_waste_ms;
+    let net_token_saved = gross_token_saved - negative_token_waste;
+    EvalEconomics {
+        gross_time_saved_ms: round4(gross_time_saved_ms),
+        gross_token_saved: round4(gross_token_saved),
+        negative_time_waste_ms: round4(negative_time_waste_ms),
+        negative_token_waste: round4(negative_token_waste),
+        net_time_saved_ms: round4(net_time_saved_ms),
+        net_token_saved: round4(net_token_saved),
+        net_usd: Some(round4(net_token_saved * ESTIMATED_USD_PER_TOKEN)),
+        baseline_samples,
+        evaluated_pairs,
+    }
+}
+
+fn build_module_results(
+    mode: &str,
+    selected_modules: &[String],
+    quick_checks: &EvalQuickChecks,
+    trigger_metrics: &EvalTriggerMetrics,
+    functional_stats: Option<&EvalRateStats>,
+    robustness_mean: f64,
+    economics: &EvalEconomics,
+    evidence_summary: &EvalEvidenceSummary,
+) -> Vec<EvalModuleResult> {
+    let mut out = Vec::<EvalModuleResult>::new();
+    for key in EVAL_ALL_MODULE_KEYS {
+        let selected = contains_module(selected_modules, key);
+        if !selected {
+            out.push(EvalModuleResult {
+                key: key.to_string(),
+                title: module_title(key).to_string(),
+                selected: false,
+                status: "skipped".to_string(),
+                passed: None,
+                score: None,
+                message: Some("Module not selected.".to_string()),
+            });
+            continue;
+        }
+        match key {
+            EVAL_MODULE_TRIGGER_ACCURACY => {
+                let coverage_ok = quick_checks
+                    .bucket_coverage
+                    .as_ref()
+                    .map(|item| item.all_buckets_met)
+                    .unwrap_or(false);
+                let passed = trigger_metrics.precision >= ADVISORY_PASS_PRECISION_THRESHOLD
+                    && trigger_metrics.recall >= ADVISORY_PASS_RECALL_THRESHOLD
+                    && coverage_ok;
+                let score =
+                    round4((trigger_metrics.precision + trigger_metrics.recall + (1.0 - trigger_metrics.fpr)) / 3.0);
+                out.push(EvalModuleResult {
+                    key: key.to_string(),
+                    title: module_title(key).to_string(),
+                    selected: true,
+                    status: if passed { "pass" } else { "fail" }.to_string(),
+                    passed: Some(passed),
+                    score: Some(score),
+                    message: Some(format!(
+                        "precision={:.3}, recall={:.3}, fpr={:.3}, bucketCoverage={}",
+                        trigger_metrics.precision, trigger_metrics.recall, trigger_metrics.fpr, coverage_ok
+                    )),
+                });
+            }
+            EVAL_MODULE_EXECUTION_CORRECTNESS => {
+                let maybe_rate = functional_stats.map(|item| item.mean);
+                let passed = maybe_rate.is_some_and(|value| value >= 0.75);
+                out.push(EvalModuleResult {
+                    key: key.to_string(),
+                    title: module_title(key).to_string(),
+                    selected: true,
+                    status: if maybe_rate.is_some() {
+                        if passed { "pass" } else { "fail" }
+                    } else {
+                        "skipped"
+                    }
+                    .to_string(),
+                    passed: maybe_rate.map(|_| passed),
+                    score: maybe_rate.map(round4),
+                    message: Some(match maybe_rate {
+                        Some(value) => format!("functional pass rate mean={value:.3}"),
+                        None => "Functional execution data unavailable.".to_string(),
+                    }),
+                });
+            }
+            EVAL_MODULE_ROBUSTNESS_SECURITY => {
+                let passed = robustness_mean >= 0.70;
+                out.push(EvalModuleResult {
+                    key: key.to_string(),
+                    title: module_title(key).to_string(),
+                    selected: true,
+                    status: if passed { "pass" } else { "fail" }.to_string(),
+                    passed: Some(passed),
+                    score: Some(round4(robustness_mean)),
+                    message: Some(format!("robustness mean={:.3}", robustness_mean)),
+                });
+            }
+            EVAL_MODULE_ECONOMICS => {
+                let passed = economics.net_time_saved_ms >= 0.0 && economics.net_token_saved >= 0.0;
+                out.push(EvalModuleResult {
+                    key: key.to_string(),
+                    title: module_title(key).to_string(),
+                    selected: true,
+                    status: if passed { "pass" } else { "fail" }.to_string(),
+                    passed: Some(passed),
+                    score: None,
+                    message: Some(format!(
+                        "net_time_saved_ms={:.1}, net_token_saved={:.1}",
+                        economics.net_time_saved_ms, economics.net_token_saved
+                    )),
+                });
+            }
+            EVAL_MODULE_AUDITABILITY => {
+                let has_runs = evidence_summary.total_runs > 0;
+                let passed = has_runs
+                    && evidence_summary.captured_transcripts > 0
+                    && evidence_summary.captured_timing > 0
+                    && evidence_summary.captured_tokens > 0;
+                let score = if has_runs {
+                    let denom = (evidence_summary.total_runs * 3) as f64;
+                    Some(round4(
+                        (evidence_summary.captured_transcripts
+                            + evidence_summary.captured_timing
+                            + evidence_summary.captured_tokens) as f64
+                            / denom,
+                    ))
+                } else {
+                    None
+                };
+                out.push(EvalModuleResult {
+                    key: key.to_string(),
+                    title: module_title(key).to_string(),
+                    selected: true,
+                    status: if passed { "pass" } else { "fail" }.to_string(),
+                    passed: Some(passed),
+                    score,
+                    message: Some(format!(
+                        "runs={}, transcripts={}, timing={}, tokens={}",
+                        evidence_summary.total_runs,
+                        evidence_summary.captured_transcripts,
+                        evidence_summary.captured_timing,
+                        evidence_summary.captured_tokens
+                    )),
+                });
+            }
+            _ => {}
+        }
+    }
+    if mode == "quick" {
+        return EVAL_ALL_MODULE_KEYS
+            .iter()
+            .map(|key| EvalModuleResult {
+                key: (*key).to_string(),
+                title: module_title(key).to_string(),
+                selected: false,
+                status: "skipped".to_string(),
+                passed: None,
+                score: None,
+                message: Some("Quick mode does not run full modules.".to_string()),
+            })
+            .collect::<Vec<_>>();
+    }
+    out
+}
+
+fn build_eval_gate(
+    mode: &str,
+    quick_checks: &EvalQuickChecks,
+    selected_modules: &[String],
+    module_results: &[EvalModuleResult],
+) -> EvalGate {
+    if mode == "quick" {
+        return EvalGate {
+            quick_blocking_pass: quick_checks.all_passed,
+            full_release_pass: None,
+            partial_release: None,
+            selected_modules: Vec::new(),
+            failed_modules: Vec::new(),
+        };
+    }
+    let failed_modules = module_results
+        .iter()
+        .filter(|item| item.selected && item.status != "pass")
+        .map(|item| item.key.clone())
+        .collect::<Vec<_>>();
+    EvalGate {
+        quick_blocking_pass: quick_checks.all_passed,
+        full_release_pass: Some(failed_modules.is_empty()),
+        partial_release: Some(selected_modules.len() < EVAL_ALL_MODULE_KEYS.len()),
+        selected_modules: selected_modules.to_vec(),
+        failed_modules,
+    }
+}
+
 fn round4(value: f64) -> f64 {
     (value * 10_000.0).round() / 10_000.0
 }
@@ -1889,15 +3046,258 @@ fn estimate_cost(
     let api_calls_estimate = (trigger_cases * trigger_runs) + (functional_cases * functional_runs);
     let estimated_usd = (trigger_cases * trigger_runs) as f64 * ESTIMATED_USD_PER_TRIGGER_CASE
         + (functional_cases * functional_runs) as f64 * ESTIMATED_USD_PER_FUNCTIONAL_CASE;
+    let estimated_usd_min = round4(estimated_usd * ESTIMATED_COST_RANGE_LOW_FACTOR);
+    let estimated_usd_max = round4(estimated_usd * ESTIMATED_COST_RANGE_HIGH_FACTOR);
 
     EvalCostEstimate {
-        estimated_usd,
+        estimated_usd: round4(estimated_usd),
+        estimated_usd_min: Some(estimated_usd_min),
+        estimated_usd_max: Some(estimated_usd_max),
         actual_usd_estimate: estimated_usd,
         trigger_cases,
         functional_cases,
         api_calls_estimate,
         budget_limit_usd: budget_limit,
-        budget_exceeded: budget_limit.is_some_and(|limit| estimated_usd > limit),
+        budget_exceeded: budget_limit.is_some_and(|limit| estimated_usd_max > limit),
+    }
+}
+
+fn estimate_step(
+    key: &str,
+    title: &str,
+    stage: &str,
+    module_key: Option<&str>,
+    case_count: usize,
+    runs: usize,
+    calls_per_case: usize,
+    input_tokens_per_case: usize,
+    output_tokens_per_case: usize,
+    seconds_per_case: u64,
+) -> EvalEstimateStep {
+    let total_units = case_count.saturating_mul(runs);
+    let llm_calls = total_units.saturating_mul(calls_per_case);
+    let estimated_input_tokens = total_units.saturating_mul(input_tokens_per_case);
+    let estimated_output_tokens = total_units.saturating_mul(output_tokens_per_case);
+    let estimated_total_tokens = estimated_input_tokens.saturating_add(estimated_output_tokens);
+    let estimated_seconds = (total_units as u64).saturating_mul(seconds_per_case);
+    EvalEstimateStep {
+        key: key.to_string(),
+        title: title.to_string(),
+        stage: Some(stage.to_string()),
+        module_key: module_key.map(std::string::ToString::to_string),
+        case_count,
+        runs,
+        llm_calls,
+        estimated_input_tokens,
+        estimated_output_tokens,
+        estimated_total_tokens,
+        estimated_seconds,
+    }
+}
+
+fn taxonomy_pending_for_skill(skill_path: &Path) -> bool {
+    let home = crate::root_dir::default_home_dir();
+    if let Ok(Some(_)) = load_registry_taxonomy(&home, skill_path) {
+        return false;
+    }
+    let Ok(raw) = fs::read_to_string(skill_path) else {
+        return false;
+    };
+    let Ok((frontmatter, _)) = split_skill_frontmatter(&raw) else {
+        return false;
+    };
+    taxonomy_from_frontmatter(&frontmatter).is_none()
+}
+
+fn estimate_pipeline_plan(
+    skill_path: &Path,
+    mode: &str,
+    model: &str,
+    judge_models: &[String],
+    selected_modules: &[String],
+    repeats: usize,
+    trigger_cases: usize,
+    functional_cases: usize,
+    max_cost_usd: Option<f64>,
+) -> EvalPipelineEstimate {
+    let run_trigger_complex = should_run_trigger_complex(mode, selected_modules);
+    let run_functional_with_skill = should_run_functional_with_skill(mode, selected_modules);
+    let run_functional_without_skill = should_run_functional_without_skill(mode, selected_modules);
+    let trigger_runs_per_repeat = 1 + usize::from(run_trigger_complex);
+    let functional_runs_per_repeat =
+        usize::from(run_functional_with_skill) + usize::from(run_functional_without_skill);
+    let cost_estimate = estimate_cost(
+        trigger_cases,
+        functional_cases,
+        trigger_runs_per_repeat * repeats,
+        functional_runs_per_repeat * repeats,
+        max_cost_usd,
+    );
+
+    let judge_count = judge_models.len().max(1);
+    let mut steps: Vec<EvalEstimateStep> = Vec::new();
+    let taxonomy_pending = taxonomy_pending_for_skill(skill_path);
+    if taxonomy_pending {
+        steps.push(estimate_step(
+            "taxonomy",
+            "taxonomy-classification",
+            "stage0",
+            None,
+            1,
+            1,
+            1,
+            ESTIMATE_TAXONOMY_INPUT_TOKENS_PER_CALL,
+            ESTIMATE_TAXONOMY_OUTPUT_TOKENS_PER_CALL,
+            ESTIMATE_TAXONOMY_SECONDS_PER_CALL,
+        ));
+    }
+
+    for (key, title) in [
+        ("quick-taxonomy-validity", "quick-taxonomy-validity"),
+        ("quick-structure-syntax", "quick-structure-syntax"),
+        ("quick-generation-guardrail", "quick-generation-guardrail"),
+        ("quick-ui-metadata-consistency", "quick-ui-metadata-consistency"),
+        ("quick-script-smoke", "quick-script-smoke"),
+        ("quick-trigger-bucket-coverage", "quick-trigger-bucket-coverage"),
+    ] {
+        steps.push(estimate_step(
+            key,
+            title,
+            "stage0",
+            None,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+        ));
+    }
+
+    steps.push(estimate_step(
+        "trigger-clean",
+        "trigger-clean",
+        "stage1",
+        Some(EVAL_MODULE_TRIGGER_ACCURACY),
+        trigger_cases,
+        repeats,
+        1,
+        ESTIMATE_TRIGGER_INPUT_TOKENS_PER_CALL,
+        ESTIMATE_TRIGGER_OUTPUT_TOKENS_PER_CALL,
+        ESTIMATE_TRIGGER_SECONDS_PER_CALL,
+    ));
+
+    if run_trigger_complex {
+        steps.push(estimate_step(
+            "trigger-complex",
+            "trigger-complex",
+            "stage2",
+            Some(EVAL_MODULE_ROBUSTNESS_SECURITY),
+            trigger_cases,
+            repeats,
+            1,
+            ESTIMATE_TRIGGER_INPUT_TOKENS_PER_CALL,
+            ESTIMATE_TRIGGER_OUTPUT_TOKENS_PER_CALL,
+            ESTIMATE_TRIGGER_SECONDS_PER_CALL,
+        ));
+    }
+
+    if run_functional_with_skill {
+        let with_skill_calls_per_case = 2 + judge_count;
+        let with_skill_input_tokens_per_case = ESTIMATE_FUNCTIONAL_EXEC_INPUT_TOKENS_PER_CALL
+            + ESTIMATE_FUNCTIONAL_BASELINE_INPUT_TOKENS_PER_CALL
+            + judge_count.saturating_mul(ESTIMATE_JUDGE_INPUT_TOKENS_PER_CALL);
+        let with_skill_output_tokens_per_case = ESTIMATE_FUNCTIONAL_EXEC_OUTPUT_TOKENS_PER_CALL
+            + ESTIMATE_FUNCTIONAL_BASELINE_OUTPUT_TOKENS_PER_CALL
+            + judge_count.saturating_mul(ESTIMATE_JUDGE_OUTPUT_TOKENS_PER_CALL);
+        let with_skill_seconds_per_case = ESTIMATE_FUNCTIONAL_EXEC_SECONDS_PER_CALL
+            + ESTIMATE_FUNCTIONAL_BASELINE_SECONDS_PER_CALL
+            + (judge_count as u64).saturating_mul(ESTIMATE_JUDGE_SECONDS_PER_CALL);
+        let with_skill_module = if contains_module(selected_modules, EVAL_MODULE_EXECUTION_CORRECTNESS)
+        {
+            EVAL_MODULE_EXECUTION_CORRECTNESS
+        } else {
+            EVAL_MODULE_ECONOMICS
+        };
+        steps.push(estimate_step(
+            "functional-with-skill",
+            "functional-with-skill",
+            "stage2",
+            Some(with_skill_module),
+            functional_cases,
+            repeats,
+            with_skill_calls_per_case,
+            with_skill_input_tokens_per_case,
+            with_skill_output_tokens_per_case,
+            with_skill_seconds_per_case,
+        ));
+    }
+
+    if run_functional_without_skill {
+        let without_skill_calls_per_case = 1 + judge_count;
+        let without_skill_input_tokens_per_case = ESTIMATE_FUNCTIONAL_BASELINE_INPUT_TOKENS_PER_CALL
+            + judge_count.saturating_mul(ESTIMATE_JUDGE_INPUT_TOKENS_PER_CALL);
+        let without_skill_output_tokens_per_case =
+            ESTIMATE_FUNCTIONAL_BASELINE_OUTPUT_TOKENS_PER_CALL
+                + judge_count.saturating_mul(ESTIMATE_JUDGE_OUTPUT_TOKENS_PER_CALL);
+        let without_skill_seconds_per_case = ESTIMATE_FUNCTIONAL_BASELINE_SECONDS_PER_CALL
+            + (judge_count as u64).saturating_mul(ESTIMATE_JUDGE_SECONDS_PER_CALL);
+        steps.push(estimate_step(
+            "functional-without-skill",
+            "functional-without-skill",
+            "stage2",
+            Some(EVAL_MODULE_ECONOMICS),
+            functional_cases,
+            repeats,
+            without_skill_calls_per_case,
+            without_skill_input_tokens_per_case,
+            without_skill_output_tokens_per_case,
+            without_skill_seconds_per_case,
+        ));
+    }
+
+    if mode != "quick" && contains_module(selected_modules, EVAL_MODULE_AUDITABILITY) {
+        steps.push(estimate_step(
+            "auditability-check",
+            "auditability-check",
+            "stage2",
+            Some(EVAL_MODULE_AUDITABILITY),
+            1,
+            repeats,
+            0,
+            0,
+            0,
+            1,
+        ));
+    }
+
+    let estimated_input_tokens = steps.iter().fold(0usize, |acc, item| {
+        acc.saturating_add(item.estimated_input_tokens)
+    });
+    let estimated_output_tokens = steps.iter().fold(0usize, |acc, item| {
+        acc.saturating_add(item.estimated_output_tokens)
+    });
+    let estimated_total_tokens = estimated_input_tokens.saturating_add(estimated_output_tokens);
+    let estimated_seconds = steps
+        .iter()
+        .fold(0u64, |acc, item| acc.saturating_add(item.estimated_seconds));
+
+    EvalPipelineEstimate {
+        mode: mode.to_string(),
+        model: model.to_string(),
+        judge_models: judge_models.to_vec(),
+        selected_modules: selected_modules.to_vec(),
+        repeats,
+        trigger_cases,
+        functional_cases,
+        taxonomy_pending,
+        estimated_input_tokens,
+        estimated_output_tokens,
+        estimated_total_tokens,
+        estimated_seconds,
+        estimated_minutes: round4(estimated_seconds as f64 / 60.0),
+        cost_estimate,
+        steps,
     }
 }
 
@@ -1950,11 +3350,13 @@ fn run_eval_pipeline_impl(
     seed: Option<u64>,
     temperature: Option<f64>,
     max_cost_usd: Option<f64>,
+    selected_modules: Option<Vec<String>>,
 ) -> Result<EvalPipelineOutput, String> {
     let home = crate::root_dir::default_home_dir();
     let mode = normalize_eval_mode(&mode)?.to_string();
     let primary_model = normalize_model(&model);
     let judge_models = normalize_judge_models(&primary_model, &mode, judge_models);
+    let selected_modules = normalize_selected_modules(&mode, selected_modules);
     let repeats = repeats.unwrap_or(DEFAULT_PIPELINE_REPEATS).max(1);
     let temp = temperature.unwrap_or(0.0);
     let taxonomy_result =
@@ -1962,22 +3364,34 @@ fn run_eval_pipeline_impl(
     match select_eval_strategy_by_sok(taxonomy_result.taxonomy.as_ref()) {
         EvalStrategy::Default => {}
     }
-    let total_steps_per_repeat = match mode.as_str() {
-        "quick" => 1,
-        "standard" => 3,
-        "full" => 4,
-        _ => 1,
-    };
+    let run_trigger_complex = should_run_trigger_complex(&mode, &selected_modules);
+    let run_functional_with_skill = should_run_functional_with_skill(&mode, &selected_modules);
+    let run_functional_without_skill = should_run_functional_without_skill(&mode, &selected_modules);
+    let mut total_steps_per_repeat = 1usize;
+    if run_trigger_complex {
+        total_steps_per_repeat += 1;
+    }
+    if run_functional_with_skill {
+        total_steps_per_repeat += 1;
+    }
+    if run_functional_without_skill {
+        total_steps_per_repeat += 1;
+    }
     let total_steps = total_steps_per_repeat * repeats;
 
     let trigger_cases = parse_json_file_case_count(&trigger_eval_set_path)?;
-    let functional_cases = if mode == "quick" {
+    let functional_cases = if mode == "quick" || (!run_functional_with_skill && !run_functional_without_skill)
+    {
         0
     } else {
         parse_json_file_case_count(&functional_eval_set_path)?
     };
-    let trigger_runs_per_repeat = if mode == "full" { 2 } else { 1 };
-    let functional_runs_per_repeat = if mode == "quick" { 0 } else { 2 };
+    if functional_cases > 0 {
+        ensure_functional_case_floor(functional_cases)?;
+    }
+    let trigger_runs_per_repeat = 1 + usize::from(run_trigger_complex);
+    let functional_runs_per_repeat =
+        usize::from(run_functional_with_skill) + usize::from(run_functional_without_skill);
     let estimated = estimate_cost(
         trigger_cases,
         functional_cases,
@@ -1996,6 +3410,7 @@ fn run_eval_pipeline_impl(
     let evidence_root = eval_pipeline_evidence_dir(&home, &skill_name, &run_id);
     fs::create_dir_all(&evidence_root)
         .map_err(|e| format!("Create eval evidence dir failed: {e}"))?;
+    let quick_checks = run_stage0_quick_checks(&skill_path, &trigger_eval_set_path, &taxonomy_result);
 
     let start = std::time::Instant::now();
     let mut executed_steps = 0usize;
@@ -2011,22 +3426,152 @@ fn run_eval_pipeline_impl(
         "Evaluation pipeline started.",
         start.elapsed().as_millis(),
     );
-    if taxonomy_result.status == "failed" {
+    if !quick_checks.all_passed {
+        let failed_names = quick_checks
+            .checks
+            .iter()
+            .filter(|item| !item.passed && item.blocking)
+            .map(|item| item.key.clone())
+            .collect::<Vec<_>>();
+        let blocked_message = format!(
+            "Quick checks failed; pipeline blocked. Failed checks: {}",
+            failed_names.join(", ")
+        );
         push_pipeline_progress(
             &app_handle,
             &run_id,
-            "running",
+            "completed",
             0,
             repeats,
             0,
             total_steps,
-            "taxonomy",
-            &format!(
-                "Taxonomy classification warning: {}",
-                taxonomy_result.message
-            ),
+            "quick_checks",
+            &blocked_message,
             start.elapsed().as_millis(),
         );
+        let trigger_metrics = EvalTriggerMetrics {
+            precision: 0.0,
+            recall: 0.0,
+            fpr: 0.0,
+            true_positive: 0,
+            true_negative: 0,
+            false_positive: 0,
+            false_negative: 0,
+        };
+        let functional_placeholder =
+            skipped_functional_output(&skill_name, "Pipeline blocked by Stage0 quick checks.");
+        let evidence_summary = summarize_evidence(
+            &TriggerEvalOutput {
+                status: "skipped".to_string(),
+                skill_name: Some(skill_name.clone()),
+                summary: Some(TriggerEvalSummary {
+                    total: 0,
+                    passed: 0,
+                    failed: 0,
+                    pass_rate: 0.0,
+                }),
+                results: Some(Vec::new()),
+                message: Some("Blocked by Stage0 quick checks.".to_string()),
+            },
+            None,
+            &functional_placeholder,
+            None,
+        );
+        let economics = compute_economics(None, None);
+        let module_results = build_module_results(
+            &mode,
+            &selected_modules,
+            &quick_checks,
+            &trigger_metrics,
+            None,
+            0.0,
+            &economics,
+            &evidence_summary,
+        );
+        let gate = build_eval_gate(&mode, &quick_checks, &selected_modules, &module_results);
+        let mut blocked_output = EvalPipelineOutput {
+            status: "success".to_string(),
+            mode: mode.clone(),
+            summary: EvalPipelineSummary {
+                total_cases: 0,
+                total_passed: 0,
+                total_failed: 0,
+                pass_rate: 0.0,
+            },
+            quick_checks: Some(quick_checks),
+            trigger_clean: TriggerEvalOutput {
+                status: "skipped".to_string(),
+                skill_name: Some(skill_name.clone()),
+                summary: Some(TriggerEvalSummary {
+                    total: 0,
+                    passed: 0,
+                    failed: 0,
+                    pass_rate: 0.0,
+                }),
+                results: Some(Vec::new()),
+                message: Some("Blocked by Stage0 quick checks.".to_string()),
+            },
+            trigger_complex: None,
+            functional: functional_placeholder,
+            functional_without_skill: None,
+            module_results: Some(module_results),
+            gate: Some(gate),
+            economics: Some(economics),
+            dimension_scores: EvalDimensionScores {
+                trigger_accuracy: 0.0,
+                functional_correctness: 0.0,
+                robustness: 0.0,
+                efficiency: 0.0,
+                value_added: 0.0,
+            },
+            trigger_metrics,
+            cost_estimate: estimated,
+            delta_vs_no_skill: None,
+            repeat_stats: EvalRepeatStats {
+                overall_pass_rate: EvalRateStats {
+                    mean: 0.0,
+                    median: 0.0,
+                    std_dev: 0.0,
+                },
+                trigger_pass_rate: EvalRateStats {
+                    mean: 0.0,
+                    median: 0.0,
+                    std_dev: 0.0,
+                },
+                functional_pass_rate: None,
+                robustness: EvalRateStats {
+                    mean: 0.0,
+                    median: 0.0,
+                    std_dev: 0.0,
+                },
+                value_added: None,
+            },
+            run_meta: EvalRunMeta {
+                mode: mode.clone(),
+                model: primary_model.clone(),
+                judge_models: judge_models.clone(),
+                repeats,
+                seed,
+                temperature: temp,
+                executed_steps: 0,
+                elapsed_ms: start.elapsed().as_millis(),
+                skill_hash: compute_skill_hash(&skill_path),
+            },
+            evidence_level: Some("real".to_string()),
+            advisory: Some(EvalAdvisory {
+                level: "high_risk".to_string(),
+                reasons: vec![blocked_message.clone()],
+                non_blocking: false,
+            }),
+            evidence_summary: Some(evidence_summary),
+            taxonomy_status: Some(taxonomy_result.status.clone()),
+            taxonomy_message: Some(taxonomy_result.message.clone()),
+            taxonomy_applied: Some(taxonomy_result.applied),
+            history_path: None,
+            message: Some(blocked_message),
+        };
+        blocked_output.history_path = persist_pipeline_history(&home, &skill_name, &blocked_output)?;
+        return Ok(blocked_output);
     }
     let mut last_trigger_clean: Option<TriggerEvalOutput> = None;
     let mut last_trigger_complex: Option<TriggerEvalOutput> = None;
@@ -2106,7 +3651,7 @@ fn run_eval_pipeline_impl(
         let mut repeat_trigger_passed = clean_summary.passed;
         last_trigger_clean = Some(trigger_clean);
 
-        if mode == "full" {
+        if run_trigger_complex {
             let next_step = executed_steps + 1;
             wait_if_paused_or_cancelled(
                 &control,
@@ -2176,7 +3721,7 @@ fn run_eval_pipeline_impl(
         if mode == "quick" {
             last_functional = Some(skipped_functional_output(
                 &skill_name,
-                "Skipped in quick mode (trigger + structure gate only).",
+                "Skipped in quick mode (Stage0 + Stage1 only).",
             ));
             let repeat_total = repeat_trigger_total;
             let repeat_passed = repeat_trigger_passed;
@@ -2186,128 +3731,142 @@ fn run_eval_pipeline_impl(
                 0.0
             });
         } else {
-            let next_step = executed_steps + 1;
-            wait_if_paused_or_cancelled(
-                &control,
-                &app_handle,
-                &run_id,
-                current_repeat,
-                repeats,
-                next_step,
-                total_steps,
-                "functional_with_skill",
-                start.elapsed().as_millis(),
-            )?;
-            push_pipeline_progress(
-                &app_handle,
-                &run_id,
-                "running",
-                current_repeat,
-                repeats,
-                next_step,
-                total_steps,
-                "functional_with_skill",
-                &format!("Round {current_repeat}/{repeats}: running functional eval (with skill)."),
-                start.elapsed().as_millis(),
-            );
-            let functional = run_functional_eval_impl(
-                skill_name.clone(),
-                skill_path.clone(),
-                functional_eval_set_path.clone(),
-                functional_compare_mode_for_mode(&mode).to_string(),
-                primary_model.clone(),
-                Some(judge_models.clone()),
-                Some(
-                    evidence_root
-                        .join(format!("repeat-{current_repeat:02}"))
-                        .join("functional-with-skill"),
-                ),
-                Some(&control),
-            )
-            .map_err(|err| {
+            let functional = if run_functional_with_skill {
+                let next_step = executed_steps + 1;
+                wait_if_paused_or_cancelled(
+                    &control,
+                    &app_handle,
+                    &run_id,
+                    current_repeat,
+                    repeats,
+                    next_step,
+                    total_steps,
+                    "functional_with_skill",
+                    start.elapsed().as_millis(),
+                )?;
                 push_pipeline_progress(
                     &app_handle,
                     &run_id,
-                    status_for_error(&err),
+                    "running",
                     current_repeat,
                     repeats,
                     next_step,
                     total_steps,
                     "functional_with_skill",
                     &format!(
-                        "Round {current_repeat}/{repeats}: functional(with skill) failed: {err}"
+                        "Round {current_repeat}/{repeats}: running functional eval (with skill)."
                     ),
                     start.elapsed().as_millis(),
                 );
-                err
-            })?;
-            executed_steps += 1;
+                let functional = run_functional_eval_impl(
+                    skill_name.clone(),
+                    skill_path.clone(),
+                    functional_eval_set_path.clone(),
+                    functional_compare_mode_for_mode(&mode).to_string(),
+                    primary_model.clone(),
+                    Some(judge_models.clone()),
+                    Some(
+                        evidence_root
+                            .join(format!("repeat-{current_repeat:02}"))
+                            .join("functional-with-skill"),
+                    ),
+                    Some(&control),
+                )
+                .map_err(|err| {
+                    push_pipeline_progress(
+                        &app_handle,
+                        &run_id,
+                        status_for_error(&err),
+                        current_repeat,
+                        repeats,
+                        next_step,
+                        total_steps,
+                        "functional_with_skill",
+                        &format!(
+                            "Round {current_repeat}/{repeats}: functional(with skill) failed: {err}"
+                        ),
+                        start.elapsed().as_millis(),
+                    );
+                    err
+                })?;
+                executed_steps += 1;
+                functional_pass_rates.push(safe_functional_summary(&functional).pass_rate);
+                functional
+            } else {
+                skipped_functional_output(
+                    &skill_name,
+                    "Skipped because selected modules do not require functional(with skill).",
+                )
+            };
             let functional_summary = safe_functional_summary(&functional);
-            functional_pass_rates.push(functional_summary.pass_rate);
             last_functional = Some(functional);
 
-            let next_step = executed_steps + 1;
-            wait_if_paused_or_cancelled(
-                &control,
-                &app_handle,
-                &run_id,
-                current_repeat,
-                repeats,
-                next_step,
-                total_steps,
-                "functional_without_skill",
-                start.elapsed().as_millis(),
-            )?;
-            push_pipeline_progress(
-                &app_handle,
-                &run_id,
-                "running",
-                current_repeat,
-                repeats,
-                next_step,
-                total_steps,
-                "functional_without_skill",
-                &format!(
-                    "Round {current_repeat}/{repeats}: running functional eval (without skill)."
-                ),
-                start.elapsed().as_millis(),
-            );
-            let functional_without_skill = run_functional_eval_impl(
-                skill_name.clone(),
-                skill_path.clone(),
-                functional_eval_set_path.clone(),
-                "without_skill".to_string(),
-                primary_model.clone(),
-                Some(judge_models.clone()),
-                Some(
-                    evidence_root
-                        .join(format!("repeat-{current_repeat:02}"))
-                        .join("functional-without-skill"),
-                ),
-                Some(&control),
-            )
-            .map_err(|err| {
+            if run_functional_without_skill {
+                let next_step = executed_steps + 1;
+                wait_if_paused_or_cancelled(
+                    &control,
+                    &app_handle,
+                    &run_id,
+                    current_repeat,
+                    repeats,
+                    next_step,
+                    total_steps,
+                    "functional_without_skill",
+                    start.elapsed().as_millis(),
+                )?;
                 push_pipeline_progress(
                     &app_handle,
                     &run_id,
-                    status_for_error(&err),
+                    "running",
                     current_repeat,
                     repeats,
                     next_step,
                     total_steps,
                     "functional_without_skill",
                     &format!(
-                        "Round {current_repeat}/{repeats}: functional(without skill) failed: {err}"
+                        "Round {current_repeat}/{repeats}: running functional eval (without skill)."
                     ),
                     start.elapsed().as_millis(),
                 );
-                err
-            })?;
-            executed_steps += 1;
-            let without_summary = safe_functional_summary(&functional_without_skill);
-            without_skill_pass_rates.push(without_summary.pass_rate);
-            value_added_rates.push(functional_summary.pass_rate - without_summary.pass_rate);
-            last_functional_without_skill = Some(functional_without_skill);
+                let functional_without_skill = run_functional_eval_impl(
+                    skill_name.clone(),
+                    skill_path.clone(),
+                    functional_eval_set_path.clone(),
+                    "without_skill".to_string(),
+                    primary_model.clone(),
+                    Some(judge_models.clone()),
+                    Some(
+                        evidence_root
+                            .join(format!("repeat-{current_repeat:02}"))
+                            .join("functional-without-skill"),
+                    ),
+                    Some(&control),
+                )
+                .map_err(|err| {
+                    push_pipeline_progress(
+                        &app_handle,
+                        &run_id,
+                        status_for_error(&err),
+                        current_repeat,
+                        repeats,
+                        next_step,
+                        total_steps,
+                        "functional_without_skill",
+                        &format!(
+                            "Round {current_repeat}/{repeats}: functional(without skill) failed: {err}"
+                        ),
+                        start.elapsed().as_millis(),
+                    );
+                    err
+                })?;
+                executed_steps += 1;
+                let without_summary = safe_functional_summary(&functional_without_skill);
+                without_skill_pass_rates.push(without_summary.pass_rate);
+                value_added_rates.push(functional_summary.pass_rate - without_summary.pass_rate);
+                last_functional_without_skill = Some(functional_without_skill);
+            } else {
+                last_functional_without_skill = None;
+            }
 
             let repeat_total = repeat_trigger_total + functional_summary.total;
             let repeat_passed = repeat_trigger_passed + functional_summary.passed;
@@ -2396,11 +3955,33 @@ fn run_eval_pipeline_impl(
         &functional,
         functional_without_skill.as_ref(),
     );
+    let economics = compute_economics(Some(&functional), functional_without_skill.as_ref());
 
     let robustness = robustness_stats.mean;
     let efficiency =
         (1.0 - (estimated.actual_usd_estimate / (estimated.actual_usd_estimate + 0.01))).max(0.0);
     let value_added = value_added_stats.as_ref().map_or(0.0, |item| item.mean);
+    let module_results = build_module_results(
+        &mode,
+        &selected_modules,
+        &quick_checks,
+        &trigger_metrics,
+        functional_stats.as_ref(),
+        robustness,
+        &economics,
+        &evidence_summary,
+    );
+    let gate = build_eval_gate(&mode, &quick_checks, &selected_modules, &module_results);
+    let gate_message = if mode == "quick" {
+        None
+    } else if gate.full_release_pass == Some(true) {
+        Some("Selected modules passed release gate.".to_string())
+    } else {
+        Some(format!(
+            "Release gate failed for selected modules: {}",
+            gate.failed_modules.join(", ")
+        ))
+    };
 
     let mut output = EvalPipelineOutput {
         status: "success".to_string(),
@@ -2411,10 +3992,14 @@ fn run_eval_pipeline_impl(
             total_failed,
             pass_rate: overall_stats.mean,
         },
+        quick_checks: Some(quick_checks),
         trigger_clean,
         trigger_complex,
         functional,
         functional_without_skill,
+        module_results: Some(module_results),
+        gate: Some(gate),
+        economics: Some(economics),
         dimension_scores: EvalDimensionScores {
             trigger_accuracy: trigger_stats.mean,
             functional_correctness: if mode == "quick" {
@@ -2454,7 +4039,7 @@ fn run_eval_pipeline_impl(
         taxonomy_message: Some(taxonomy_result.message.clone()),
         taxonomy_applied: Some(taxonomy_result.applied),
         history_path: None,
-        message: None,
+        message: gate_message,
     };
 
     output.history_path = persist_pipeline_history(&home, &skill_name, &output)?;
@@ -2494,24 +4079,15 @@ fn timeout_secs_for_case_count(case_count: usize) -> u64 {
     computed.clamp(EVAL_TIMEOUT_SECS, MAX_EVAL_TIMEOUT_SECS)
 }
 
-fn estimate_pipeline_case_count(
-    mode: &str,
-    trigger_cases: usize,
-    functional_cases: usize,
-    repeats: usize,
-) -> usize {
-    let trigger_runs_per_repeat = if mode == "full" { 2 } else { 1 };
-    let functional_runs_per_repeat = match mode {
-        "quick" => 0,
-        "full" => 2,
-        _ => 1,
-    };
-
-    let per_repeat = trigger_cases
-        .saturating_mul(trigger_runs_per_repeat)
-        .saturating_add(functional_cases.saturating_mul(functional_runs_per_repeat))
-        .max(1);
-    per_repeat.saturating_mul(repeats.max(1))
+fn sample_generation_request_timeout_secs(trigger_count: usize, functional_count: usize) -> u64 {
+    let total_cases = trigger_count.saturating_add(functional_count).max(1) as u64;
+    let computed = SAMPLE_GENERATION_REQUEST_TIMEOUT_BASE_SECS.saturating_add(
+        total_cases.saturating_mul(SAMPLE_GENERATION_REQUEST_TIMEOUT_PER_CASE_SECS),
+    );
+    computed.clamp(
+        SAMPLE_GENERATION_REQUEST_TIMEOUT_MIN_SECS,
+        SAMPLE_GENERATION_REQUEST_TIMEOUT_MAX_SECS,
+    )
 }
 
 fn eval_generate_samples_impl(
@@ -2533,7 +4109,9 @@ fn eval_generate_samples_impl(
     let trigger_count = trigger_count.unwrap_or(DEFAULT_TRIGGER_CASE_COUNT).max(2);
     let functional_count = functional_count
         .unwrap_or(DEFAULT_FUNCTIONAL_CASE_COUNT)
-        .max(1);
+        .max(DEFAULT_FUNCTIONAL_CASE_COUNT);
+    let request_timeout_secs =
+        sample_generation_request_timeout_secs(trigger_count, functional_count);
     let output_dir = eval_tmp_dir("samples")?;
     let trigger_path = output_dir.join("trigger.json");
     let functional_path = output_dir.join("functional.json");
@@ -2554,6 +4132,8 @@ fn eval_generate_samples_impl(
         normalize_model(&model),
         "--provider".to_string(),
         config.provider.clone(),
+        "--request-timeout-secs".to_string(),
+        request_timeout_secs.to_string(),
         "--output-dir".to_string(),
         path_to_utf8(&output_dir)?,
     ];
@@ -2732,6 +4312,51 @@ pub fn eval_get_storage_paths(skill_name: Option<String>) -> Result<EvalStorageP
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn eval_estimate_pipeline(
+    _skill_name: String,
+    skill_path: PathBuf,
+    trigger_eval_set_path: PathBuf,
+    functional_eval_set_path: PathBuf,
+    mode: String,
+    model: String,
+    judge_models: Option<Vec<String>>,
+    repeats: Option<usize>,
+    max_cost_usd: Option<f64>,
+    selected_modules: Option<Vec<String>>,
+) -> Result<EvalPipelineEstimate, String> {
+    let mode = normalize_eval_mode(&mode)?.to_string();
+    let primary_model = normalize_model(&model);
+    let judge_models = normalize_judge_models(&primary_model, &mode, judge_models);
+    let selected_modules = normalize_selected_modules(&mode, selected_modules);
+    let repeats = repeats.unwrap_or(DEFAULT_PIPELINE_REPEATS).max(1);
+    let trigger_cases = parse_json_file_case_count(&trigger_eval_set_path)
+        .map_err(|err| format!("Invalid trigger eval dataset: {err}"))?;
+    let needs_functional = should_run_functional_with_skill(&mode, &selected_modules)
+        || should_run_functional_without_skill(&mode, &selected_modules);
+    let functional_cases = if mode == "quick" || !needs_functional {
+        0
+    } else {
+        parse_json_file_case_count(&functional_eval_set_path)
+            .map_err(|err| format!("Invalid functional eval dataset: {err}"))?
+    };
+    if functional_cases > 0 {
+        ensure_functional_case_floor(functional_cases)?;
+    }
+    Ok(estimate_pipeline_plan(
+        &skill_path,
+        &mode,
+        &primary_model,
+        &judge_models,
+        &selected_modules,
+        repeats,
+        trigger_cases,
+        functional_cases,
+        max_cost_usd,
+    ))
+}
+
+#[tauri::command]
 pub fn eval_list_history(
     skill_name: String,
     limit: Option<usize>,
@@ -2750,12 +4375,16 @@ pub fn eval_save_config(
     provider: Option<String>,
     base_url: Option<String>,
     default_model: String,
+    cost_currency: Option<String>,
 ) -> Result<EvalMutationResult, String> {
     let config = EvalConfig {
         api_key: api_key.trim().to_string(),
         provider: normalize_provider(provider.as_deref().unwrap_or(DEFAULT_PROVIDER)),
         base_url: normalize_base_url(base_url),
         default_model: normalize_model(&default_model),
+        cost_currency: normalize_cost_currency(
+            cost_currency.as_deref().unwrap_or(DEFAULT_COST_CURRENCY),
+        ),
     };
     write_eval_config_with_home(&crate::root_dir::default_home_dir(), &config)?;
     Ok(EvalMutationResult { success: true })
@@ -2851,6 +4480,7 @@ pub async fn run_eval_pipeline(
     seed: Option<u64>,
     temperature: Option<f64>,
     max_cost_usd: Option<f64>,
+    selected_modules: Option<Vec<String>>,
     run_id: Option<String>,
 ) -> Result<EvalPipelineOutput, String> {
     let resolved_run_id = run_id
@@ -2861,16 +4491,30 @@ pub async fn run_eval_pipeline(
     let run_id_for_task = resolved_run_id.clone();
     let expected_repeats = repeats.unwrap_or(DEFAULT_PIPELINE_REPEATS).max(1);
     let mode_for_timeout = normalize_eval_mode(&mode).unwrap_or("standard");
+    let selected_modules_for_timeout =
+        normalize_selected_modules(mode_for_timeout, selected_modules.clone());
+    let run_trigger_complex_for_timeout =
+        should_run_trigger_complex(mode_for_timeout, &selected_modules_for_timeout);
+    let run_functional_with_for_timeout =
+        should_run_functional_with_skill(mode_for_timeout, &selected_modules_for_timeout);
+    let run_functional_without_for_timeout =
+        should_run_functional_without_skill(mode_for_timeout, &selected_modules_for_timeout);
     let trigger_case_count =
         read_eval_set_case_count(&trigger_eval_set_path).unwrap_or(DEFAULT_TRIGGER_CASE_COUNT);
-    let functional_case_count = read_eval_set_case_count(&functional_eval_set_path)
-        .unwrap_or(DEFAULT_FUNCTIONAL_CASE_COUNT);
-    let timeout_secs = timeout_secs_for_case_count(estimate_pipeline_case_count(
-        mode_for_timeout,
-        trigger_case_count,
-        functional_case_count,
-        expected_repeats,
-    ));
+    let functional_case_count = if run_functional_with_for_timeout || run_functional_without_for_timeout
+    {
+        read_eval_set_case_count(&functional_eval_set_path).unwrap_or(DEFAULT_FUNCTIONAL_CASE_COUNT)
+    } else {
+        0
+    };
+    let trigger_runs_per_repeat_for_timeout = 1 + usize::from(run_trigger_complex_for_timeout);
+    let functional_runs_per_repeat_for_timeout =
+        usize::from(run_functional_with_for_timeout) + usize::from(run_functional_without_for_timeout);
+    let estimated_case_count = expected_repeats.saturating_mul(
+        trigger_case_count.saturating_mul(trigger_runs_per_repeat_for_timeout)
+            + functional_case_count.saturating_mul(functional_runs_per_repeat_for_timeout),
+    );
+    let timeout_secs = timeout_secs_for_case_count(estimated_case_count.max(1));
     run_eval_blocking("run_eval_pipeline", timeout_secs, move || {
         let control = register_eval_run_control(&run_id_for_task)?;
         let _guard = EvalRunControlGuard::new(run_id_for_task.clone());
@@ -2890,6 +4534,7 @@ pub async fn run_eval_pipeline(
             seed,
             temperature,
             max_cost_usd,
+            selected_modules,
         );
 
         if let Err(err) = result.as_ref() {
@@ -2972,6 +4617,19 @@ mod tests {
                 total_failed: 2,
                 pass_rate: 0.8,
             },
+            quick_checks: Some(EvalQuickChecks {
+                all_passed: true,
+                checks: vec![],
+                bucket_coverage: Some(EvalTriggerBucketCoverage {
+                    min_required_per_bucket: TRIGGER_BUCKET_MIN_SAMPLES,
+                    positive_trigger: 12,
+                    negative_trigger: 12,
+                    boundary_ambiguous: 12,
+                    adjacent_skill_confusion: 12,
+                    all_buckets_met: true,
+                    failed_buckets: vec![],
+                }),
+            }),
             trigger_clean: TriggerEvalOutput {
                 status: "success".to_string(),
                 skill_name: Some("demo".to_string()),
@@ -2999,6 +4657,28 @@ mod tests {
                 message: None,
             },
             functional_without_skill: None,
+            module_results: Some(vec![]),
+            gate: Some(EvalGate {
+                quick_blocking_pass: true,
+                full_release_pass: Some(true),
+                partial_release: Some(false),
+                selected_modules: EVAL_ALL_MODULE_KEYS
+                    .iter()
+                    .map(|item| (*item).to_string())
+                    .collect::<Vec<_>>(),
+                failed_modules: vec![],
+            }),
+            economics: Some(EvalEconomics {
+                gross_time_saved_ms: 120.0,
+                gross_token_saved: 60.0,
+                negative_time_waste_ms: 10.0,
+                negative_token_waste: 5.0,
+                net_time_saved_ms: 110.0,
+                net_token_saved: 55.0,
+                net_usd: Some(0.0001),
+                baseline_samples: 6,
+                evaluated_pairs: 6,
+            }),
             dimension_scores: EvalDimensionScores {
                 trigger_accuracy: 0.75,
                 functional_correctness: 0.8333,
@@ -3017,6 +4697,8 @@ mod tests {
             },
             cost_estimate: EvalCostEstimate {
                 estimated_usd: 0.01,
+                estimated_usd_min: Some(0.008),
+                estimated_usd_max: Some(0.012),
                 actual_usd_estimate: 0.01,
                 trigger_cases: 4,
                 functional_cases: 6,
@@ -3094,41 +4776,9 @@ mod tests {
         })
         .expect("normalize taxonomy");
 
-        assert_eq!(normalized.sok_group, "Natural-language × Single-tool");
+        assert_eq!(normalized.sok_group, "Natural-language 脳 Single-tool");
         assert_eq!(normalized.skillsbench_difficulty_core, "Core");
         assert_eq!(normalized.skillsbench_difficulty_level, "Easy");
-    }
-
-    #[test]
-    fn merge_taxonomy_tags_keeps_manual_tags_and_replaces_taxonomy_tags() {
-        let taxonomy = normalize_taxonomy(SkillTaxonomyClassification {
-            sok_representation: "Tool macros".to_string(),
-            sok_scope: "Multi-tool".to_string(),
-            sok_group: "Tool macros × Multi-tool".to_string(),
-            anthropic_category: "MCP Enhancement".to_string(),
-            skillsbench_domain: "Software Engineering".to_string(),
-            skillsbench_difficulty_core: "Extended".to_string(),
-            skillsbench_difficulty_level: "Medium".to_string(),
-            classified_at: "2026-03-12T00:00:00Z".to_string(),
-            classifier_model: "gpt-4o-mini".to_string(),
-        })
-        .expect("normalize taxonomy");
-
-        let merged = merge_taxonomy_tags(
-            &[
-                "manual-tag".to_string(),
-                "taxonomy:sok-scope:legacy".to_string(),
-                "manual-tag".to_string(),
-            ],
-            &taxonomy,
-        );
-
-        assert_eq!(merged[0], "manual-tag");
-        assert!(merged
-            .iter()
-            .any(|tag| tag == "taxonomy:sok-scope:multi-tool"));
-        assert_eq!(merged.iter().filter(|tag| *tag == "manual-tag").count(), 1);
-        assert!(merged.iter().all(|tag| tag != "taxonomy:sok-scope:legacy"));
     }
 
     #[test]
@@ -3145,7 +4795,7 @@ mod tests {
         );
         taxonomy_map.insert(
             YamlValue::String("sokGroup".to_string()),
-            YamlValue::String("Natural-language × Single-tool".to_string()),
+            YamlValue::String("Natural-language 脳 Single-tool".to_string()),
         );
         taxonomy_map.insert(
             YamlValue::String("anthropicCategory".to_string()),
@@ -3188,6 +4838,7 @@ mod tests {
         let config = read_eval_config_with_home(&home).expect("read eval config");
         assert_eq!(config.provider, DEFAULT_PROVIDER);
         assert_eq!(config.default_model, DEFAULT_MODEL);
+        assert_eq!(config.cost_currency, DEFAULT_COST_CURRENCY);
         assert!(config.api_key.is_empty());
         assert!(config.base_url.is_none());
     }
@@ -3200,6 +4851,7 @@ mod tests {
             provider: " openai-compatible ".to_string(),
             base_url: Some(" https://api.openai.com/v1 ".to_string()),
             default_model: " gpt-4.1-mini ".to_string(),
+            cost_currency: " cny ".to_string(),
         };
         write_eval_config_with_home(&home, &config).expect("write eval config");
         let loaded = read_eval_config_with_home(&home).expect("read eval config");
@@ -3210,6 +4862,7 @@ mod tests {
             Some("https://api.openai.com/v1")
         );
         assert_eq!(loaded.default_model, "gpt-4.1-mini");
+        assert_eq!(loaded.cost_currency, "CNY");
     }
 
     #[test]
@@ -3439,6 +5092,383 @@ mod tests {
         let high_risk = build_eval_advisory("standard", &high_risk_metrics, Some(-0.10));
         assert_eq!(high_risk.level, "high_risk");
         assert!(high_risk.non_blocking);
+    }
+
+    #[test]
+    fn parse_trigger_bucket_coverage_enforces_bucket_minimum() {
+        let home = temp_root("myskills-tauri-evals-test");
+        fs::create_dir_all(&home).expect("create temp root");
+        let path = home.join("trigger-bucket.json");
+        let mut rows = Vec::<serde_json::Value>::new();
+        for i in 0..12 {
+            rows.push(serde_json::json!({
+                "query": format!("positive-{i}"),
+                "should_trigger": true,
+                "test_bucket": "positive_trigger"
+            }));
+            rows.push(serde_json::json!({
+                "query": format!("negative-{i}"),
+                "should_trigger": false,
+                "test_bucket": "negative_trigger"
+            }));
+            rows.push(serde_json::json!({
+                "query": format!("boundary-{i}"),
+                "should_trigger": i % 2 == 0,
+                "test_bucket": "boundary_ambiguous"
+            }));
+            rows.push(serde_json::json!({
+                "query": format!("adjacent-{i}"),
+                "should_trigger": i % 2 == 1,
+                "test_bucket": "adjacent_skill_confusion"
+            }));
+        }
+        fs::write(
+            &path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&rows).expect("serialize rows")
+            ),
+        )
+        .expect("write trigger buckets");
+        let coverage = parse_trigger_bucket_coverage(&path).expect("bucket coverage");
+        assert!(coverage.all_buckets_met);
+        assert_eq!(coverage.positive_trigger, 12);
+        assert_eq!(coverage.failed_buckets.len(), 0);
+    }
+
+    #[test]
+    fn stage0_quick_checks_skip_agent_yaml_checks_for_non_agent_skill() {
+        let home = temp_root("myskills-tauri-evals-test");
+        fs::create_dir_all(&home).expect("create temp root");
+        let skill_dir = home.join("non-agent-skill");
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+        let skill_path = skill_dir.join("SKILL.md");
+        fs::write(
+            &skill_path,
+            r#"---
+name: non-agent-skill
+description: A non-agent skill used for testing quick check shape routing.
+---
+
+# Non-agent
+"#,
+        )
+        .expect("write skill");
+
+        let trigger_path = home.join("trigger-bucket.json");
+        let mut rows = Vec::<serde_json::Value>::new();
+        for i in 0..12 {
+            rows.push(serde_json::json!({
+                "query": format!("positive-{i}"),
+                "should_trigger": true,
+                "test_bucket": "positive_trigger"
+            }));
+            rows.push(serde_json::json!({
+                "query": format!("negative-{i}"),
+                "should_trigger": false,
+                "test_bucket": "negative_trigger"
+            }));
+            rows.push(serde_json::json!({
+                "query": format!("boundary-{i}"),
+                "should_trigger": i % 2 == 0,
+                "test_bucket": "boundary_ambiguous"
+            }));
+            rows.push(serde_json::json!({
+                "query": format!("adjacent-{i}"),
+                "should_trigger": i % 2 == 1,
+                "test_bucket": "adjacent_skill_confusion"
+            }));
+        }
+        fs::write(
+            &trigger_path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&rows).expect("serialize rows")
+            ),
+        )
+        .expect("write trigger buckets");
+
+        let taxonomy = normalize_taxonomy(SkillTaxonomyClassification {
+            sok_representation: "Natural-language".to_string(),
+            sok_scope: "Single-tool".to_string(),
+            sok_group: "Natural-language × Single-tool".to_string(),
+            anthropic_category: "MCP Enhancement".to_string(),
+            skillsbench_domain: "Software Engineering".to_string(),
+            skillsbench_difficulty_core: "Core".to_string(),
+            skillsbench_difficulty_level: "Easy".to_string(),
+            classified_at: "2026-03-12T00:00:00Z".to_string(),
+            classifier_model: "gpt-4o-mini".to_string(),
+        })
+        .expect("normalize taxonomy");
+        let taxonomy_result = EnsureSkillTaxonomyResult {
+            status: "skipped".to_string(),
+            message: "taxonomy already present".to_string(),
+            applied: false,
+            taxonomy: Some(taxonomy),
+        };
+
+        let quick_checks = run_stage0_quick_checks(&skill_path, &trigger_path, &taxonomy_result);
+        let generation = quick_checks
+            .checks
+            .iter()
+            .find(|item| item.key == "generation-guardrail")
+            .expect("generation check");
+        let ui = quick_checks
+            .checks
+            .iter()
+            .find(|item| item.key == "ui-metadata-consistency")
+            .expect("ui check");
+
+        assert!(quick_checks.all_passed);
+        assert!(generation.passed);
+        assert!(ui.passed);
+        assert!(generation.message.contains("Skipped"));
+        assert!(ui.message.contains("Skipped"));
+    }
+
+    #[test]
+    fn stage0_quick_checks_require_openai_yaml_for_agent_shape() {
+        let home = temp_root("myskills-tauri-evals-test");
+        fs::create_dir_all(&home).expect("create temp root");
+        let skill_dir = home.join("agent-shape-skill");
+        fs::create_dir_all(skill_dir.join("agents")).expect("create agents dir");
+        let skill_path = skill_dir.join("SKILL.md");
+        fs::write(
+            &skill_path,
+            r#"---
+name: agent-shape-skill
+description: A skill that declares agent shape but misses openai metadata.
+---
+
+# Agent shape without openai.yaml
+"#,
+        )
+        .expect("write skill");
+
+        let trigger_path = home.join("trigger-bucket-agent.json");
+        let mut rows = Vec::<serde_json::Value>::new();
+        for i in 0..12 {
+            rows.push(serde_json::json!({
+                "query": format!("positive-{i}"),
+                "should_trigger": true,
+                "test_bucket": "positive_trigger"
+            }));
+            rows.push(serde_json::json!({
+                "query": format!("negative-{i}"),
+                "should_trigger": false,
+                "test_bucket": "negative_trigger"
+            }));
+            rows.push(serde_json::json!({
+                "query": format!("boundary-{i}"),
+                "should_trigger": i % 2 == 0,
+                "test_bucket": "boundary_ambiguous"
+            }));
+            rows.push(serde_json::json!({
+                "query": format!("adjacent-{i}"),
+                "should_trigger": i % 2 == 1,
+                "test_bucket": "adjacent_skill_confusion"
+            }));
+        }
+        fs::write(
+            &trigger_path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&rows).expect("serialize rows")
+            ),
+        )
+        .expect("write trigger buckets");
+
+        let taxonomy = normalize_taxonomy(SkillTaxonomyClassification {
+            sok_representation: "Natural-language".to_string(),
+            sok_scope: "Single-tool".to_string(),
+            sok_group: "Natural-language 脳 Single-tool".to_string(),
+            anthropic_category: "MCP Enhancement".to_string(),
+            skillsbench_domain: "Software Engineering".to_string(),
+            skillsbench_difficulty_core: "Core".to_string(),
+            skillsbench_difficulty_level: "Easy".to_string(),
+            classified_at: "2026-03-12T00:00:00Z".to_string(),
+            classifier_model: "gpt-4o-mini".to_string(),
+        })
+        .expect("normalize taxonomy");
+        let taxonomy_result = EnsureSkillTaxonomyResult {
+            status: "skipped".to_string(),
+            message: "taxonomy already present".to_string(),
+            applied: false,
+            taxonomy: Some(taxonomy),
+        };
+
+        let quick_checks = run_stage0_quick_checks(&skill_path, &trigger_path, &taxonomy_result);
+        let generation = quick_checks
+            .checks
+            .iter()
+            .find(|item| item.key == "generation-guardrail")
+            .expect("generation check");
+        let ui = quick_checks
+            .checks
+            .iter()
+            .find(|item| item.key == "ui-metadata-consistency")
+            .expect("ui check");
+
+        assert!(!quick_checks.all_passed);
+        assert!(!generation.passed);
+        assert!(!ui.passed);
+        assert!(generation.message.contains("Missing agents/openai.yaml"));
+        assert!(ui.message.contains("Missing agents/openai.yaml"));
+    }
+
+    #[test]
+    fn sample_generation_request_timeout_has_floor_and_cap() {
+        let normal = sample_generation_request_timeout_secs(48, 24);
+        assert!(normal >= 180);
+        assert!(normal <= 900);
+
+        let huge = sample_generation_request_timeout_secs(2_000, 2_000);
+        assert_eq!(huge, 900);
+    }
+
+    #[test]
+    fn compute_economics_counts_negative_when_with_skill_fails() {
+        let with_skill = FunctionalEvalOutput {
+            status: "success".to_string(),
+            skill_name: Some("demo".to_string()),
+            summary: Some(FunctionalEvalSummary {
+                total: 2,
+                passed: 1,
+                failed: 1,
+                pass_rate: 0.5,
+            }),
+            dimension_scores: None,
+            results: Some(vec![
+                FunctionalEvalResultItem {
+                    case_id: "case-1".to_string(),
+                    passed: true,
+                    pass_rate: 1.0,
+                    error: None,
+                    layer1_pass: Some(true),
+                    quality_score: None,
+                    dimension_scores: None,
+                    judge_rationale: None,
+                    judge_suggestions: None,
+                    judge_source: None,
+                    raw_response_path: None,
+                    latency_ms: Some(80),
+                    input_tokens: Some(20),
+                    output_tokens: Some(10),
+                    judge_trace_id: None,
+                    error_type: None,
+                },
+                FunctionalEvalResultItem {
+                    case_id: "case-2".to_string(),
+                    passed: false,
+                    pass_rate: 0.0,
+                    error: Some("failed".to_string()),
+                    layer1_pass: Some(false),
+                    quality_score: None,
+                    dimension_scores: None,
+                    judge_rationale: None,
+                    judge_suggestions: None,
+                    judge_source: None,
+                    raw_response_path: None,
+                    latency_ms: Some(120),
+                    input_tokens: Some(30),
+                    output_tokens: Some(20),
+                    judge_trace_id: None,
+                    error_type: None,
+                },
+            ]),
+            message: None,
+        };
+        let without_skill = FunctionalEvalOutput {
+            status: "success".to_string(),
+            skill_name: Some("demo".to_string()),
+            summary: Some(FunctionalEvalSummary {
+                total: 2,
+                passed: 2,
+                failed: 0,
+                pass_rate: 1.0,
+            }),
+            dimension_scores: None,
+            results: Some(vec![
+                FunctionalEvalResultItem {
+                    case_id: "case-1".to_string(),
+                    passed: true,
+                    pass_rate: 1.0,
+                    error: None,
+                    layer1_pass: Some(true),
+                    quality_score: None,
+                    dimension_scores: None,
+                    judge_rationale: None,
+                    judge_suggestions: None,
+                    judge_source: None,
+                    raw_response_path: None,
+                    latency_ms: Some(100),
+                    input_tokens: Some(40),
+                    output_tokens: Some(20),
+                    judge_trace_id: None,
+                    error_type: None,
+                },
+                FunctionalEvalResultItem {
+                    case_id: "case-2".to_string(),
+                    passed: true,
+                    pass_rate: 1.0,
+                    error: None,
+                    layer1_pass: Some(true),
+                    quality_score: None,
+                    dimension_scores: None,
+                    judge_rationale: None,
+                    judge_suggestions: None,
+                    judge_source: None,
+                    raw_response_path: None,
+                    latency_ms: Some(90),
+                    input_tokens: Some(25),
+                    output_tokens: Some(15),
+                    judge_trace_id: None,
+                    error_type: None,
+                },
+            ]),
+            message: None,
+        };
+        let economics = compute_economics(Some(&with_skill), Some(&without_skill));
+        assert!(economics.gross_time_saved_ms > 0.0);
+        assert!(economics.negative_time_waste_ms > 0.0);
+        assert!(economics.net_time_saved_ms < economics.gross_time_saved_ms);
+        assert_eq!(economics.baseline_samples, 2);
+        assert_eq!(economics.evaluated_pairs, 2);
+    }
+
+    #[test]
+    fn build_eval_gate_uses_selected_modules_only() {
+        let quick_checks = EvalQuickChecks {
+            all_passed: true,
+            checks: vec![],
+            bucket_coverage: None,
+        };
+        let selected_modules = vec![EVAL_MODULE_TRIGGER_ACCURACY.to_string()];
+        let module_results = vec![
+            EvalModuleResult {
+                key: EVAL_MODULE_TRIGGER_ACCURACY.to_string(),
+                title: "Trigger Accuracy".to_string(),
+                selected: true,
+                status: "fail".to_string(),
+                passed: Some(false),
+                score: Some(0.5),
+                message: None,
+            },
+            EvalModuleResult {
+                key: EVAL_MODULE_ECONOMICS.to_string(),
+                title: "Economics".to_string(),
+                selected: false,
+                status: "skipped".to_string(),
+                passed: None,
+                score: None,
+                message: None,
+            },
+        ];
+        let gate = build_eval_gate("standard", &quick_checks, &selected_modules, &module_results);
+        assert_eq!(gate.quick_blocking_pass, true);
+        assert_eq!(gate.full_release_pass, Some(false));
+        assert_eq!(gate.failed_modules, vec![EVAL_MODULE_TRIGGER_ACCURACY.to_string()]);
+        assert_eq!(gate.partial_release, Some(true));
     }
 
     #[test]

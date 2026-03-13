@@ -16,10 +16,55 @@
       },
       "required": ["totalCases", "totalPassed", "totalFailed", "passRate"]
     },
+    "quickChecks": {
+      "type": ["object", "null"],
+      "properties": {
+        "allPassed": { "type": "boolean" },
+        "checks": {
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "bucketCoverage": { "type": ["object", "null"] }
+      }
+    },
     "triggerClean": { "type": "object" },
     "triggerComplex": { "type": ["object", "null"] },
     "functional": { "type": "object" },
     "functionalWithoutSkill": { "type": ["object", "null"] },
+    "moduleResults": {
+      "type": ["array", "null"],
+      "items": { "type": "object" }
+    },
+    "gate": {
+      "type": ["object", "null"],
+      "properties": {
+        "quickBlockingPass": { "type": "boolean" },
+        "fullReleasePass": { "type": ["boolean", "null"] },
+        "partialRelease": { "type": ["boolean", "null"] },
+        "selectedModules": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "failedModules": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "economics": {
+      "type": ["object", "null"],
+      "properties": {
+        "grossTimeSavedMs": { "type": "number" },
+        "grossTokenSaved": { "type": "number" },
+        "negativeTimeWasteMs": { "type": "number" },
+        "negativeTokenWaste": { "type": "number" },
+        "netTimeSavedMs": { "type": "number" },
+        "netTokenSaved": { "type": "number" },
+        "netUsd": { "type": ["number", "null"] },
+        "baselineSamples": { "type": "integer" },
+        "evaluatedPairs": { "type": "integer" }
+      }
+    },
     "dimensionScores": {
       "type": "object",
       "properties": {

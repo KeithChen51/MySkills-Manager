@@ -66,7 +66,9 @@ impl UsageAccumulator {
 }
 
 fn eval_history_dir(home: &Path, skill_name: &str) -> std::path::PathBuf {
-    home.join(".my-skills").join(".eval").join(skill_name.trim())
+    home.join(".my-skills")
+        .join(".eval")
+        .join(skill_name.trim())
 }
 
 fn to_unix_secs(value: std::time::SystemTime) -> u64 {
@@ -114,7 +116,11 @@ fn parse_eval_history_snapshot(path: &Path, saved_at_unix: u64) -> Option<EvalHi
     })
 }
 
-fn collect_eval_insight_for_skill(home: &Path, skill_name: &str, now: DateTime<Utc>) -> SkillEvalInsight {
+fn collect_eval_insight_for_skill(
+    home: &Path,
+    skill_name: &str,
+    now: DateTime<Utc>,
+) -> SkillEvalInsight {
     let history_dir = eval_history_dir(home, skill_name);
     if !history_dir.exists() {
         return SkillEvalInsight::default();
@@ -173,7 +179,10 @@ fn collect_eval_insight_for_skill(home: &Path, skill_name: &str, now: DateTime<U
     }
 }
 
-fn collect_usage_with_index(root: &Path, now: DateTime<Utc>) -> Result<HashMap<String, SkillUsageInsight>, String> {
+fn collect_usage_with_index(
+    root: &Path,
+    now: DateTime<Utc>,
+) -> Result<HashMap<String, SkillUsageInsight>, String> {
     let rows = crate::log_index::query_skill_usage_windows_index(root, now)?;
     let mut by_skill = HashMap::<String, SkillUsageInsight>::new();
     for row in rows {
@@ -193,7 +202,10 @@ fn collect_usage_with_index(root: &Path, now: DateTime<Utc>) -> Result<HashMap<S
     Ok(by_skill)
 }
 
-fn collect_usage_fallback(root: &Path, now: DateTime<Utc>) -> Result<HashMap<String, SkillUsageInsight>, String> {
+fn collect_usage_fallback(
+    root: &Path,
+    now: DateTime<Utc>,
+) -> Result<HashMap<String, SkillUsageInsight>, String> {
     let d7_start = now - chrono::Duration::days(7);
     let d30_start = now - chrono::Duration::days(30);
     let d90_start = now - chrono::Duration::days(90);

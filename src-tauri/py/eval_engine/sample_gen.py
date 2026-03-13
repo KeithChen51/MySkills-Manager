@@ -6,10 +6,33 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+TRIGGER_BUCKETS = (
+    "positive_trigger",
+    "negative_trigger",
+    "boundary_ambiguous",
+    "adjacent_skill_confusion",
+)
+TRIGGER_BUCKET_MIN = 12
+FUNCTIONAL_MIN = 24
+
+
+def _normalize_trigger_bucket(value: Any, should_trigger: bool) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if raw in {"positive_trigger", "positive"}:
+        return "positive_trigger"
+    if raw in {"negative_trigger", "negative"}:
+        return "negative_trigger"
+    if raw in {"boundary_ambiguous", "boundary", "ambiguous"}:
+        return "boundary_ambiguous"
+    if raw in {"adjacent_skill_confusion", "adjacent", "confusion"}:
+        return "adjacent_skill_confusion"
+    return "positive_trigger" if should_trigger else "negative_trigger"
 
 
 def _extract_json_object(raw: str) -> dict[str, Any]:
@@ -26,8 +49,15 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
     return json.loads(text[start : end + 1])
 
 
-def _request_openai_compatible(api_key: str, model: str, base_url: str | None, prompt: str) -> str:
+def _request_openai_compatible(
+    api_key: str,
+    model: str,
+    base_url: str | None,
+    prompt: str,
+    request_timeout_secs: int,
+) -> str:
     endpoint = (base_url or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
+    timeout_secs = max(30, int(request_timeout_secs))
     payload = {
         "model": model,
         "temperature": 0.4,
@@ -51,12 +81,18 @@ def _request_openai_compatible(api_key: str, model: str, base_url: str | None, p
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=90) as response:
+        with urllib.request.urlopen(request, timeout=timeout_secs) as response:
             raw = response.read().decode("utf-8", errors="replace")
+    except TimeoutError as exc:  # pragma: no cover - network path
+        raise RuntimeError(f"LLM request timed out after {timeout_secs}s: {exc}") from exc
+    except socket.timeout as exc:  # pragma: no cover - network path
+        raise RuntimeError(f"LLM request timed out after {timeout_secs}s: {exc}") from exc
     except urllib.error.HTTPError as exc:  # pragma: no cover - network path
         details = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"LLM HTTP {exc.code}: {details}") from exc
     except urllib.error.URLError as exc:  # pragma: no cover - network path
+        if isinstance(exc.reason, TimeoutError) or isinstance(exc.reason, socket.timeout):
+            raise RuntimeError(f"LLM request timed out after {timeout_secs}s: {exc.reason}") from exc
         raise RuntimeError(f"LLM request failed: {exc.reason}") from exc
 
     parsed = json.loads(raw)
@@ -74,8 +110,7 @@ def _validate_trigger_cases(cases: Any, total_count: int) -> list[dict[str, Any]
     if not isinstance(cases, list):
         raise ValueError("trigger must be an array")
 
-    positives: list[dict[str, Any]] = []
-    negatives: list[dict[str, Any]] = []
+    by_bucket: dict[str, list[dict[str, Any]]] = {bucket: [] for bucket in TRIGGER_BUCKETS}
     for case in cases:
         if not isinstance(case, dict):
             continue
@@ -83,18 +118,34 @@ def _validate_trigger_cases(cases: Any, total_count: int) -> list[dict[str, Any]
         should_trigger = case.get("should_trigger")
         if not isinstance(query, str) or not query.strip() or not isinstance(should_trigger, bool):
             continue
-        cleaned = {"query": query.strip(), "should_trigger": should_trigger}
-        if should_trigger:
-            positives.append(cleaned)
-        else:
-            negatives.append(cleaned)
+        bucket = _normalize_trigger_bucket(case.get("test_bucket"), should_trigger)
+        if bucket == "positive_trigger" and not should_trigger:
+            continue
+        if bucket == "negative_trigger" and should_trigger:
+            continue
+        cleaned = {
+            "query": query.strip(),
+            "should_trigger": should_trigger,
+            "test_bucket": bucket,
+        }
+        by_bucket[bucket].append(cleaned)
 
-    target_positive = total_count // 2
-    target_negative = total_count - target_positive
-    if len(positives) < target_positive or len(negatives) < target_negative:
-        raise ValueError("trigger cases do not satisfy positive/negative balance requirements")
+    failed = [bucket for bucket in TRIGGER_BUCKETS if len(by_bucket[bucket]) < TRIGGER_BUCKET_MIN]
+    if failed:
+        raise ValueError(
+            f"trigger cases do not satisfy bucket minimum ({TRIGGER_BUCKET_MIN}) for: {', '.join(failed)}"
+        )
 
-    return positives[:target_positive] + negatives[:target_negative]
+    ordered: list[dict[str, Any]] = []
+    for bucket in TRIGGER_BUCKETS:
+        ordered.extend(by_bucket[bucket][:TRIGGER_BUCKET_MIN])
+    extras = []
+    for bucket in TRIGGER_BUCKETS:
+        extras.extend(by_bucket[bucket][TRIGGER_BUCKET_MIN:])
+    ordered.extend(extras)
+    if len(ordered) < total_count:
+        raise ValueError("trigger cases are fewer than requested after bucket enforcement")
+    return ordered[:total_count]
 
 
 def _validate_functional_cases(cases: Any, total_count: int) -> list[dict[str, Any]]:
@@ -164,11 +215,13 @@ Skill content:
 ---
 
 Output JSON object with exactly these top-level keys:
-- trigger: array of objects with fields query (string), should_trigger (boolean)
+- trigger: array of objects with fields query (string), should_trigger (boolean), test_bucket (string)
 - functional: array of objects with fields id (string), prompt (string), assertions (string array)
 
 Requirements:
-- trigger length >= {trigger_count}, with at least half should_trigger=true and half false
+- trigger length >= {trigger_count}
+- trigger must include explicit buckets: {", ".join(TRIGGER_BUCKETS)}
+- each trigger bucket must have at least {TRIGGER_BUCKET_MIN} cases
 - functional length >= {functional_count}, each assertion list non-empty
 - IDs must be readable and mostly unique
 - Do not include explanations, markdown, or extra keys.
@@ -190,8 +243,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     except OSError as exc:
         return {"status": "error", "message": f"Read skill file failed: {exc}"}
 
-    trigger_count = max(2, int(args.trigger_count))
-    functional_count = max(1, int(args.functional_count))
+    trigger_count = max(TRIGGER_BUCKET_MIN * len(TRIGGER_BUCKETS), int(args.trigger_count))
+    functional_count = max(FUNCTIONAL_MIN, int(args.functional_count))
+    request_timeout_secs = max(30, int(getattr(args, "request_timeout_secs", 180)))
     skill_excerpt = skill_content[:12000]
 
     last_error: Exception | None = None
@@ -209,6 +263,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 model=args.model.strip(),
                 base_url=(args.base_url or "").strip() or None,
                 prompt=prompt,
+                request_timeout_secs=request_timeout_secs,
             )
             payload = _extract_json_object(response_text)
             trigger = _validate_trigger_cases(payload.get("trigger"), trigger_count)

@@ -1,4 +1,4 @@
-import { open, save } from "@tauri-apps/plugin-dialog";
+﻿import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import ReactECharts from "echarts-for-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   evalGenerateSamples,
   evalControl,
+  evalEstimatePipeline,
   evalGetConfig,
   evalGetStoragePaths,
   evalListHistory,
@@ -13,7 +14,10 @@ import {
   evalSaveDataset,
   onboardingGetState,
   runEvalPipeline,
+  type CostCurrency,
   type EvalHistoryEntry,
+  type EvalModuleKey,
+  type EvalPipelineEstimate,
   type EvalPipelineOutput,
   type EvalStoragePaths,
   type SkillMeta,
@@ -24,13 +28,14 @@ import { useTheme } from "../theme/ThemeProvider";
 import "./EvalPage.css";
 
 type Props = { skills: SkillMeta[] };
-type EvalMode = "quick" | "standard" | "full";
+type EvalMode = "quick" | "full";
 type EvalControlAction = "pause" | "resume" | "cancel";
 type EvalDraftKind = "trigger" | "functional";
 
 type TriggerDraftRow = {
   query: string;
   shouldTrigger: boolean;
+  testBucket: TriggerBucketKey;
 };
 
 type FunctionalDraftRow = {
@@ -43,6 +48,12 @@ type KpiHelpMeta = {
   dimension: string;
   description: string;
 };
+
+type TriggerBucketKey =
+  | "positive_trigger"
+  | "negative_trigger"
+  | "boundary_ambiguous"
+  | "adjacent_skill_confusion";
 
 type EvalProgressEvent = {
   runId: string;
@@ -62,6 +73,93 @@ const MODEL_PRESETS = [
   "gpt-4.1",
   "gpt-4o",
 ];
+const USD_TO_CNY_RATE = 7.2;
+const TRIGGER_BUCKET_MIN_SAMPLES = 12;
+const FUNCTIONAL_MIN_SAMPLES = 24;
+const EVAL_MODULE_OPTIONS: Array<{
+  key: EvalModuleKey;
+  labelKey: string;
+  needsFunctional: boolean;
+}> = [
+  { key: "trigger_accuracy", labelKey: "eval.modules.triggerAccuracy", needsFunctional: false },
+  { key: "execution_correctness", labelKey: "eval.modules.executionCorrectness", needsFunctional: true },
+  { key: "robustness_security", labelKey: "eval.modules.robustnessSecurity", needsFunctional: false },
+  { key: "economics", labelKey: "eval.modules.economics", needsFunctional: true },
+  { key: "auditability", labelKey: "eval.modules.auditability", needsFunctional: false },
+];
+const TRIGGER_BUCKET_OPTIONS: Array<{ key: TriggerBucketKey; labelKey: string }> = [
+  { key: "positive_trigger", labelKey: "eval.samples.bucket.positive" },
+  { key: "negative_trigger", labelKey: "eval.samples.bucket.negative" },
+  { key: "boundary_ambiguous", labelKey: "eval.samples.bucket.boundary" },
+  { key: "adjacent_skill_confusion", labelKey: "eval.samples.bucket.adjacent" },
+];
+const DEFAULT_TRIGGER_SAMPLE_COUNT = TRIGGER_BUCKET_OPTIONS.length * TRIGGER_BUCKET_MIN_SAMPLES;
+
+function defaultSelectedModules(): EvalModuleKey[] {
+  return EVAL_MODULE_OPTIONS.map((item) => item.key);
+}
+
+function defaultBucketForShouldTrigger(shouldTrigger: boolean): TriggerBucketKey {
+  return shouldTrigger ? "positive_trigger" : "negative_trigger";
+}
+
+function resolveRequestedJudgeModels(mode: EvalMode, model: string): string[] {
+  const primary = model.trim();
+  if (!primary) return [];
+  if (mode === "full") {
+    return Array.from(new Set([primary, "gpt-4.1-mini"].filter(Boolean)));
+  }
+  return [primary];
+}
+
+function formatDurationLabel(totalSeconds: number): string {
+  const safe = Math.max(0, Math.round(totalSeconds));
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe % 60;
+  if (minutes <= 0) {
+    return `${seconds}s`;
+  }
+  return `${minutes}m ${seconds}s`;
+}
+
+function formatInteger(value: number): string {
+  return Math.max(0, Math.round(value)).toLocaleString();
+}
+
+function normalizeCostCurrency(value: string | undefined): CostCurrency {
+  return value === "CNY" ? "CNY" : "USD";
+}
+
+function toCurrencyAmount(usd: number, currency: CostCurrency): number {
+  if (!Number.isFinite(usd)) return 0;
+  return currency === "CNY" ? usd * USD_TO_CNY_RATE : usd;
+}
+
+function formatCostAmount(usd: number, currency: CostCurrency): string {
+  const symbol = currency === "CNY" ? "¥" : "$";
+  return `${symbol}${toCurrencyAmount(usd, currency).toFixed(4)}`;
+}
+
+function formatCostRange(
+  estimatedUsd: number,
+  estimatedUsdMin: number | undefined,
+  estimatedUsdMax: number | undefined,
+  currency: CostCurrency,
+): string {
+  const minUsd =
+    typeof estimatedUsdMin === "number" && Number.isFinite(estimatedUsdMin)
+      ? estimatedUsdMin
+      : estimatedUsd * 0.8;
+  const maxUsd =
+    typeof estimatedUsdMax === "number" && Number.isFinite(estimatedUsdMax)
+      ? estimatedUsdMax
+      : estimatedUsd * 1.2;
+  const symbol = currency === "CNY" ? "¥" : "$";
+  return `${symbol}${toCurrencyAmount(minUsd, currency).toFixed(4)} - ${symbol}${toCurrencyAmount(
+    maxUsd,
+    currency,
+  ).toFixed(4)}`;
+}
 
 function toSinglePath(value: string | string[] | null): string | null {
   if (typeof value === "string" && value.trim()) {
@@ -100,11 +198,16 @@ function parseTriggerDraftRows(raw: string): TriggerDraftRow[] {
   return parsed.map((item) => {
     const row = item as Record<string, unknown>;
     if (typeof row.query !== "string" || typeof row.should_trigger !== "boolean") {
-      throw new Error("Trigger draft row must include query(string) and should_trigger(boolean).");
+      throw new Error(
+        "Trigger draft row must include query(string), should_trigger(boolean), and optional test_bucket(string).",
+      );
     }
+    const rawBucket = typeof row.test_bucket === "string" ? row.test_bucket : undefined;
+    const normalizedBucket = TRIGGER_BUCKET_OPTIONS.find((item) => item.key === rawBucket)?.key;
     return {
       query: row.query.trim(),
       shouldTrigger: row.should_trigger,
+      testBucket: normalizedBucket ?? defaultBucketForShouldTrigger(row.should_trigger),
     };
   });
 }
@@ -141,6 +244,7 @@ function serializeTriggerDraftRows(rows: TriggerDraftRow[]): string {
       .map((row) => ({
         query: row.query.trim(),
         should_trigger: row.shouldTrigger,
+        test_bucket: row.testBucket,
       }))
       .filter((row) => row.query.length > 0),
     null,
@@ -172,10 +276,12 @@ export default function EvalPage({ skills }: Props) {
     resolvedTheme === "dark" ? "myskills-soft-dark" : "myskills-soft-light";
 
   const [selectedSkill, setSelectedSkill] = useState("");
-  const [evalMode, setEvalMode] = useState<EvalMode>("standard");
+  const [evalMode, setEvalMode] = useState<EvalMode>("full");
   const [model, setModel] = useState("gpt-4o-mini");
+  const [costCurrency, setCostCurrency] = useState<CostCurrency>("USD");
   const [repeatsInput, setRepeatsInput] = useState("1");
   const [maxCostUsdInput, setMaxCostUsdInput] = useState("");
+  const [selectedModules, setSelectedModules] = useState<EvalModuleKey[]>(defaultSelectedModules());
   const [running, setRunning] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
@@ -202,10 +308,25 @@ export default function EvalPage({ skills }: Props) {
   const [functionalSetPath, setFunctionalSetPath] = useState("");
   const [triggerDraftRows, setTriggerDraftRows] = useState<TriggerDraftRow[]>([]);
   const [functionalDraftRows, setFunctionalDraftRows] = useState<FunctionalDraftRow[]>([]);
+  const [preflightEstimate, setPreflightEstimate] = useState<EvalPipelineEstimate | null>(null);
+  const [preflightEstimateError, setPreflightEstimateError] = useState("");
+  const [preflightEstimating, setPreflightEstimating] = useState(false);
 
   const selectedSkillMeta = useMemo(
     () => skills.find((item) => item.name === selectedSkill),
     [skills, selectedSkill],
+  );
+  const selectedModulesForRun = useMemo<EvalModuleKey[]>(
+    () => (evalMode === "quick" ? [] : selectedModules),
+    [evalMode, selectedModules],
+  );
+  const requiresFunctionalByModules = useMemo(
+    () =>
+      evalMode !== "quick" &&
+      selectedModulesForRun.some(
+        (key) => EVAL_MODULE_OPTIONS.find((option) => option.key === key)?.needsFunctional ?? false,
+      ),
+    [evalMode, selectedModulesForRun],
   );
   const triggerDraftCount = triggerDraftRows.length;
   const functionalDraftCount = functionalDraftRows.length;
@@ -265,6 +386,7 @@ export default function EvalPage({ skills }: Props) {
         if (config.defaultModel?.trim()) {
           setModel(config.defaultModel.trim());
         }
+        setCostCurrency(normalizeCostCurrency(config.costCurrency));
       })
       .catch(() => {
         // keep defaults
@@ -359,6 +481,105 @@ export default function EvalPage({ skills }: Props) {
       window.clearInterval(timer);
     };
   }, [running, progressStartedAtMs]);
+
+  useEffect(() => {
+    const docPath = skillDocPath(selectedSkillMeta);
+    const trimmedModel = model.trim();
+    const trimmedTriggerSetPath = triggerSetPath.trim();
+    const trimmedFunctionalSetPath = functionalSetPath.trim();
+    const requiresFunctionalSet = requiresFunctionalByModules;
+
+    if (
+      !selectedSkill ||
+      !docPath ||
+      !trimmedModel ||
+      !trimmedTriggerSetPath ||
+      (requiresFunctionalSet && !trimmedFunctionalSetPath)
+    ) {
+      setPreflightEstimate(null);
+      setPreflightEstimateError("");
+      setPreflightEstimating(false);
+      return;
+    }
+
+    const repeats = Number.parseInt(repeatsInput, 10);
+    if (!Number.isFinite(repeats) || repeats < 1) {
+      setPreflightEstimate(null);
+      setPreflightEstimateError(t("eval.error.repeatsInvalid"));
+      setPreflightEstimating(false);
+      return;
+    }
+
+    const budgetInputValue = maxCostUsdInput.trim() ? Number(maxCostUsdInput.trim()) : undefined;
+    if (budgetInputValue !== undefined && (!Number.isFinite(budgetInputValue) || budgetInputValue <= 0)) {
+      setPreflightEstimate(null);
+      setPreflightEstimateError(t("eval.error.maxCostInvalid"));
+      setPreflightEstimating(false);
+      return;
+    }
+    const maxCostUsd =
+      budgetInputValue === undefined
+        ? undefined
+        : costCurrency === "CNY"
+          ? budgetInputValue / USD_TO_CNY_RATE
+          : budgetInputValue;
+
+    const functionalPathForEstimate =
+      requiresFunctionalSet ? trimmedFunctionalSetPath : trimmedFunctionalSetPath || trimmedTriggerSetPath;
+    const requestedModels = resolveRequestedJudgeModels(evalMode, trimmedModel);
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setPreflightEstimating(true);
+      setPreflightEstimateError("");
+      void evalEstimatePipeline({
+        skillName: selectedSkill,
+        skillPath: docPath,
+        triggerEvalSetPath: trimmedTriggerSetPath,
+        functionalEvalSetPath: functionalPathForEstimate,
+        mode: evalMode,
+        model: trimmedModel,
+        judgeModels: requestedModels,
+        repeats,
+        maxCostUsd,
+        selectedModules: selectedModulesForRun,
+      })
+        .then((estimate) => {
+          if (!cancelled) {
+            setPreflightEstimate(estimate);
+          }
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) {
+            setPreflightEstimate(null);
+            setPreflightEstimateError(`${t("eval.preflight.errorPrefix")}: ${String(error)}`);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setPreflightEstimating(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    selectedSkill,
+    selectedSkillMeta,
+    evalMode,
+    model,
+    costCurrency,
+    repeatsInput,
+    maxCostUsdInput,
+    triggerSetPath,
+    functionalSetPath,
+    requiresFunctionalByModules,
+    selectedModulesForRun,
+    t,
+  ]);
 
   async function pickEvalSet(kind: "trigger" | "functional") {
     const selected = await open({
@@ -456,8 +677,8 @@ export default function EvalPage({ skills }: Props) {
         skillName: selectedSkill,
         skillPath: docPath,
         model: model.trim(),
-        triggerCount: 40,
-        functionalCount: 20,
+        triggerCount: DEFAULT_TRIGGER_SAMPLE_COUNT,
+        functionalCount: FUNCTIONAL_MIN_SAMPLES,
       });
       const nextTriggerRows = parseTriggerDraftRows(drafts.triggerDraft);
       const nextFunctionalRows = parseFunctionalDraftRows(drafts.functionalDraft);
@@ -563,7 +784,7 @@ export default function EvalPage({ skills }: Props) {
       setStatus(t("eval.error.datasetRequired", { type: t("eval.dataset.trigger") }));
       return;
     }
-    if (evalMode !== "quick" && !functionalSetPath.trim()) {
+    if (requiresFunctionalByModules && !functionalSetPath.trim()) {
       setStatus(t("eval.error.datasetRequired", { type: t("eval.dataset.functional") }));
       return;
     }
@@ -578,13 +799,19 @@ export default function EvalPage({ skills }: Props) {
       setStatus(t("eval.error.repeatsInvalid"));
       return;
     }
-    const maxCostUsd = maxCostUsdInput.trim()
+    const budgetInputValue = maxCostUsdInput.trim()
       ? Number(maxCostUsdInput.trim())
       : undefined;
-    if (maxCostUsd !== undefined && (!Number.isFinite(maxCostUsd) || maxCostUsd <= 0)) {
+    if (budgetInputValue !== undefined && (!Number.isFinite(budgetInputValue) || budgetInputValue <= 0)) {
       setStatus(t("eval.error.maxCostInvalid"));
       return;
     }
+    const maxCostUsd =
+      budgetInputValue === undefined
+        ? undefined
+        : costCurrency === "CNY"
+          ? budgetInputValue / USD_TO_CNY_RATE
+          : budgetInputValue;
     const runId = `eval-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
     setRunning(true);
@@ -599,15 +826,14 @@ export default function EvalPage({ skills }: Props) {
     setStatus(t("eval.running"));
 
     try {
-      const requestedModels =
-        evalMode === "full"
-          ? Array.from(new Set([model.trim(), "gpt-4.1-mini"].filter(Boolean)))
-          : [model.trim()];
+      const requestedModels = resolveRequestedJudgeModels(evalMode, model);
       const pipeline = await runEvalPipeline({
         skillName: selectedSkill,
         skillPath: docPath,
         triggerEvalSetPath: triggerSetPath,
-        functionalEvalSetPath: functionalSetPath.trim() || triggerSetPath,
+        functionalEvalSetPath: requiresFunctionalByModules
+          ? functionalSetPath.trim()
+          : functionalSetPath.trim() || triggerSetPath,
         mode: evalMode,
         model: model.trim(),
         installedSkillsDir: skillsRootDir,
@@ -615,6 +841,7 @@ export default function EvalPage({ skills }: Props) {
         repeats,
         temperature: 0,
         maxCostUsd,
+        selectedModules: selectedModulesForRun,
         runId,
       });
       if (pipeline.status !== "success") {
@@ -626,6 +853,8 @@ export default function EvalPage({ skills }: Props) {
       }
       if (pipeline.historyPath) {
         setStatus(t("eval.history.saved", { path: pipeline.historyPath }));
+      } else if (pipeline.message?.trim()) {
+        setStatus(pipeline.message);
       } else {
         setStatus("");
       }
@@ -708,7 +937,12 @@ export default function EvalPage({ skills }: Props) {
         />
         <KpiCard
           label={t("eval.kpi.costEstimate")}
-          value={`$${report.costEstimate.estimatedUsd.toFixed(4)}`}
+          value={formatCostRange(
+            report.costEstimate.estimatedUsd,
+            report.costEstimate.estimatedUsdMin,
+            report.costEstimate.estimatedUsdMax,
+            costCurrency,
+          )}
           dimension={kpiHelp.costEstimate.dimension}
           description={kpiHelp.costEstimate.description}
         />
@@ -731,6 +965,308 @@ export default function EvalPage({ skills }: Props) {
           description={kpiHelp.executedSteps.description}
         />
       </div>
+    );
+  }
+
+  function resolvePreflightStepLabel(stepKey: string): string {
+    switch (stepKey) {
+      case "taxonomy":
+        return t("eval.preflight.step.taxonomy");
+      case "quick-taxonomy-validity":
+        return "quick-taxonomy-validity";
+      case "quick-structure-syntax":
+        return "quick-structure-syntax";
+      case "quick-generation-guardrail":
+        return "quick-generation-guardrail";
+      case "quick-ui-metadata-consistency":
+        return "quick-ui-metadata-consistency";
+      case "quick-script-smoke":
+        return "quick-script-smoke";
+      case "quick-trigger-bucket-coverage":
+        return "quick-trigger-bucket-coverage";
+      case "trigger-clean":
+        return t("eval.preflight.step.triggerClean");
+      case "trigger-complex":
+        return t("eval.preflight.step.triggerComplex");
+      case "functional-with-skill":
+        return t("eval.preflight.step.functionalWithSkill");
+      case "functional-without-skill":
+        return t("eval.preflight.step.functionalWithoutSkill");
+      case "auditability-check":
+        return "auditability-check";
+      default:
+        return stepKey;
+    }
+  }
+
+  function handleToggleModule(moduleKey: EvalModuleKey) {
+    setSelectedModules((prev) => {
+      const exists = prev.includes(moduleKey);
+      if (exists) {
+        const next = prev.filter((item) => item !== moduleKey);
+        return next.length > 0 ? next : prev;
+      }
+      return [...prev, moduleKey];
+    });
+  }
+
+  function renderPreflightEstimate() {
+    if (!selectedSkill) return null;
+
+    return (
+      <section className="eval-preflight-card">
+        <div className="eval-preflight-head">
+          <h4 className="chart-title">{t("eval.preflight.title")}</h4>
+          {preflightEstimating && <span className="eval-path-hint">{t("eval.preflight.calculating")}</span>}
+        </div>
+        <p className="eval-preflight-note">{t("eval.preflight.note")}</p>
+        {costCurrency === "CNY" && (
+          <p className="eval-path-hint">{t("eval.preflight.fxNote", { rate: USD_TO_CNY_RATE })}</p>
+        )}
+
+        {preflightEstimateError && (
+          <p className="settings-status" role="status">
+            {preflightEstimateError}
+          </p>
+        )}
+
+        {!preflightEstimateError && !preflightEstimate && !preflightEstimating && (
+          <p className="eval-path-hint">{t("eval.preflight.awaiting")}</p>
+        )}
+
+        {preflightEstimate && (
+          <>
+            <div className="eval-preflight-grid">
+              <div>
+                <span className="eval-history-item-label">{t("eval.preflight.totalTime")}</span>
+                <strong>{formatDurationLabel(preflightEstimate.estimatedSeconds)}</strong>
+              </div>
+              <div>
+                <span className="eval-history-item-label">{t("eval.preflight.totalTokens")}</span>
+                <strong>{formatInteger(preflightEstimate.estimatedTotalTokens)}</strong>
+              </div>
+              <div>
+                <span className="eval-history-item-label">{t("eval.preflight.inputTokens")}</span>
+                <strong>{formatInteger(preflightEstimate.estimatedInputTokens)}</strong>
+              </div>
+              <div>
+                <span className="eval-history-item-label">{t("eval.preflight.outputTokens")}</span>
+                <strong>{formatInteger(preflightEstimate.estimatedOutputTokens)}</strong>
+              </div>
+              <div>
+                <span className="eval-history-item-label">{t("eval.preflight.estimatedCostRange")}</span>
+                <strong>
+                  {formatCostRange(
+                    preflightEstimate.costEstimate.estimatedUsd,
+                    preflightEstimate.costEstimate.estimatedUsdMin,
+                    preflightEstimate.costEstimate.estimatedUsdMax,
+                    costCurrency,
+                  )}
+                </strong>
+              </div>
+              <div>
+                <span className="eval-history-item-label">{t("eval.preflight.taxonomyLabel")}</span>
+                <strong>
+                  {preflightEstimate.taxonomyPending
+                    ? t("eval.preflight.taxonomyPending")
+                    : t("eval.preflight.taxonomyReady")}
+                </strong>
+              </div>
+            </div>
+
+            {preflightEstimate.costEstimate.budgetExceeded && (
+              <p className="settings-status">
+                {preflightEstimate.costEstimate.budgetLimitUsd
+                  ? t("eval.preflight.budgetExceededWithLimit", {
+                      limit: formatCostAmount(preflightEstimate.costEstimate.budgetLimitUsd, costCurrency),
+                    })
+                  : t("eval.preflight.budgetExceeded")}
+              </p>
+            )}
+
+            <div className="eval-preflight-steps">
+              <span className="eval-history-item-label">{t("eval.preflight.steps")}</span>
+              <ul>
+                {preflightEstimate.steps.map((step) => (
+                  <li key={step.key}>
+                    <strong>{resolvePreflightStepLabel(step.key)}</strong>
+                    <span>
+                      {t("eval.preflight.stepMeta", {
+                        cases: step.caseCount,
+                        runs: step.runs,
+                        calls: step.llmCalls,
+                        tokens: formatInteger(step.estimatedTotalTokens),
+                        seconds: step.estimatedSeconds,
+                      })}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </>
+        )}
+      </section>
+    );
+  }
+
+  function renderModuleSelector() {
+    const selectedCount = selectedModulesForRun.length;
+    return (
+      <section className="eval-module-selector">
+        <div className="eval-module-selector-head">
+          <h4 className="chart-title">{t("eval.modules.title")}</h4>
+          <span className="eval-path-hint">
+            {evalMode === "quick"
+              ? t("eval.modules.quickHint")
+              : t("eval.modules.selectedCount", {
+                  selected: selectedCount,
+                  total: EVAL_MODULE_OPTIONS.length,
+                })}
+          </span>
+        </div>
+        <div className="eval-module-selector-grid">
+          {EVAL_MODULE_OPTIONS.map((option) => {
+            const checked = selectedModules.includes(option.key);
+            const disabled = evalMode === "quick";
+            return (
+              <label key={option.key} className={`eval-module-option ${disabled ? "is-disabled" : ""}`}>
+                <input
+                  type="checkbox"
+                  checked={disabled ? false : checked}
+                  disabled={disabled}
+                  onChange={() => handleToggleModule(option.key)}
+                />
+                <span>{t(option.labelKey as Parameters<typeof t>[0])}</span>
+                {option.needsFunctional && <em>{t("eval.modules.needsFunctional")}</em>}
+              </label>
+            );
+          })}
+        </div>
+      </section>
+    );
+  }
+
+  function renderGateAndQuickChecks() {
+    if (!report) return null;
+    const quickChecks = report.quickChecks;
+    const gate = report.gate;
+    if (!quickChecks && !gate) return null;
+    return (
+      <article className="chart-card eval-gate-card">
+        <h3 className="chart-title">Gate & Quick Checks</h3>
+        {gate && (
+          <div className="eval-gate-grid">
+            <div>
+              <span className="eval-history-item-label">quick_blocking_pass</span>
+              <strong>{gate.quickBlockingPass ? "PASS" : "FAIL"}</strong>
+            </div>
+            <div>
+              <span className="eval-history-item-label">full_release_pass</span>
+              <strong>
+                {typeof gate.fullReleasePass === "boolean"
+                  ? gate.fullReleasePass
+                    ? "PASS"
+                    : "FAIL"
+                  : "--"}
+              </strong>
+            </div>
+            <div>
+              <span className="eval-history-item-label">partial_release</span>
+              <strong>
+                {typeof gate.partialRelease === "boolean" ? (gate.partialRelease ? "YES" : "NO") : "--"}
+              </strong>
+            </div>
+            <div>
+              <span className="eval-history-item-label">failed_modules</span>
+              <strong>{gate.failedModules.length > 0 ? gate.failedModules.join(", ") : "--"}</strong>
+            </div>
+          </div>
+        )}
+        {quickChecks && (
+          <div className="eval-quick-check-list">
+            <span className="eval-history-item-label">Stage0 quick checks</span>
+            <ul>
+              {quickChecks.checks.map((item) => (
+                <li key={item.key} className={item.passed ? "eval-quick-pass" : "eval-quick-fail"}>
+                  <strong>{item.key}</strong>
+                  <span>{item.message}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </article>
+    );
+  }
+
+  function renderModuleResultsPanel() {
+    const moduleResults = report?.moduleResults;
+    if (!moduleResults || moduleResults.length === 0) return null;
+    const resolveModuleTitle = (moduleKey: string, fallback: string): string => {
+      const option = EVAL_MODULE_OPTIONS.find((item) => item.key === moduleKey);
+      if (!option) return fallback;
+      return t(option.labelKey as Parameters<typeof t>[0]);
+    };
+    return (
+      <article className="chart-card eval-module-result-card">
+        <h3 className="chart-title">{t("eval.modules.resultsTitle")}</h3>
+        <div className="eval-module-results">
+          {moduleResults.map((item) => (
+            <div key={item.key} className={`eval-module-result eval-module-${item.status}`}>
+              <span className="eval-history-item-label">
+                {resolveModuleTitle(item.key, item.title)}
+              </span>
+              <strong>{item.status.toUpperCase()}</strong>
+              {typeof item.score === "number" && <span>score: {Math.round(item.score * 100)}%</span>}
+              {item.message && <small>{item.message}</small>}
+            </div>
+          ))}
+        </div>
+      </article>
+    );
+  }
+
+  function renderEconomicsPanel() {
+    const economics = report?.economics;
+    if (!economics) return null;
+    return (
+      <article className="chart-card eval-economics-card">
+        <h3 className="chart-title">Economics</h3>
+        <div className="eval-economics-grid">
+          <div>
+            <span className="eval-history-item-label">Gross time saved (ms)</span>
+            <strong>{Math.round(economics.grossTimeSavedMs)}</strong>
+          </div>
+          <div>
+            <span className="eval-history-item-label">Gross token saved</span>
+            <strong>{Math.round(economics.grossTokenSaved)}</strong>
+          </div>
+          <div>
+            <span className="eval-history-item-label">Negative time waste (ms)</span>
+            <strong>{Math.round(economics.negativeTimeWasteMs)}</strong>
+          </div>
+          <div>
+            <span className="eval-history-item-label">Negative token waste</span>
+            <strong>{Math.round(economics.negativeTokenWaste)}</strong>
+          </div>
+          <div>
+            <span className="eval-history-item-label">Net time saved (ms)</span>
+            <strong>{Math.round(economics.netTimeSavedMs)}</strong>
+          </div>
+          <div>
+            <span className="eval-history-item-label">Net token saved</span>
+            <strong>{Math.round(economics.netTokenSaved)}</strong>
+          </div>
+          <div>
+            <span className="eval-history-item-label">Net USD</span>
+            <strong>{typeof economics.netUsd === "number" ? economics.netUsd.toFixed(4) : "--"}</strong>
+          </div>
+          <div>
+            <span className="eval-history-item-label">Pairs</span>
+            <strong>{`${economics.evaluatedPairs}/${economics.baselineSamples}`}</strong>
+          </div>
+        </div>
+      </article>
     );
   }
 
@@ -1008,7 +1544,6 @@ export default function EvalPage({ skills }: Props) {
               onChange={(e) => setEvalMode(e.target.value as EvalMode)}
             >
               <option value="quick">{t("eval.config.mode.quick")}</option>
-              <option value="standard">{t("eval.config.mode.standard")}</option>
               <option value="full">{t("eval.config.mode.full")}</option>
             </select>
           </div>
@@ -1056,7 +1591,7 @@ export default function EvalPage({ skills }: Props) {
           </div>
 
           <div className="field">
-            <label className="field-label">{t("eval.config.maxCostUsd")}</label>
+            <label className="field-label">{t("eval.config.maxCost", { currency: costCurrency })}</label>
             <input
               className="field-input"
               type="number"
@@ -1064,7 +1599,7 @@ export default function EvalPage({ skills }: Props) {
               step="0.01"
               value={maxCostUsdInput}
               onChange={(e) => setMaxCostUsdInput(e.target.value)}
-              placeholder={t("eval.config.maxCostUsd.placeholder")}
+              placeholder={t("eval.config.maxCost.placeholder", { currency: costCurrency })}
             />
           </div>
 
@@ -1094,12 +1629,12 @@ export default function EvalPage({ skills }: Props) {
                 value={functionalSetPath}
                 onChange={(e) => setFunctionalSetPath(e.target.value)}
                 placeholder="...functional-eval.json"
-                disabled={evalMode === "quick"}
+                disabled={!requiresFunctionalByModules}
               />
               <button
                 className="btn btn-ghost"
                 onClick={() => void pickEvalSet("functional")}
-                disabled={evalMode === "quick"}
+                disabled={!requiresFunctionalByModules}
               >
                 {t("eval.dataset.pick")}
               </button>
@@ -1108,6 +1643,9 @@ export default function EvalPage({ skills }: Props) {
               {t("eval.history.path", { path: storagePaths?.historyDir ?? "--" })}
             </p>
           </div>
+
+          {renderPreflightEstimate()}
+          {renderModuleSelector()}
 
           <div className="eval-config-actions">
             <section className="eval-action-group" aria-label={t("eval.actions.primary")}>
@@ -1118,7 +1656,12 @@ export default function EvalPage({ skills }: Props) {
                   onClick={() => void handleGenerateSamples()}
                   disabled={running || generating || !selectedSkill}
                 >
-                  {generating ? t("eval.samples.generating") : t("eval.samples.generate")}
+                  {generating
+                    ? t("eval.samples.generating")
+                    : t("eval.samples.generate", {
+                        trigger: DEFAULT_TRIGGER_SAMPLE_COUNT,
+                        functional: FUNCTIONAL_MIN_SAMPLES,
+                      })}
                 </button>
                 <button
                   className="btn btn-primary eval-action-btn eval-action-btn-run"
@@ -1240,7 +1783,14 @@ export default function EvalPage({ skills }: Props) {
                     <button
                       className="btn btn-ghost"
                       onClick={() =>
-                        setTriggerDraftRows((prev) => [...prev, { query: "", shouldTrigger: true }])
+                        setTriggerDraftRows((prev) => [
+                          ...prev,
+                          {
+                            query: "",
+                            shouldTrigger: true,
+                            testBucket: "positive_trigger",
+                          },
+                        ])
                       }
                     >
                       {t("eval.samples.addRow")}
@@ -1269,6 +1819,7 @@ export default function EvalPage({ skills }: Props) {
                           <th>#</th>
                           <th>{t("eval.table.query")}</th>
                           <th>{t("eval.table.expected")}</th>
+                          <th>Bucket</th>
                           <th>{t("eval.samples.actions")}</th>
                         </tr>
                       </thead>
@@ -1298,13 +1849,43 @@ export default function EvalPage({ skills }: Props) {
                                   const shouldTrigger = event.target.value === "true";
                                   setTriggerDraftRows((prev) =>
                                     prev.map((item, itemIndex) =>
-                                      itemIndex === index ? { ...item, shouldTrigger } : item,
+                                      itemIndex === index
+                                        ? {
+                                            ...item,
+                                            shouldTrigger,
+                                            testBucket:
+                                              item.testBucket === "positive_trigger" ||
+                                              item.testBucket === "negative_trigger"
+                                                ? defaultBucketForShouldTrigger(shouldTrigger)
+                                                : item.testBucket,
+                                          }
+                                        : item,
                                     ),
                                   );
                                 }}
                               >
                                 <option value="true">{t("eval.option.yes")}</option>
                                 <option value="false">{t("eval.option.no")}</option>
+                              </select>
+                            </td>
+                            <td>
+                              <select
+                                className="filter-select"
+                                value={row.testBucket}
+                                onChange={(event) => {
+                                  const testBucket = event.target.value as TriggerBucketKey;
+                                  setTriggerDraftRows((prev) =>
+                                    prev.map((item, itemIndex) =>
+                                      itemIndex === index ? { ...item, testBucket } : item,
+                                    ),
+                                  );
+                                }}
+                              >
+                                {TRIGGER_BUCKET_OPTIONS.map((option) => (
+                                  <option key={option.key} value={option.key}>
+                                    {t(option.labelKey as Parameters<typeof t>[0])}
+                                  </option>
+                                ))}
                               </select>
                             </td>
                             <td>
@@ -1550,7 +2131,14 @@ export default function EvalPage({ skills }: Props) {
                                 </div>
                                 <div>
                                   <span className="eval-history-item-label">{t("eval.kpi.costEstimate")}</span>
-                                  <strong>${detail.costEstimate.estimatedUsd.toFixed(4)}</strong>
+                                  <strong>
+                                    {formatCostRange(
+                                      detail.costEstimate.estimatedUsd,
+                                      detail.costEstimate.estimatedUsdMin,
+                                      detail.costEstimate.estimatedUsdMax,
+                                      costCurrency,
+                                    )}
+                                  </strong>
                                 </div>
                                 <div>
                                   <span className="eval-history-item-label">{t("eval.advisory.level.label")}</span>
@@ -1595,7 +2183,10 @@ export default function EvalPage({ skills }: Props) {
 
       {report && (
         <>
+          {renderGateAndQuickChecks()}
           {renderEvidenceOverview()}
+          {renderEconomicsPanel()}
+          {renderModuleResultsPanel()}
           {renderSummaryKpis()}
           {renderModeKpis()}
           <div className="chart-row">
@@ -1611,3 +2202,5 @@ export default function EvalPage({ skills }: Props) {
     </div>
   );
 }
+
+

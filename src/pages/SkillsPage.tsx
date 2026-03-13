@@ -5,6 +5,7 @@ import {
   logsGet,
   skillsDeleteEverywhere,
   skillsGetInsights,
+  skillsRescanShapeTags,
   type EvalHistoryEntry,
   type LogEntry,
   type SkillInsight,
@@ -43,6 +44,7 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
   const [difficultyDisplayMode, setDifficultyDisplayMode] = useState<"level" | "core">("level");
   const [editing, setEditing] = useState<SkillMeta | null>(null);
   const [deletingSkillName, setDeletingSkillName] = useState<string | null>(null);
+  const [rescanShapeTagsBusy, setRescanShapeTagsBusy] = useState(false);
   const [actionStatus, setActionStatus] = useState("");
   const [insights, setInsights] = useState<SkillInsight[]>([]);
   const [insightsLoading, setInsightsLoading] = useState(false);
@@ -256,6 +258,25 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
     }
   }
 
+  async function handleRescanShapeTags() {
+    setRescanShapeTagsBusy(true);
+    setActionStatus(t("skills.shapeTags.rescan.start"));
+    try {
+      const result = await skillsRescanShapeTags();
+      onRefresh();
+      setActionStatus(
+        t("skills.shapeTags.rescan.done", {
+          scanned: result.scannedSkills,
+          updated: result.updatedEntries,
+        }),
+      );
+    } catch (error: unknown) {
+      setActionStatus(String(error));
+    } finally {
+      setRescanShapeTagsBusy(false);
+    }
+  }
+
   return (
     <div className="page animate-fadein skills-page">
       <header className="page-header skills-page-header">
@@ -294,6 +315,15 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
             <button className="btn btn-ghost skills-refresh-btn" onClick={onRefresh}>
               <IconRefresh size={14} />
               {t("skills.refresh")}
+            </button>
+            <button
+              className="btn btn-ghost skills-refresh-btn"
+              onClick={() => void handleRescanShapeTags()}
+              disabled={rescanShapeTagsBusy}
+            >
+              {rescanShapeTagsBusy
+                ? t("skills.shapeTags.rescan.button.busy")
+                : t("skills.shapeTags.rescan.button")}
             </button>
             <div className="search-box skills-search-box">
               <IconSearch size={16} />

@@ -31,6 +31,203 @@
   text-transform: uppercase;
 }
 
+.eval-preflight-card {
+  background: color-mix(in srgb, var(--bg-input) 45%, var(--bg-card) 55%);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--sp-sm);
+  grid-column: 1 / -1;
+  padding: var(--sp-md);
+}
+
+.eval-preflight-head {
+  align-items: center;
+  display: flex;
+  gap: var(--sp-sm);
+  justify-content: space-between;
+}
+
+.eval-preflight-note {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  margin: 0;
+}
+
+.eval-preflight-grid {
+  display: grid;
+  gap: var(--sp-sm) var(--sp-md);
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.eval-preflight-grid strong {
+  display: block;
+  font-size: var(--text-sm);
+}
+
+.eval-preflight-steps {
+  display: grid;
+  gap: var(--sp-xs);
+}
+
+.eval-preflight-steps ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.eval-preflight-steps li {
+  color: var(--text-secondary);
+  display: grid;
+  font-size: var(--text-sm);
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.eval-preflight-steps li strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.eval-module-selector {
+  background: color-mix(in srgb, var(--bg-input) 45%, var(--bg-card) 55%);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--sp-sm);
+  grid-column: 1 / -1;
+  padding: var(--sp-md);
+}
+
+.eval-module-selector-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-sm);
+}
+
+.eval-module-selector-grid {
+  display: grid;
+  gap: var(--sp-xs);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.eval-module-option {
+  align-items: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 2px;
+  grid-template-columns: auto 1fr;
+  padding: 8px 10px;
+}
+
+.eval-module-option em {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-style: normal;
+  grid-column: 2;
+}
+
+.eval-module-option.is-disabled {
+  opacity: 0.7;
+}
+
+.eval-gate-card {
+  display: grid;
+  gap: var(--sp-sm);
+}
+
+.eval-gate-grid {
+  display: grid;
+  gap: var(--sp-sm) var(--sp-md);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.eval-gate-grid strong {
+  display: block;
+  font-size: var(--text-sm);
+}
+
+.eval-quick-check-list ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.eval-quick-check-list li {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-sm);
+  margin-bottom: 6px;
+}
+
+.eval-quick-check-list li strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+}
+
+.eval-quick-pass span {
+  color: var(--success);
+}
+
+.eval-quick-fail span {
+  color: var(--danger);
+}
+
+.eval-module-result-card {
+  display: grid;
+  gap: var(--sp-sm);
+}
+
+.eval-module-results {
+  display: grid;
+  gap: var(--sp-sm);
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.eval-module-result {
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+}
+
+.eval-module-result strong {
+  font-size: var(--text-sm);
+}
+
+.eval-module-pass {
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border-card));
+}
+
+.eval-module-fail {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border-card));
+}
+
+.eval-module-result small {
+  color: var(--text-secondary);
+  display: block;
+  font-size: var(--text-xs);
+}
+
+.eval-economics-card {
+  display: grid;
+  gap: var(--sp-sm);
+}
+
+.eval-economics-grid {
+  display: grid;
+  gap: var(--sp-sm) var(--sp-md);
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.eval-economics-grid strong {
+  display: block;
+  font-size: var(--text-sm);
+}
+
 .eval-config-actions {
   background: color-mix(in srgb, var(--bg-input) 62%, var(--bg-card) 38%);
   border: 1px solid var(--border-card);
