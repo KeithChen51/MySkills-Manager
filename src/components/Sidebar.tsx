@@ -30,7 +30,7 @@ export default function Sidebar({ active, onChange }: Props) {
         { view: "dashboard", icon: <IconDashboard size={20} />, label: t("nav.dashboard") },
         { view: "logs", icon: <IconLogs size={20} />, label: t("nav.logs") },
         { view: "eval", icon: <IconEval size={20} />, label: t("nav.eval"), beta: true },
-        { view: "git", icon: <IconGit size={20} />, label: "Git" },
+        { view: "git", icon: <IconGit size={20} />, label: t("nav.git") },
     ];
 
     return (
@@ -46,22 +46,29 @@ export default function Sidebar({ active, onChange }: Props) {
                     </div>
                 </div>
                 <div className="sidebar-items">
-                    {navItems.map((item) => (
-                        <button
-                            type="button"
-                            key={item.view}
-                            className={`sidebar-item${active === item.view ? " active" : ""}`}
-                            onClick={() => onChange(item.view)}
-                            aria-label={item.beta ? `${item.label} (BETA)` : item.label}
-                            title={item.beta ? `${item.label} (BETA)` : item.label}
-                        >
-                            {item.icon}
-                            <span className="sidebar-label-wrap">
-                                <span className="sidebar-label">{item.label}</span>
-                                {item.beta ? <span className="sidebar-beta-badge">BETA</span> : null}
-                            </span>
-                        </button>
-                    ))}
+                    {navItems.map((item) => {
+                        const label = item.beta
+                            ? `${item.label} (${t("common.beta")})`
+                            : item.label;
+                        return (
+                            <button
+                                type="button"
+                                key={item.view}
+                                className={`sidebar-item${active === item.view ? " active" : ""}`}
+                                onClick={() => onChange(item.view)}
+                                aria-label={label}
+                                title={label}
+                            >
+                                {item.icon}
+                                <span className="sidebar-label-wrap">
+                                    <span className="sidebar-label">{item.label}</span>
+                                    {item.beta ? (
+                                        <span className="sidebar-beta-badge">{t("common.beta")}</span>
+                                    ) : null}
+                                </span>
+                            </button>
+                        );
+                    })}
                 </div>
             </div>
             <div className="sidebar-bottom">

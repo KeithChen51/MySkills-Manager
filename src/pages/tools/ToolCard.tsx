@@ -125,7 +125,7 @@ export default function ToolCard({
               type="button"
               className={`tool-switch ${tool.autoSync ? "active" : ""}`}
               aria-pressed={tool.autoSync}
-              aria-label={`${tool.name} auto sync toggle`}
+              aria-label={t("tools.aria.autoToggle", { tool: tool.name })}
               onClick={onToggleAutoSync}
               disabled={busy || togglingAutoCurrentTool}
             >
@@ -138,7 +138,7 @@ export default function ToolCard({
               type="button"
               className={`tool-switch ${tool.trackingEnabled ? "active" : ""}`}
               aria-pressed={tool.trackingEnabled}
-              aria-label={`${tool.name} tracking toggle`}
+              aria-label={t("tools.aria.trackingToggle", { tool: tool.name })}
               onClick={onToggleTracking}
               disabled={busy || togglingTrackingCurrentTool}
             >
@@ -211,7 +211,7 @@ export default function ToolCard({
         <div className="tool-card-meta">
           <span>{t("tools.syncedSkills")}: {tool.syncedSkills}</span>
           <span>{t("tools.syncMode")}: {tool.syncMode}</span>
-          <span>Integration: {tool.integrationMode}</span>
+          <span>{t("tools.integrationMode", { mode: tool.integrationMode })}</span>
           <span>{t("tools.pathSource")}: {pathSourceLabel(tool.pathSource, t)}</span>
           <span>
             {t("tools.lastSync")}:{" "}
