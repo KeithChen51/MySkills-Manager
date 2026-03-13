@@ -1,6 +1,5 @@
-﻿import ReactECharts from "echarts-for-react";
-import { useEffect, useState } from "react";
-import * as echarts from "echarts";
+import ReactECharts from "echarts-for-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { statsGet, type SkillMeta, type StatsResult } from "../api/tauri";
 import KpiCard from "../components/KpiCard";
@@ -10,71 +9,57 @@ import "./DashboardPage.css";
 
 type Props = { skills: SkillMeta[] };
 
-const CHART_THEME_LIGHT = "myskills-soft-light";
-const CHART_THEME_DARK = "myskills-soft-dark";
-let themesRegistered = false;
+type DashboardChartTokens = {
+  palette: string[];
+  textPrimary: string;
+  textSecondary: string;
+  border: string;
+  split: string;
+  tooltipBg: string;
+  tooltipBorder: string;
+};
 
-function ensureEchartsThemes() {
-  if (themesRegistered) return;
-
-  echarts.registerTheme(CHART_THEME_LIGHT, {
-    backgroundColor: "transparent",
-    color: ["#7f9cf5", "#63b3ed", "#b794f4", "#68d391", "#f6ad55", "#fc8181"],
-    textStyle: { color: "#1a202c" },
-    title: { textStyle: { color: "#1a202c" } },
-    legend: { textStyle: { color: "#4a5568" } },
-    tooltip: {
-      backgroundColor: "rgba(255, 255, 255, 0.97)",
-      borderColor: "#e2e8f0",
-      textStyle: { color: "#1a202c" },
-    },
-    categoryAxis: {
-      axisLine: { lineStyle: { color: "#e2e8f0" } },
-      axisTick: { lineStyle: { color: "#e2e8f0" } },
-      axisLabel: { color: "#718096" },
-      splitLine: { lineStyle: { color: "#edf2f7" } },
-    },
-    valueAxis: {
-      axisLine: { lineStyle: { color: "#e2e8f0" } },
-      axisTick: { lineStyle: { color: "#e2e8f0" } },
-      axisLabel: { color: "#718096" },
-      splitLine: { lineStyle: { color: "#edf2f7" } },
-    },
-  });
-
-  echarts.registerTheme(CHART_THEME_DARK, {
-    backgroundColor: "transparent",
-    color: ["#a3bffa", "#90cdf4", "#d6bcfa", "#9ae6b4", "#fbd38d", "#feb2b2"],
-    textStyle: { color: "#f7fafc" },
-    title: { textStyle: { color: "#f7fafc" } },
-    legend: { textStyle: { color: "#cbd5e0" } },
-    tooltip: {
-      backgroundColor: "rgba(45, 55, 72, 0.96)",
-      borderColor: "#718096",
-      textStyle: { color: "#f7fafc" },
-    },
-    categoryAxis: {
-      axisLine: { lineStyle: { color: "#4a5568" } },
-      axisTick: { lineStyle: { color: "#4a5568" } },
-      axisLabel: { color: "#a0aec0" },
-      splitLine: { lineStyle: { color: "#4a5568" } },
-    },
-    valueAxis: {
-      axisLine: { lineStyle: { color: "#4a5568" } },
-      axisTick: { lineStyle: { color: "#4a5568" } },
-      axisLabel: { color: "#a0aec0" },
-      splitLine: { lineStyle: { color: "#4a5568" } },
-    },
-  });
-
-  themesRegistered = true;
+function readDashboardChartTokens(): DashboardChartTokens {
+  const fallback: DashboardChartTokens = {
+    palette: ["#5a87f4", "#4aaed6", "#8d74f5", "#1fa870", "#d98a28", "#df5d70"],
+    textPrimary: "#172239",
+    textSecondary: "#42506b",
+    border: "#d8e3f2",
+    split: "#d8e3f2",
+    tooltipBg: "#ffffff",
+    tooltipBorder: "#d8e3f2",
+  };
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+  const styles = window.getComputedStyle(document.documentElement);
+  const read = (name: string, value: string) => styles.getPropertyValue(name).trim() || value;
+  return {
+    palette: [
+      read("--chart-1", fallback.palette[0]),
+      read("--chart-2", fallback.palette[1]),
+      read("--chart-3", fallback.palette[2]),
+      read("--chart-4", fallback.palette[3]),
+      read("--chart-5", fallback.palette[4]),
+      read("--chart-6", fallback.palette[5]),
+    ],
+    textPrimary: read("--text-primary", fallback.textPrimary),
+    textSecondary: read("--text-secondary", fallback.textSecondary),
+    border: read("--border-card", fallback.border),
+    split: read("--border-card", fallback.split),
+    tooltipBg: read("--bg-card", fallback.tooltipBg),
+    tooltipBorder: read("--border-card", fallback.tooltipBorder),
+  };
 }
 
 export default function DashboardPage({ skills }: Props) {
   const { t } = useI18n();
   const { resolvedTheme } = useTheme();
-  ensureEchartsThemes();
-  const chartThemeName = resolvedTheme === "dark" ? CHART_THEME_DARK : CHART_THEME_LIGHT;
+  const chartTokens = useMemo(() => {
+    // Theme switch updates CSS variables; this dependency forces token re-read.
+    void resolvedTheme;
+    return readDashboardChartTokens();
+  }, [resolvedTheme]);
   const [days, setDays] = useState(30);
   const [stats, setStats] = useState<StatsResult | null>(null);
   const [status, setStatus] = useState("");
@@ -123,11 +108,29 @@ export default function DashboardPage({ skills }: Props) {
           <h3 className="chart-title">{t("dashboard.topSkills")}</h3>
           <ReactECharts
             className="dashboard-chart dashboard-chart--tall"
-            theme={chartThemeName}
             option={{
-              tooltip: { trigger: "axis" },
-              xAxis: { type: "value" },
-              yAxis: { type: "category", data: topSkills.map((i) => i.name) },
+              color: chartTokens.palette,
+              textStyle: { color: chartTokens.textPrimary },
+              tooltip: {
+                trigger: "axis",
+                backgroundColor: chartTokens.tooltipBg,
+                borderColor: chartTokens.tooltipBorder,
+                textStyle: { color: chartTokens.textPrimary },
+              },
+              xAxis: {
+                type: "value",
+                axisLine: { lineStyle: { color: chartTokens.border } },
+                axisTick: { lineStyle: { color: chartTokens.border } },
+                axisLabel: { color: chartTokens.textSecondary },
+                splitLine: { lineStyle: { color: chartTokens.split } },
+              },
+              yAxis: {
+                type: "category",
+                data: topSkills.map((i) => i.name),
+                axisLine: { lineStyle: { color: chartTokens.border } },
+                axisTick: { lineStyle: { color: chartTokens.border } },
+                axisLabel: { color: chartTokens.textSecondary },
+              },
               grid: { left: 130, right: 20, top: 20, bottom: 20 },
               series: [{ type: "bar", data: topSkills.map((i) => i.count), barMaxWidth: 24 }],
             }}
@@ -138,9 +141,15 @@ export default function DashboardPage({ skills }: Props) {
           <h3 className="chart-title">{t("dashboard.byTool")}</h3>
           <ReactECharts
             className="dashboard-chart dashboard-chart--tall"
-            theme={chartThemeName}
             option={{
-              tooltip: { trigger: "item" },
+              color: chartTokens.palette,
+              textStyle: { color: chartTokens.textPrimary },
+              tooltip: {
+                trigger: "item",
+                backgroundColor: chartTokens.tooltipBg,
+                borderColor: chartTokens.tooltipBorder,
+                textStyle: { color: chartTokens.textPrimary },
+              },
               series: [
                 {
                   type: "pie",
@@ -157,11 +166,29 @@ export default function DashboardPage({ skills }: Props) {
         <h3 className="chart-title">{t("dashboard.byDay")}</h3>
         <ReactECharts
           className="dashboard-chart dashboard-chart--medium"
-          theme={chartThemeName}
           option={{
-            tooltip: { trigger: "axis" },
-            xAxis: { type: "category", data: byDay.map((i) => i.date) },
-            yAxis: { type: "value" },
+            color: chartTokens.palette,
+            textStyle: { color: chartTokens.textPrimary },
+            tooltip: {
+              trigger: "axis",
+              backgroundColor: chartTokens.tooltipBg,
+              borderColor: chartTokens.tooltipBorder,
+              textStyle: { color: chartTokens.textPrimary },
+            },
+            xAxis: {
+              type: "category",
+              data: byDay.map((i) => i.date),
+              axisLine: { lineStyle: { color: chartTokens.border } },
+              axisTick: { lineStyle: { color: chartTokens.border } },
+              axisLabel: { color: chartTokens.textSecondary },
+            },
+            yAxis: {
+              type: "value",
+              axisLine: { lineStyle: { color: chartTokens.border } },
+              axisTick: { lineStyle: { color: chartTokens.border } },
+              axisLabel: { color: chartTokens.textSecondary },
+              splitLine: { lineStyle: { color: chartTokens.split } },
+            },
             grid: { left: 50, right: 20, top: 20, bottom: 40 },
             series: [{ type: "line", data: byDay.map((i) => i.count), smooth: true }],
           }}
