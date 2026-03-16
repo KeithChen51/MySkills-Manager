@@ -1,0 +1,84 @@
+{
+  "version": "1.0",
+  "instructions": "按顺序逐一向用户提问，每次只问一个问题。记录用户选择的value值。所有问题完成后，根据pathway_tag匹配pathways/目录下的路径文件。",
+  "questions": [
+    {
+      "id": "q1_scenario",
+      "text": "你希望解决的核心业务问题属于哪个领域？",
+      "type": "multiple-choice",
+      "options": [
+        { "label": "售后服务（工单、维修、保养等）", "value": "aftersales" },
+        { "label": "客户关系（满意度、回访、投诉等）", "value": "crm" },
+        { "label": "配件与库存管理", "value": "inventory" },
+        { "label": "营销与活动管理", "value": "marketing" },
+        { "label": "内部管理与效率提升", "value": "internal" },
+        { "label": "其他（请简要描述）", "value": "other" }
+      ]
+    },
+    {
+      "id": "q2_output",
+      "text": "你期望的最终产出是什么样的？",
+      "type": "multiple-choice",
+      "options": [
+        {
+          "label": "一个可交互的Web页面或独立应用（如看板、管理后台）",
+          "value": "webapp",
+          "pathway_tag": "01_webapp_dev"
+        },
+        {
+          "label": "增强现有Web系统功能的浏览器插件",
+          "value": "plugin",
+          "pathway_tag": "02_plugin_dev"
+        },
+        {
+          "label": "一个自动处理数据的脚本或工具（如Excel处理、报表生成）",
+          "value": "script",
+          "pathway_tag": "03_automation_script"
+        },
+        {
+          "label": "我只需要一个可演示的Demo，后续交给开发团队实现",
+          "value": "demo",
+          "pathway_tag": "04_demo_to_prd"
+        },
+        {
+          "label": "我不确定，帮我分析一下",
+          "value": "unsure",
+          "pathway_tag": null
+        }
+      ]
+    },
+    {
+      "id": "q3_tech_level",
+      "text": "你目前的技术背景如何？",
+      "type": "multiple-choice",
+      "options": [
+        { "label": "完全零基础，但会使用AI对话工具（如ChatGPT、Manus）", "value": "zero" },
+        { "label": "了解Prompt工程，能用AI生成代码但不太懂代码本身", "value": "prompt" },
+        { "label": "有一定编程基础，能看懂和修改AI生成的代码", "value": "basic_code" },
+        { "label": "编程能力较强，可以独立开发和调试", "value": "advanced" }
+      ]
+    },
+    {
+      "id": "q4_system_relation",
+      "text": "你要做的东西和我们现有系统是什么关系？",
+      "type": "multiple-choice",
+      "options": [
+        { "label": "完全独立的新工具，不需要和现有系统交互", "value": "standalone" },
+        { "label": "需要从现有系统读取数据（如DMS、CRM、VDS）", "value": "read_data" },
+        { "label": "需要嵌入或增强现有系统的功能", "value": "enhance" },
+        { "label": "是对现有功能的改进或替代方案", "value": "replace" }
+      ]
+    },
+    {
+      "id": "q5_constraint",
+      "text": "关于组织流程和部署，以下哪项最符合你的情况？",
+      "type": "multiple-choice",
+      "options": [
+        { "label": "个人使用或小范围试用，不需要正式部署", "value": "personal" },
+        { "label": "团队内部使用，需要简单部署但不涉及生产数据", "value": "team" },
+        { "label": "需要正式上线，涉及服务器申请和部署流程", "value": "formal" },
+        { "label": "需要接入生产数据或与正式系统对接", "value": "production" }
+      ]
+    }
+  ]
+}
