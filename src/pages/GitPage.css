@@ -2,6 +2,37 @@
   overflow: hidden;
 }
 
+.git-page-header {
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+.git-header-copy {
+  display: grid;
+  gap: var(--sp-2xs);
+}
+
+.git-header-status {
+  margin: 0;
+}
+
+.git-header-actions {
+  display: grid;
+  gap: var(--sp-sm);
+  justify-items: end;
+  margin-left: auto;
+  width: min(100%, var(--page-header-actions-max-width, 1140px));
+}
+
+.git-header-actions-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sm);
+  justify-content: flex-end;
+  width: 100%;
+}
+
 .git-overview-layout,
 .git-detail-layout {
   display: grid;
@@ -1056,6 +1087,19 @@
 @media (max-width: 900px) {
   .git-page {
     overflow-y: auto;
+  }
+
+  .git-page-header {
+    align-items: stretch;
+  }
+
+  .git-header-actions {
+    justify-items: stretch;
+    width: 100%;
+  }
+
+  .git-header-actions-row {
+    justify-content: flex-start;
   }
 
   .git-form-grid {

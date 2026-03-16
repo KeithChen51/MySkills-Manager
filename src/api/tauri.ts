@@ -464,7 +464,9 @@ export type EvalConfig = {
   apiKey: string;
   provider: string;
   baseUrl?: string;
-  defaultModel: string;
+  sampleModel: string;
+  runModel: string;
+  defaultModel?: string;
   costCurrency: CostCurrency;
 };
 
@@ -605,6 +607,15 @@ export type EvalSampleDrafts = {
   functionalCount: number;
 };
 
+export type EvalSampleGenerationTimingEntry = {
+  recordedAtUnix: number;
+  skillName: string;
+  model: string;
+  triggerCount: number;
+  functionalCount: number;
+  elapsedSeconds: number;
+};
+
 export type EvalDatasetKind = "trigger" | "functional";
 
 export type EvalDatasetSaveRequest = {
@@ -622,6 +633,8 @@ export type EvalDatasetSaveResult = {
 export type EvalStoragePaths = {
   datasetDir: string;
   historyDir: string;
+  latestTriggerPath?: string;
+  latestFunctionalPath?: string;
 };
 
 export type EvalHistoryEntry = {
@@ -634,6 +647,7 @@ export type EvalHistoryEntry = {
   totalCases: number;
   model: string;
   status: string;
+  reviewSummary?: EvalReviewSummary;
 };
 
 export type EvalRunRequest = {
@@ -658,6 +672,12 @@ export type EvalSampleGenerateRequest = {
   model: string;
   triggerCount?: number;
   functionalCount?: number;
+};
+
+export type EvalSampleGenerationHistoryRequest = {
+  skillName?: string;
+  model?: string;
+  limit?: number;
 };
 
 export type EvalPipelineMode = "quick" | "standard" | "full";
@@ -749,6 +769,9 @@ export type EvalRunMeta = {
   model: string;
   judgeModels: string[];
   repeats: number;
+  maxParallelArms: number;
+  triggerMaxWorkers: number;
+  functionalMaxWorkers: number;
   seed?: number;
   temperature: number;
   executedSteps: number;
@@ -781,6 +804,71 @@ export type EvalEvidenceSummary = {
   capturedTranscripts: number;
   capturedTiming: number;
   capturedTokens: number;
+};
+
+export type EvalReviewSummary = {
+  reviewed: boolean;
+  finalVerdict?: string;
+  overrideGate: boolean;
+  decidedAtUnix?: number;
+  reviewer?: string;
+};
+
+export type EvalComparatorSummary = {
+  evaluatedCases: number;
+  improvedCases: number;
+  regressedCases: number;
+  unchangedCases: number;
+  averageDelta: number;
+  highlights: string[];
+};
+
+export type EvalAnalyzerSummary = {
+  topFailurePatterns: string[];
+  recommendations: string[];
+  generatedAtUnix: number;
+};
+
+export type EvalReviewDetail = {
+  path: string;
+  finalVerdict: string;
+  overrideGate: boolean;
+  overrideReason?: string;
+  notes?: string;
+  reviewer?: string;
+  tags: string[];
+  failedCaseIds: string[];
+  decidedAtUnix: number;
+};
+
+export type EvalSubmitReviewResult = {
+  success: boolean;
+  review: EvalReviewDetail;
+  reviewSummary: EvalReviewSummary;
+  finalVerdict: string;
+  overrideReason?: string;
+  overrideBy?: string;
+  overrideAt?: number;
+};
+
+export type EvalReviewQueueItem = {
+  path: string;
+  fileName: string;
+  savedAtUnix: number;
+  passRate: number;
+  totalCases: number;
+  model: string;
+  gatePass?: boolean;
+  reviewed: boolean;
+  finalVerdict?: string;
+  decidedAtUnix?: number;
+};
+
+export type EvalEvidenceCaseResult = {
+  caseId: string;
+  stage: string;
+  evidencePath?: string;
+  content?: string;
 };
 
 export type EvalQuickCheckItem = {
@@ -860,6 +948,13 @@ export type EvalPipelineOutput = {
   evidenceLevel?: "simulated" | "real";
   advisory?: EvalAdvisory;
   evidenceSummary?: EvalEvidenceSummary;
+  reviewSummary?: EvalReviewSummary;
+  finalVerdict?: string;
+  overrideReason?: string;
+  overrideAt?: number;
+  overrideBy?: string;
+  comparator?: EvalComparatorSummary;
+  analyzer?: EvalAnalyzerSummary;
   taxonomyStatus?: "applied" | "skipped" | "failed";
   taxonomyMessage?: string;
   taxonomyApplied?: boolean;
@@ -888,6 +983,13 @@ type EvalPipelineOutputRaw = {
   evidenceLevel?: "simulated" | "real";
   advisory?: EvalAdvisory;
   evidenceSummary?: EvalEvidenceSummary;
+  reviewSummary?: EvalReviewSummary;
+  finalVerdict?: string;
+  overrideReason?: string;
+  overrideAt?: number;
+  overrideBy?: string;
+  comparator?: EvalComparatorSummary;
+  analyzer?: EvalAnalyzerSummary;
   taxonomyStatus?: "applied" | "skipped" | "failed";
   taxonomyMessage?: string;
   taxonomyApplied?: boolean;
@@ -909,7 +1011,21 @@ export type EvalPipelineRequest = {
   temperature?: number;
   maxCostUsd?: number;
   selectedModules?: EvalModuleKey[];
+  maxParallelArms?: number;
+  triggerMaxWorkers?: number;
+  functionalMaxWorkers?: number;
   runId?: string;
+};
+
+export type EvalSubmitReviewRequest = {
+  path: string;
+  finalVerdict: string;
+  overrideGate?: boolean;
+  overrideReason?: string;
+  notes?: string;
+  reviewer?: string;
+  tags?: string[];
+  failedCaseIds?: string[];
 };
 
 export type EvalPipelineEstimateRequest = {
@@ -923,6 +1039,9 @@ export type EvalPipelineEstimateRequest = {
   repeats?: number;
   maxCostUsd?: number;
   selectedModules?: EvalModuleKey[];
+  maxParallelArms?: number;
+  triggerMaxWorkers?: number;
+  functionalMaxWorkers?: number;
 };
 
 export type EvalControlAction = "pause" | "resume" | "cancel";
@@ -1381,6 +1500,21 @@ export async function evalGetStoragePaths(skillName?: string): Promise<EvalStora
   });
 }
 
+export async function evalListSampleGenerationHistory(
+  request: EvalSampleGenerationHistoryRequest = {},
+): Promise<EvalSampleGenerationTimingEntry[]> {
+  return invokeWithError<EvalSampleGenerationTimingEntry[]>(
+    "eval_list_sample_generation_history",
+    {
+      skillName: request.skillName,
+      skill_name: request.skillName,
+      model: request.model,
+      limit: request.limit,
+    },
+    { reportGlobal: true },
+  );
+}
+
 export async function evalEstimatePipeline(
   request: EvalPipelineEstimateRequest,
 ): Promise<EvalPipelineEstimate> {
@@ -1404,6 +1538,12 @@ export async function evalEstimatePipeline(
       max_cost_usd: request.maxCostUsd,
       selectedModules: request.selectedModules,
       selected_modules: request.selectedModules,
+      maxParallelArms: request.maxParallelArms,
+      max_parallel_arms: request.maxParallelArms,
+      triggerMaxWorkers: request.triggerMaxWorkers,
+      trigger_max_workers: request.triggerMaxWorkers,
+      functionalMaxWorkers: request.functionalMaxWorkers,
+      functional_max_workers: request.functionalMaxWorkers,
     },
     { reportGlobal: true },
   );
@@ -1438,6 +1578,83 @@ export async function evalLoadHistory(path: string): Promise<EvalPipelineOutput>
   };
 }
 
+export async function evalSubmitReview(
+  request: EvalSubmitReviewRequest,
+): Promise<EvalSubmitReviewResult> {
+  return invokeWithError<EvalSubmitReviewResult>(
+    "eval_submit_review",
+    {
+      path: request.path,
+      finalVerdict: request.finalVerdict,
+      final_verdict: request.finalVerdict,
+      overrideGate: request.overrideGate,
+      override_gate: request.overrideGate,
+      overrideReason: request.overrideReason,
+      override_reason: request.overrideReason,
+      notes: request.notes,
+      reviewer: request.reviewer,
+      tags: request.tags,
+      failedCaseIds: request.failedCaseIds,
+      failed_case_ids: request.failedCaseIds,
+    },
+    { reportGlobal: true },
+  );
+}
+
+export async function evalGetReview(path: string): Promise<EvalReviewDetail | null> {
+  return invokeWithError<EvalReviewDetail | null>("eval_get_review", { path }, { reportGlobal: true });
+}
+
+export async function evalListReviewQueue(
+  skillName: string,
+  limit = 30,
+): Promise<EvalReviewQueueItem[]> {
+  return invokeWithError<EvalReviewQueueItem[]>(
+    "eval_list_review_queue",
+    {
+      skillName,
+      skill_name: skillName,
+      limit,
+    },
+    { reportGlobal: true },
+  );
+}
+
+export async function evalGenerateFeedbackDrafts(request: {
+  path: string;
+  triggerCount?: number;
+  functionalCount?: number;
+}): Promise<EvalSampleDrafts> {
+  return invokeWithError<EvalSampleDrafts>(
+    "eval_generate_feedback_drafts",
+    {
+      path: request.path,
+      triggerCount: request.triggerCount,
+      trigger_count: request.triggerCount,
+      functionalCount: request.functionalCount,
+      functional_count: request.functionalCount,
+    },
+    { reportGlobal: true },
+  );
+}
+
+export async function evalReadEvidenceCase(request: {
+  path: string;
+  caseId: string;
+  stage?: string;
+}): Promise<EvalEvidenceCaseResult> {
+  return invokeWithError<EvalEvidenceCaseResult>(
+    "eval_read_evidence_case",
+    {
+      path: request.path,
+      caseId: request.caseId,
+      case_id: request.caseId,
+      stage: request.stage,
+    },
+    { reportGlobal: true },
+  );
+}
+
 export async function evalSaveConfig(config: EvalConfig): Promise<SetupMutationResult> {
   return invokeWithError<SetupMutationResult>("eval_save_config", {
     apiKey: config.apiKey,
@@ -1445,8 +1662,12 @@ export async function evalSaveConfig(config: EvalConfig): Promise<SetupMutationR
     provider: config.provider,
     baseUrl: config.baseUrl,
     base_url: config.baseUrl,
-    defaultModel: config.defaultModel,
-    default_model: config.defaultModel,
+    sampleModel: config.sampleModel,
+    sample_model: config.sampleModel,
+    runModel: config.runModel,
+    run_model: config.runModel,
+    defaultModel: config.runModel,
+    default_model: config.runModel,
     costCurrency: config.costCurrency,
     cost_currency: config.costCurrency,
   });
@@ -1500,6 +1721,12 @@ export async function runEvalPipeline(request: EvalPipelineRequest): Promise<Eva
       seed: request.seed,
       temperature: request.temperature,
       maxCostUsd: request.maxCostUsd,
+      maxParallelArms: request.maxParallelArms,
+      max_parallel_arms: request.maxParallelArms,
+      triggerMaxWorkers: request.triggerMaxWorkers,
+      trigger_max_workers: request.triggerMaxWorkers,
+      functionalMaxWorkers: request.functionalMaxWorkers,
+      functional_max_workers: request.functionalMaxWorkers,
       selectedModules: request.selectedModules,
       selected_modules: request.selectedModules,
       runId: request.runId,

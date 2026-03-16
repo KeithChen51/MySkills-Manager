@@ -245,7 +245,10 @@ fn infer_software_taxonomy_tags(skill_dir: &Path) -> Vec<String> {
     ]
 }
 
-fn merge_skill_tags(base_tags: Option<Vec<String>>, inferred_tags: Vec<String>) -> Option<Vec<String>> {
+fn merge_skill_tags(
+    base_tags: Option<Vec<String>>,
+    inferred_tags: Vec<String>,
+) -> Option<Vec<String>> {
     let mut merged = base_tags.unwrap_or_default();
     for tag in inferred_tags {
         if !merged.iter().any(|existing| existing == &tag) {
@@ -497,8 +500,8 @@ fn rescan_shape_tags_with_home_and_root(
             if !file_path.exists() {
                 continue;
             }
-            let raw = fs::read_to_string(&file_path)
-                .map_err(|e| format!("Read SKILL.md failed: {e}"))?;
+            let raw =
+                fs::read_to_string(&file_path).map_err(|e| format!("Read SKILL.md failed: {e}"))?;
             let (frontmatter, _) = split_frontmatter(&raw)?;
             let skill_name = yaml_get_string(&frontmatter, "name")
                 .unwrap_or_else(|| entry.file_name().to_string_lossy().to_string());
@@ -847,8 +850,7 @@ description: run scripted automation
 "#,
         )
         .expect("write skill");
-        fs::write(skill_dir.join("scripts").join("run.py"), "print('ok')\n")
-            .expect("write script");
+        fs::write(skill_dir.join("scripts").join("run.py"), "print('ok')\n").expect("write script");
 
         let skills = list_skills(&root).expect("list skills");
         assert_eq!(skills.len(), 1);
@@ -876,8 +878,7 @@ description: run scripted automation
 "#,
         )
         .expect("write skill");
-        fs::write(skill_dir.join("scripts").join("run.py"), "print('ok')\n")
-            .expect("write script");
+        fs::write(skill_dir.join("scripts").join("run.py"), "print('ok')\n").expect("write script");
 
         let result = rescan_shape_tags_with_home_and_root(&home, &root).expect("rescan tags");
         assert_eq!(result.scanned_skills, 1);
@@ -922,7 +923,10 @@ description: cache tag test
                 updated_at: "2026-03-13T00:00:00Z".to_string(),
             },
         );
-        let registry = SkillShapeTagRegistry { version: 1, entries };
+        let registry = SkillShapeTagRegistry {
+            version: 1,
+            entries,
+        };
         fs::create_dir_all(crate::root_dir::app_config_dir(&home)).expect("create app config dir");
         fs::write(
             shape_tag_registry_file(&home),

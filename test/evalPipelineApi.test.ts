@@ -74,6 +74,30 @@ test("tauri API exposes eval dataset storage and history commands", () => {
     source.includes("repeats: number"),
     "eval history contract should include repeats in overview records",
   );
+  assert.ok(
+    source.includes("eval_list_sample_generation_history"),
+    "tauri API should expose sidecar history command for sample generation timing",
+  );
+  assert.ok(
+    source.includes("latestTriggerPath?: string") &&
+      source.includes("latestFunctionalPath?: string"),
+    "storage path contract should expose latest trigger/functional dataset hints for auto-prefill",
+  );
+});
+
+test("tauri API defines sample generation timing history contract", () => {
+  const source = read("src/api/tauri.ts");
+  assert.ok(
+    source.includes("export type EvalSampleGenerationTimingEntry = {"),
+    "tauri API should define sample generation timing entry contract",
+  );
+  assert.ok(
+    source.includes("recordedAtUnix: number;") &&
+      source.includes("elapsedSeconds: number;") &&
+      source.includes("triggerCount: number;") &&
+      source.includes("functionalCount: number;"),
+    "sample timing contract should expose timestamp, elapsed seconds, and case counts",
+  );
 });
 
 test("evalSaveConfig sends compatibility keys for tauri arg naming differences", () => {
@@ -82,6 +106,31 @@ test("evalSaveConfig sends compatibility keys for tauri arg naming differences",
   assert.ok(source.includes("api_key: config.apiKey"), "evalSaveConfig should send snake_case api_key");
   assert.ok(source.includes("baseUrl: config.baseUrl"), "evalSaveConfig should send camelCase baseUrl");
   assert.ok(source.includes("base_url: config.baseUrl"), "evalSaveConfig should send snake_case base_url");
+  assert.ok(
+    source.includes("sampleModel: config.sampleModel") &&
+      source.includes("sample_model: config.sampleModel"),
+    "evalSaveConfig should send sample model via both camelCase and snake_case",
+  );
+  assert.ok(
+    source.includes("runModel: config.runModel") && source.includes("run_model: config.runModel"),
+    "evalSaveConfig should send run model via both camelCase and snake_case",
+  );
+  assert.ok(
+    source.includes("defaultModel: config.runModel") && source.includes("default_model: config.runModel"),
+    "evalSaveConfig should keep defaultModel payload for backward compatibility during migration",
+  );
+});
+
+test("EvalConfig contract splits sample and run model defaults", () => {
+  const source = read("src/api/tauri.ts");
+  assert.ok(
+    source.includes("sampleModel: string"),
+    "EvalConfig should expose sampleModel field for sample-generation provider/model setting",
+  );
+  assert.ok(
+    source.includes("runModel: string"),
+    "EvalConfig should expose runModel field for evaluation runtime provider/model setting",
+  );
 });
 
 test("functional eval mapping keeps Layer2 quality fields for UI explanation", () => {
@@ -165,5 +214,93 @@ test("tauri API maps trigger and functional evidence details into camelCase fiel
   assert.ok(
     source.includes("judgeTraceId: item.judge_trace_id ?? null"),
     "result mapping should expose judgeTraceId",
+  );
+});
+
+test("runEvalPipeline request supports controlled parallelism knobs", () => {
+  const source = read("src/api/tauri.ts");
+  assert.ok(
+    source.includes("maxParallelArms?: number"),
+    "pipeline request should expose maxParallelArms",
+  );
+  assert.ok(
+    source.includes("triggerMaxWorkers?: number"),
+    "pipeline request should expose triggerMaxWorkers",
+  );
+  assert.ok(
+    source.includes("functionalMaxWorkers?: number"),
+    "pipeline request should expose functionalMaxWorkers",
+  );
+  assert.ok(
+    source.includes("maxParallelArms: request.maxParallelArms"),
+    "runEvalPipeline invoke payload should forward maxParallelArms",
+  );
+  assert.ok(
+    source.includes("triggerMaxWorkers: request.triggerMaxWorkers"),
+    "runEvalPipeline invoke payload should forward triggerMaxWorkers",
+  );
+  assert.ok(
+    source.includes("functionalMaxWorkers: request.functionalMaxWorkers"),
+    "runEvalPipeline invoke payload should forward functionalMaxWorkers",
+  );
+});
+
+test("evalEstimatePipeline request forwards controlled parallelism knobs", () => {
+  const source = read("src/api/tauri.ts");
+  assert.ok(
+    source.includes("maxParallelArms?: number") &&
+      source.includes("triggerMaxWorkers?: number") &&
+      source.includes("functionalMaxWorkers?: number"),
+    "estimate request should include the same parallelism knobs as runtime request",
+  );
+  assert.ok(
+    source.includes("maxParallelArms: request.maxParallelArms") &&
+      source.includes("triggerMaxWorkers: request.triggerMaxWorkers") &&
+      source.includes("functionalMaxWorkers: request.functionalMaxWorkers"),
+    "estimate invoke payload should forward parallelism values for wall-time calculation",
+  );
+});
+
+test("tauri API exposes review queue and review submission commands", () => {
+  const source = read("src/api/tauri.ts");
+  assert.ok(
+    source.includes("eval_submit_review"),
+    "tauri API should expose eval_submit_review command",
+  );
+  assert.ok(
+    source.includes("eval_get_review"),
+    "tauri API should expose eval_get_review command",
+  );
+  assert.ok(
+    source.includes("eval_list_review_queue"),
+    "tauri API should expose eval_list_review_queue command",
+  );
+  assert.ok(
+    source.includes("eval_generate_feedback_drafts"),
+    "tauri API should expose eval_generate_feedback_drafts command",
+  );
+  assert.ok(
+    source.includes("eval_read_evidence_case"),
+    "tauri API should expose eval_read_evidence_case command",
+  );
+});
+
+test("pipeline output contract includes review/comparator/analyzer optional payloads", () => {
+  const source = read("src/api/tauri.ts");
+  assert.ok(
+    source.includes("reviewSummary?: EvalReviewSummary;"),
+    "pipeline output should expose reviewSummary",
+  );
+  assert.ok(
+    source.includes("finalVerdict?: string;"),
+    "pipeline output should expose finalVerdict",
+  );
+  assert.ok(
+    source.includes("comparator?: EvalComparatorSummary;"),
+    "pipeline output should expose comparator summary",
+  );
+  assert.ok(
+    source.includes("analyzer?: EvalAnalyzerSummary;"),
+    "pipeline output should expose analyzer summary",
   );
 });

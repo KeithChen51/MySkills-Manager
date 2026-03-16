@@ -230,6 +230,27 @@ def _error_type(error: Exception) -> str:
     return "runtime"
 
 
+def check_trigger(
+    selected_skill: str,
+    target_skill_name: str,
+    should_trigger: bool,
+    env_type: str,
+) -> tuple[bool, str | None, bool]:
+    normalized_selected = selected_skill.strip()
+    triggered = bool(normalized_selected)
+    triggered_skill_name = normalized_selected or None
+    if env_type == "clean":
+        passed = (triggered and should_trigger and normalized_selected == target_skill_name) or (
+            (not triggered) and (not should_trigger)
+        )
+    else:
+        # complex mode allows more candidate skills, but pass still requires selecting target when should_trigger=true
+        passed = (triggered and should_trigger and normalized_selected == target_skill_name) or (
+            (not triggered) and (not should_trigger)
+        )
+    return triggered, triggered_skill_name, bool(passed)
+
+
 def run_single_query(
     case_index: int,
     query: str,
@@ -237,6 +258,7 @@ def run_single_query(
     target_skill_name: str,
     candidates: list[dict[str, str]],
     client: LLMClient,
+    env_type: str,
     evidence_dir: Path | None,
 ) -> dict[str, Any]:
     case_dir = evidence_dir / f"trigger-case-{case_index + 1:03d}" if evidence_dir else None
@@ -268,10 +290,11 @@ def run_single_query(
         candidate_names = {item["name"] for item in candidates}
         if selected_skill.lower() == "none" or selected_skill not in candidate_names:
             selected_skill = ""
-        triggered = bool(selected_skill)
-        triggered_skill_name = selected_skill or None
-        passed = (triggered and should_trigger and selected_skill == target_skill_name) or (
-            (not triggered) and (not should_trigger)
+        triggered, triggered_skill_name, passed = check_trigger(
+            selected_skill=selected_skill,
+            target_skill_name=target_skill_name,
+            should_trigger=should_trigger,
+            env_type=env_type,
         )
         return {
             "query": query,
@@ -331,6 +354,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     target_skill_name = target_meta["name"]
 
     evidence_dir = getattr(args, "evidence_dir", None)
+    max_workers_raw = int(getattr(args, "max_workers", 10) or 10)
+    max_workers = max(1, min(64, max_workers_raw))
     if isinstance(evidence_dir, Path):
         evidence_dir.mkdir(parents=True, exist_ok=True)
         _write_json(
@@ -340,11 +365,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "env_type": env_type,
                 "cases": len(eval_set),
                 "candidate_count": len(candidates),
+                "max_workers": max_workers,
             },
         )
 
     results: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_case = {
             executor.submit(
                 run_single_query,
@@ -354,6 +380,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 target_skill_name,
                 candidates,
                 client,
+                env_type,
                 evidence_dir,
             ): item
             for index, item in enumerate(eval_set)
@@ -375,5 +402,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "skill_name": target_skill_name,
         "summary": summary,
         "results": results,
+        "run_meta": {
+            "env_type": env_type,
+            "max_workers": max_workers,
+            "case_count": len(eval_set),
+        },
     }
 

@@ -622,6 +622,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         provider=getattr(args, "provider", None),
         base_url=getattr(args, "base_url", None),
     )
+    max_workers_raw = int(getattr(args, "max_workers", 5) or 5)
+    max_workers = max(1, min(64, max_workers_raw))
     results: list[dict[str, Any]] = []
     evidence_root = getattr(args, "evidence_dir", None)
     if isinstance(evidence_root, Path):
@@ -633,10 +635,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "compare_mode": args.compare_mode,
                 "judge_models": judge_models,
                 "case_count": len(eval_set) if isinstance(eval_set, list) else 0,
+                "max_workers": max_workers,
             },
         )
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_case = {
             executor.submit(
                 run_single_case,
@@ -704,6 +707,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "compare_mode": args.compare_mode,
             "model": args.model,
             "judge_models": judge_models,
+            "max_workers": max_workers,
         },
     }
 

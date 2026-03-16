@@ -24,6 +24,7 @@ export default function Sidebar({ active, onChange }: Props) {
     const { t } = useI18n();
     const { resolvedTheme } = useTheme();
     const brandLogoSrc = resolvedTheme === "dark" ? brandLogoWhiteBg : brandLogoTransparent;
+    const betaLabel = "BETA";
     const navItems: { view: ViewName; icon: React.ReactNode; label: string; beta?: boolean }[] = [
         { view: "skills", icon: <IconSkills size={20} />, label: t("nav.skills") },
         { view: "tools", icon: <IconTools size={20} />, label: t("nav.tools") },
@@ -48,7 +49,7 @@ export default function Sidebar({ active, onChange }: Props) {
                 <div className="sidebar-items">
                     {navItems.map((item) => {
                         const label = item.beta
-                            ? `${item.label} (${t("common.beta")})`
+                            ? `${item.label} (${betaLabel})`
                             : item.label;
                         return (
                             <button
@@ -63,7 +64,7 @@ export default function Sidebar({ active, onChange }: Props) {
                                 <span className="sidebar-label-wrap">
                                     <span className="sidebar-label">{item.label}</span>
                                     {item.beta ? (
-                                        <span className="sidebar-beta-badge">{t("common.beta")}</span>
+                                        <span className="sidebar-beta-badge">{betaLabel}</span>
                                     ) : null}
                                 </span>
                             </button>

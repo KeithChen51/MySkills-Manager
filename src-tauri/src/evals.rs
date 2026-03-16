@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value as YamlValue};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::fs::OpenOptions;
 use std::fs;
+use std::io::Write;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -19,6 +21,9 @@ const DEFAULT_COST_CURRENCY: &str = "USD";
 const EVAL_TIMEOUT_SECS: u64 = 300;
 const MAX_EVAL_TIMEOUT_SECS: u64 = 10800;
 const EVAL_TIMEOUT_PER_CASE_SECS: u64 = 12;
+const EVAL_TIMEOUT_ESTIMATE_BUFFER_SECS: u64 = 120;
+const EVAL_TIMEOUT_ESTIMATE_SCALE_NUM: u64 = 3;
+const EVAL_TIMEOUT_ESTIMATE_SCALE_DEN: u64 = 2;
 const TAXONOMY_TIMEOUT_SECS: u64 = 180;
 const SAMPLE_GENERATION_REQUEST_TIMEOUT_BASE_SECS: u64 = 120;
 const SAMPLE_GENERATION_REQUEST_TIMEOUT_PER_CASE_SECS: u64 = 6;
@@ -27,6 +32,16 @@ const SAMPLE_GENERATION_REQUEST_TIMEOUT_MAX_SECS: u64 = 900;
 const DEFAULT_TRIGGER_CASE_COUNT: usize = 48;
 const DEFAULT_FUNCTIONAL_CASE_COUNT: usize = 24;
 const DEFAULT_PIPELINE_REPEATS: usize = 1;
+const DEFAULT_MAX_PARALLEL_ARMS: usize = 2;
+const MIN_MAX_PARALLEL_ARMS: usize = 1;
+const MAX_MAX_PARALLEL_ARMS: usize = 4;
+const DEFAULT_TRIGGER_MAX_WORKERS: usize = 6;
+const DEFAULT_FUNCTIONAL_MAX_WORKERS: usize = 3;
+const MIN_EVAL_WORKERS: usize = 1;
+const MAX_EVAL_WORKERS: usize = 16;
+const DEFAULT_REVIEW_QUEUE_LIMIT: usize = 30;
+const DEFAULT_SAMPLE_TIMING_HISTORY_LIMIT: usize = 80;
+const MAX_SAMPLE_TIMING_HISTORY_LIMIT: usize = 500;
 const TRIGGER_BUCKET_MIN_SAMPLES: usize = 12;
 const TRIGGER_BUCKET_POSITIVE: &str = "positive_trigger";
 const TRIGGER_BUCKET_NEGATIVE: &str = "negative_trigger";
@@ -71,6 +86,18 @@ const ESTIMATE_JUDGE_SECONDS_PER_CALL: u64 = 5;
 const ESTIMATE_TAXONOMY_SECONDS_PER_CALL: u64 = 8;
 const EVAL_PROGRESS_EVENT: &str = "eval://pipeline-progress";
 static EVAL_TMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+fn default_max_parallel_arms() -> usize {
+    DEFAULT_MAX_PARALLEL_ARMS
+}
+
+fn default_trigger_max_workers() -> usize {
+    DEFAULT_TRIGGER_MAX_WORKERS
+}
+
+fn default_functional_max_workers() -> usize {
+    DEFAULT_FUNCTIONAL_MAX_WORKERS
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -155,6 +182,8 @@ pub struct EvalConfig {
     pub api_key: String,
     pub provider: String,
     pub base_url: Option<String>,
+    pub sample_model: String,
+    pub run_model: String,
     pub default_model: String,
     pub cost_currency: String,
 }
@@ -165,6 +194,8 @@ struct RawEvalConfig {
     api_key: Option<String>,
     provider: Option<String>,
     base_url: Option<String>,
+    sample_model: Option<String>,
+    run_model: Option<String>,
     default_model: Option<String>,
     cost_currency: Option<String>,
 }
@@ -175,6 +206,8 @@ impl Default for EvalConfig {
             api_key: String::new(),
             provider: DEFAULT_PROVIDER.to_string(),
             base_url: None,
+            sample_model: DEFAULT_MODEL.to_string(),
+            run_model: DEFAULT_MODEL.to_string(),
             default_model: DEFAULT_MODEL.to_string(),
             cost_currency: DEFAULT_COST_CURRENCY.to_string(),
         }
@@ -199,6 +232,10 @@ pub struct EvalDatasetSaveResult {
 pub struct EvalStoragePaths {
     pub dataset_dir: String,
     pub history_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_trigger_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_functional_path: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -213,6 +250,7 @@ pub struct EvalHistoryEntry {
     pub total_cases: i32,
     pub model: String,
     pub status: String,
+    pub review_summary: Option<EvalReviewSummary>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -222,6 +260,17 @@ pub struct EvalSampleDrafts {
     pub functional_draft: String,
     pub trigger_count: usize,
     pub functional_count: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalSampleGenerationTimingEntry {
+    pub recorded_at_unix: u64,
+    pub skill_name: String,
+    pub model: String,
+    pub trigger_count: usize,
+    pub functional_count: usize,
+    pub elapsed_seconds: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -388,6 +437,12 @@ pub struct EvalRunMeta {
     pub model: String,
     pub judge_models: Vec<String>,
     pub repeats: usize,
+    #[serde(default = "default_max_parallel_arms")]
+    pub max_parallel_arms: usize,
+    #[serde(default = "default_trigger_max_workers")]
+    pub trigger_max_workers: usize,
+    #[serde(default = "default_functional_max_workers")]
+    pub functional_max_workers: usize,
     pub seed: Option<u64>,
     pub temperature: f64,
     pub executed_steps: usize,
@@ -436,6 +491,13 @@ pub struct EvalPipelineOutput {
     pub evidence_level: Option<String>,
     pub advisory: Option<EvalAdvisory>,
     pub evidence_summary: Option<EvalEvidenceSummary>,
+    pub review_summary: Option<EvalReviewSummary>,
+    pub final_verdict: Option<String>,
+    pub override_reason: Option<String>,
+    pub override_at: Option<u64>,
+    pub override_by: Option<String>,
+    pub comparator: Option<EvalComparatorSummary>,
+    pub analyzer: Option<EvalAnalyzerSummary>,
     pub taxonomy_status: Option<String>,
     pub taxonomy_message: Option<String>,
     pub taxonomy_applied: Option<bool>,
@@ -458,6 +520,102 @@ pub struct EvalEvidenceSummary {
     pub captured_transcripts: usize,
     pub captured_timing: usize,
     pub captured_tokens: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalReviewSummary {
+    pub reviewed: bool,
+    pub final_verdict: Option<String>,
+    pub override_gate: bool,
+    pub decided_at_unix: Option<u64>,
+    pub reviewer: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalComparatorSummary {
+    pub evaluated_cases: usize,
+    pub improved_cases: usize,
+    pub regressed_cases: usize,
+    pub unchanged_cases: usize,
+    pub average_delta: f64,
+    pub highlights: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalAnalyzerSummary {
+    pub top_failure_patterns: Vec<String>,
+    pub recommendations: Vec<String>,
+    pub generated_at_unix: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalReviewQueueItem {
+    pub path: String,
+    pub file_name: String,
+    pub saved_at_unix: u64,
+    pub pass_rate: f64,
+    pub total_cases: i32,
+    pub model: String,
+    pub gate_pass: Option<bool>,
+    pub reviewed: bool,
+    pub final_verdict: Option<String>,
+    pub decided_at_unix: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalReviewDetail {
+    pub path: String,
+    pub final_verdict: String,
+    pub override_gate: bool,
+    pub override_reason: Option<String>,
+    pub notes: Option<String>,
+    pub reviewer: Option<String>,
+    pub tags: Vec<String>,
+    pub failed_case_ids: Vec<String>,
+    pub decided_at_unix: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalSubmitReviewResult {
+    pub success: bool,
+    pub review: EvalReviewDetail,
+    pub review_summary: EvalReviewSummary,
+    pub final_verdict: String,
+    pub override_reason: Option<String>,
+    pub override_by: Option<String>,
+    pub override_at: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalEvidenceCaseResult {
+    pub case_id: String,
+    pub stage: String,
+    pub evidence_path: Option<String>,
+    pub content: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+struct EvalReviewRecord {
+    history_path: String,
+    final_verdict: String,
+    #[serde(default)]
+    override_gate: bool,
+    override_reason: Option<String>,
+    notes: Option<String>,
+    reviewer: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    failed_case_ids: Vec<String>,
+    decided_at_unix: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -958,11 +1116,27 @@ fn normalize_cost_currency(value: &str) -> String {
 }
 
 fn sanitize_eval_config(raw: RawEvalConfig) -> EvalConfig {
+    let sample_model = normalize_model(
+        raw.sample_model
+            .as_deref()
+            .or(raw.default_model.as_deref())
+            .or(raw.run_model.as_deref())
+            .unwrap_or(DEFAULT_MODEL),
+    );
+    let run_model = normalize_model(
+        raw.run_model
+            .as_deref()
+            .or(raw.default_model.as_deref())
+            .or(raw.sample_model.as_deref())
+            .unwrap_or(DEFAULT_MODEL),
+    );
     EvalConfig {
         api_key: raw.api_key.unwrap_or_default().trim().to_string(),
         provider: normalize_provider(raw.provider.as_deref().unwrap_or(DEFAULT_PROVIDER)),
         base_url: normalize_base_url(raw.base_url),
-        default_model: normalize_model(raw.default_model.as_deref().unwrap_or(DEFAULT_MODEL)),
+        sample_model,
+        run_model: run_model.clone(),
+        default_model: run_model,
         cost_currency: normalize_cost_currency(
             raw.cost_currency
                 .as_deref()
@@ -1293,8 +1467,13 @@ fn run_eval_engine(
     args: &[String],
     control: Option<&Arc<EvalRunControl>>,
     timeout_secs: u64,
+    serialize_engine: bool,
 ) -> Result<std::process::Output, String> {
-    let _engine_guard = lock_eval_engine_execution();
+    let _engine_guard = if serialize_engine {
+        Some(lock_eval_engine_execution())
+    } else {
+        None
+    };
     let workdir = resolve_python_workdir()?;
     let runtime = detect_python_runtime(&workdir)?;
     let runtime_name = runtime_label(&runtime);
@@ -1375,7 +1554,7 @@ fn run_taxonomy_classify_impl(
         cmd_args.push(base_url.clone());
     }
 
-    let output = run_eval_engine(&cmd_args, control, TAXONOMY_TIMEOUT_SECS)?;
+    let output = run_eval_engine(&cmd_args, control, TAXONOMY_TIMEOUT_SECS, true)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let _ = fs::remove_dir_all(&output_dir);
@@ -1558,8 +1737,10 @@ fn run_trigger_eval_impl(
     env_type: String,
     installed_skills_dir: Option<PathBuf>,
     model: String,
+    max_workers: Option<usize>,
     evidence_dir: Option<PathBuf>,
     control: Option<&Arc<EvalRunControl>>,
+    serialize_engine: bool,
 ) -> Result<TriggerEvalOutput, String> {
     let home = crate::root_dir::default_home_dir();
     let config = require_eval_config_with_api_key(&home)?;
@@ -1583,6 +1764,11 @@ fn run_trigger_eval_impl(
         normalize_model(&model),
     ];
 
+    if let Some(workers) = max_workers {
+        cmd_args.push("--max-workers".to_string());
+        cmd_args.push(workers.to_string());
+    }
+
     if let Some(path) = skill_path.as_ref() {
         cmd_args.push("--skill-path".to_string());
         cmd_args.push(path_to_utf8(path)?);
@@ -1605,8 +1791,10 @@ fn run_trigger_eval_impl(
 
     let eval_case_count =
         read_eval_set_case_count(&eval_set_path).unwrap_or(DEFAULT_TRIGGER_CASE_COUNT);
-    let timeout_secs = timeout_secs_for_case_count(eval_case_count);
-    let output = run_eval_engine(&cmd_args, control, timeout_secs)?;
+    let estimated_seconds =
+        (eval_case_count.max(1) as u64).saturating_mul(ESTIMATE_TRIGGER_SECONDS_PER_CALL);
+    let timeout_secs = timeout_secs_for_estimated_runtime(estimated_seconds);
+    let output = run_eval_engine(&cmd_args, control, timeout_secs, serialize_engine)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let _ = fs::remove_dir_all(&output_dir);
@@ -1628,8 +1816,10 @@ fn run_functional_eval_impl(
     compare_mode: String,
     model: String,
     judge_models: Option<Vec<String>>,
+    max_workers: Option<usize>,
     evidence_dir: Option<PathBuf>,
     control: Option<&Arc<EvalRunControl>>,
+    serialize_engine: bool,
 ) -> Result<FunctionalEvalOutput, String> {
     let home = crate::root_dir::default_home_dir();
     let config = require_eval_config_with_api_key(&home)?;
@@ -1647,7 +1837,7 @@ fn run_functional_eval_impl(
         "--output-dir".to_string(),
         path_to_utf8(&output_dir)?,
         "--compare-mode".to_string(),
-        compare_mode,
+        compare_mode.clone(),
         "--api-key".to_string(),
         config.api_key.clone(),
         "--model".to_string(),
@@ -1661,16 +1851,23 @@ fn run_functional_eval_impl(
         cmd_args.push(base_url.clone());
     }
 
-    if let Some(models) = judge_models {
-        let normalized = models
-            .into_iter()
-            .map(|item| item.trim().to_string())
-            .filter(|item| !item.is_empty())
-            .collect::<Vec<_>>();
-        if !normalized.is_empty() {
-            cmd_args.push("--judge-models".to_string());
-            cmd_args.push(normalized.join(","));
-        }
+    let mut normalized_judge_models = judge_models
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    if normalized_judge_models.is_empty() {
+        normalized_judge_models.push(normalize_model(&model));
+    }
+    if !normalized_judge_models.is_empty() {
+        cmd_args.push("--judge-models".to_string());
+        cmd_args.push(normalized_judge_models.join(","));
+    }
+
+    if let Some(workers) = max_workers {
+        cmd_args.push("--max-workers".to_string());
+        cmd_args.push(workers.to_string());
     }
 
     if let Some(dir) = evidence_dir {
@@ -1680,8 +1877,20 @@ fn run_functional_eval_impl(
 
     let eval_case_count =
         read_eval_set_case_count(&eval_set_path).unwrap_or(DEFAULT_FUNCTIONAL_CASE_COUNT);
-    let timeout_secs = timeout_secs_for_case_count(eval_case_count);
-    let output = run_eval_engine(&cmd_args, control, timeout_secs)?;
+    let judge_model_count = normalized_judge_models.len().max(1) as u64;
+    let functional_seconds_per_case =
+        if compare_mode.trim().eq_ignore_ascii_case("without_skill") {
+            ESTIMATE_FUNCTIONAL_BASELINE_SECONDS_PER_CALL
+                + judge_model_count.saturating_mul(ESTIMATE_JUDGE_SECONDS_PER_CALL)
+        } else {
+            ESTIMATE_FUNCTIONAL_EXEC_SECONDS_PER_CALL
+                + ESTIMATE_FUNCTIONAL_BASELINE_SECONDS_PER_CALL
+                + judge_model_count.saturating_mul(ESTIMATE_JUDGE_SECONDS_PER_CALL)
+        };
+    let estimated_seconds =
+        (eval_case_count.max(1) as u64).saturating_mul(functional_seconds_per_case);
+    let timeout_secs = timeout_secs_for_estimated_runtime(estimated_seconds);
+    let output = run_eval_engine(&cmd_args, control, timeout_secs, serialize_engine)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let _ = fs::remove_dir_all(&output_dir);
@@ -1818,21 +2027,32 @@ fn parse_trigger_bucket_coverage(path: &Path) -> Result<EvalTriggerBucketCoverag
     let mut adjacent = 0usize;
     for (index, item) in items.iter().enumerate() {
         let Some(obj) = item.as_object() else {
-            return Err(format!("Trigger dataset item #{} must be an object", index + 1));
+            return Err(format!(
+                "Trigger dataset item #{} must be an object",
+                index + 1
+            ));
         };
         let query = obj
             .get("query")
             .and_then(|v| v.as_str())
             .map(|v| v.trim())
             .filter(|v| !v.is_empty())
-            .ok_or_else(|| format!("Trigger dataset item #{} missing non-empty query", index + 1))?;
+            .ok_or_else(|| {
+                format!(
+                    "Trigger dataset item #{} missing non-empty query",
+                    index + 1
+                )
+            })?;
         let _ = query;
-        let should_trigger = obj.get("should_trigger").and_then(|v| v.as_bool()).ok_or_else(|| {
-            format!(
-                "Trigger dataset item #{} missing boolean should_trigger",
-                index + 1
-            )
-        })?;
+        let should_trigger = obj
+            .get("should_trigger")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| {
+                format!(
+                    "Trigger dataset item #{} missing boolean should_trigger",
+                    index + 1
+                )
+            })?;
         let bucket = obj
             .get("test_bucket")
             .and_then(|v| v.as_str())
@@ -1915,7 +2135,10 @@ fn validate_taxonomy_classification(taxonomy: &SkillTaxonomyClassification) -> R
             "Robotics/Physical",
         ],
     ) {
-        return Err(format!("Invalid taxonomy.sok_scope '{}'", taxonomy.sok_scope));
+        return Err(format!(
+            "Invalid taxonomy.sok_scope '{}'",
+            taxonomy.sok_scope
+        ));
     }
     if !taxonomy_enum_allowed(
         &taxonomy.anthropic_category,
@@ -1994,8 +2217,8 @@ fn read_openai_interface_fields(skill_path: &Path) -> Result<(PathBuf, String, S
     }
     let raw = fs::read_to_string(&openai_yaml_path)
         .map_err(|e| format!("Read openai.yaml failed: {e}"))?;
-    let root =
-        serde_yaml::from_str::<YamlValue>(&raw).map_err(|e| format!("Parse openai.yaml failed: {e}"))?;
+    let root = serde_yaml::from_str::<YamlValue>(&raw)
+        .map_err(|e| format!("Parse openai.yaml failed: {e}"))?;
     let root_map = root
         .as_mapping()
         .ok_or_else(|| "openai.yaml root must be a mapping".to_string())?;
@@ -2006,9 +2229,8 @@ fn read_openai_interface_fields(skill_path: &Path) -> Result<(PathBuf, String, S
     let display_name = yaml_get_string_any(interface, &["display_name", "displayName"])
         .ok_or_else(|| "openai.yaml interface.display_name is required".to_string())?;
     let short_description =
-        yaml_get_string_any(interface, &["short_description", "shortDescription"]).ok_or_else(|| {
-            "openai.yaml interface.short_description is required".to_string()
-        })?;
+        yaml_get_string_any(interface, &["short_description", "shortDescription"])
+            .ok_or_else(|| "openai.yaml interface.short_description is required".to_string())?;
     Ok((openai_yaml_path, display_name, short_description))
 }
 
@@ -2071,7 +2293,9 @@ fn validate_ui_metadata_consistency(skill_path: &Path) -> Result<String, String>
         }
     }
     if description.trim().len() < 10 {
-        return Err("SKILL.md description is too short for reliable UI metadata alignment".to_string());
+        return Err(
+            "SKILL.md description is too short for reliable UI metadata alignment".to_string(),
+        );
     }
     Ok("SKILL.md and openai.yaml metadata consistency checks passed.".to_string())
 }
@@ -2870,8 +3094,12 @@ fn build_module_results(
                 let passed = trigger_metrics.precision >= ADVISORY_PASS_PRECISION_THRESHOLD
                     && trigger_metrics.recall >= ADVISORY_PASS_RECALL_THRESHOLD
                     && coverage_ok;
-                let score =
-                    round4((trigger_metrics.precision + trigger_metrics.recall + (1.0 - trigger_metrics.fpr)) / 3.0);
+                let score = round4(
+                    (trigger_metrics.precision
+                        + trigger_metrics.recall
+                        + (1.0 - trigger_metrics.fpr))
+                        / 3.0,
+                );
                 out.push(EvalModuleResult {
                     key: key.to_string(),
                     title: module_title(key).to_string(),
@@ -2881,7 +3109,10 @@ fn build_module_results(
                     score: Some(score),
                     message: Some(format!(
                         "precision={:.3}, recall={:.3}, fpr={:.3}, bucketCoverage={}",
-                        trigger_metrics.precision, trigger_metrics.recall, trigger_metrics.fpr, coverage_ok
+                        trigger_metrics.precision,
+                        trigger_metrics.recall,
+                        trigger_metrics.fpr,
+                        coverage_ok
                     )),
                 });
             }
@@ -2893,7 +3124,11 @@ fn build_module_results(
                     title: module_title(key).to_string(),
                     selected: true,
                     status: if maybe_rate.is_some() {
-                        if passed { "pass" } else { "fail" }
+                        if passed {
+                            "pass"
+                        } else {
+                            "fail"
+                        }
                     } else {
                         "skipped"
                     }
@@ -3093,6 +3328,61 @@ fn normalize_judge_models(
     out
 }
 
+fn normalize_max_parallel_arms(value: Option<usize>) -> usize {
+    value
+        .unwrap_or(DEFAULT_MAX_PARALLEL_ARMS)
+        .clamp(MIN_MAX_PARALLEL_ARMS, MAX_MAX_PARALLEL_ARMS)
+}
+
+fn normalize_eval_workers(value: Option<usize>, default_value: usize) -> usize {
+    value
+        .unwrap_or(default_value)
+        .clamp(MIN_EVAL_WORKERS, MAX_EVAL_WORKERS)
+}
+
+fn ceil_div_u64(value: u64, divisor: u64) -> u64 {
+    if divisor <= 1 {
+        return value;
+    }
+    value / divisor + u64::from(value % divisor != 0)
+}
+
+fn scale_seconds_for_workers(
+    raw_seconds: u64,
+    total_units: usize,
+    configured_workers: usize,
+) -> u64 {
+    if raw_seconds <= 1 {
+        return raw_seconds;
+    }
+    let bounded_workers = configured_workers.max(1).min(total_units.max(1));
+    if bounded_workers <= 1 {
+        return raw_seconds;
+    }
+    let efficiency_gain = 1.0 + ((bounded_workers - 1) as f64 * 0.82);
+    ((raw_seconds as f64 / efficiency_gain).ceil() as u64).max(1)
+}
+
+fn estimate_parallel_chunk_wall_seconds(arm_seconds: &[u64], max_parallel_arms: usize) -> u64 {
+    if arm_seconds.is_empty() {
+        return 0;
+    }
+    let parallel = max_parallel_arms.max(1);
+    let mut offset = 0usize;
+    let mut total = 0u64;
+    while offset < arm_seconds.len() {
+        let chunk_end = (offset + parallel).min(arm_seconds.len());
+        let chunk_max = arm_seconds[offset..chunk_end]
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0);
+        total = total.saturating_add(chunk_max);
+        offset = chunk_end;
+    }
+    total
+}
+
 fn estimate_cost(
     trigger_cases: usize,
     functional_cases: usize,
@@ -3176,6 +3466,9 @@ fn estimate_pipeline_plan(
     trigger_cases: usize,
     functional_cases: usize,
     max_cost_usd: Option<f64>,
+    max_parallel_arms: usize,
+    trigger_max_workers: usize,
+    functional_max_workers: usize,
 ) -> EvalPipelineEstimate {
     let run_trigger_complex = should_run_trigger_complex(mode, selected_modules);
     let run_functional_with_skill = should_run_functional_with_skill(mode, selected_modules);
@@ -3213,22 +3506,17 @@ fn estimate_pipeline_plan(
         ("quick-taxonomy-validity", "quick-taxonomy-validity"),
         ("quick-structure-syntax", "quick-structure-syntax"),
         ("quick-generation-guardrail", "quick-generation-guardrail"),
-        ("quick-ui-metadata-consistency", "quick-ui-metadata-consistency"),
+        (
+            "quick-ui-metadata-consistency",
+            "quick-ui-metadata-consistency",
+        ),
         ("quick-script-smoke", "quick-script-smoke"),
-        ("quick-trigger-bucket-coverage", "quick-trigger-bucket-coverage"),
+        (
+            "quick-trigger-bucket-coverage",
+            "quick-trigger-bucket-coverage",
+        ),
     ] {
-        steps.push(estimate_step(
-            key,
-            title,
-            "stage0",
-            None,
-            1,
-            1,
-            0,
-            0,
-            0,
-            1,
-        ));
+        steps.push(estimate_step(key, title, "stage0", None, 1, 1, 0, 0, 0, 1));
     }
 
     steps.push(estimate_step(
@@ -3270,12 +3558,12 @@ fn estimate_pipeline_plan(
         let with_skill_seconds_per_case = ESTIMATE_FUNCTIONAL_EXEC_SECONDS_PER_CALL
             + ESTIMATE_FUNCTIONAL_BASELINE_SECONDS_PER_CALL
             + (judge_count as u64).saturating_mul(ESTIMATE_JUDGE_SECONDS_PER_CALL);
-        let with_skill_module = if contains_module(selected_modules, EVAL_MODULE_EXECUTION_CORRECTNESS)
-        {
-            EVAL_MODULE_EXECUTION_CORRECTNESS
-        } else {
-            EVAL_MODULE_ECONOMICS
-        };
+        let with_skill_module =
+            if contains_module(selected_modules, EVAL_MODULE_EXECUTION_CORRECTNESS) {
+                EVAL_MODULE_EXECUTION_CORRECTNESS
+            } else {
+                EVAL_MODULE_ECONOMICS
+            };
         steps.push(estimate_step(
             "functional-with-skill",
             "functional-with-skill",
@@ -3328,6 +3616,17 @@ fn estimate_pipeline_plan(
         ));
     }
 
+    for step in steps.iter_mut() {
+        let total_units = step.case_count.saturating_mul(step.runs).max(1);
+        let workers = match step.key.as_str() {
+            "trigger-clean" | "trigger-complex" => trigger_max_workers,
+            "functional-with-skill" | "functional-without-skill" => functional_max_workers,
+            _ => 1,
+        };
+        step.estimated_seconds =
+            scale_seconds_for_workers(step.estimated_seconds, total_units, workers);
+    }
+
     let estimated_input_tokens = steps.iter().fold(0usize, |acc, item| {
         acc.saturating_add(item.estimated_input_tokens)
     });
@@ -3335,9 +3634,35 @@ fn estimate_pipeline_plan(
         acc.saturating_add(item.estimated_output_tokens)
     });
     let estimated_total_tokens = estimated_input_tokens.saturating_add(estimated_output_tokens);
-    let estimated_seconds = steps
-        .iter()
-        .fold(0u64, |acc, item| acc.saturating_add(item.estimated_seconds));
+    let repeats_u64 = repeats.max(1) as u64;
+    let mut stage0_seconds = 0u64;
+    let mut per_repeat_trigger_clean = 0u64;
+    let mut per_repeat_parallel_arms: Vec<u64> = Vec::new();
+    let mut per_repeat_sequential = 0u64;
+    for step in &steps {
+        if step.runs <= 1 {
+            stage0_seconds = stage0_seconds.saturating_add(step.estimated_seconds);
+            continue;
+        }
+        let per_repeat = ceil_div_u64(step.estimated_seconds, repeats_u64);
+        match step.key.as_str() {
+            "trigger-clean" => {
+                per_repeat_trigger_clean = per_repeat;
+            }
+            "trigger-complex" | "functional-with-skill" | "functional-without-skill" => {
+                per_repeat_parallel_arms.push(per_repeat);
+            }
+            _ => {
+                per_repeat_sequential = per_repeat_sequential.saturating_add(per_repeat);
+            }
+        }
+    }
+    let per_repeat_parallel =
+        estimate_parallel_chunk_wall_seconds(&per_repeat_parallel_arms, max_parallel_arms);
+    let per_repeat_total = per_repeat_trigger_clean
+        .saturating_add(per_repeat_sequential)
+        .saturating_add(per_repeat_parallel);
+    let estimated_seconds = stage0_seconds.saturating_add(per_repeat_total.saturating_mul(repeats_u64));
 
     EvalPipelineEstimate {
         mode: mode.to_string(),
@@ -3390,6 +3715,566 @@ fn persist_pipeline_history(
     Ok(Some(path_to_utf8(&file_path)?))
 }
 
+fn review_sidecar_path(history_path: &Path) -> PathBuf {
+    let mut sidecar = history_path.to_path_buf();
+    sidecar.set_extension("review.json");
+    sidecar
+}
+
+fn sample_generation_sidecar_path(home: &Path) -> PathBuf {
+    eval_history_root(home).join("sample-generation-history.sidecar.jsonl")
+}
+
+fn append_sample_generation_timing_record(
+    home: &Path,
+    record: &EvalSampleGenerationTimingEntry,
+) -> Result<(), String> {
+    let sidecar_path = sample_generation_sidecar_path(home);
+    if let Some(parent) = sidecar_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Create sample timing sidecar dir failed: {e}"))?;
+    }
+    let serialized = serde_json::to_string(record)
+        .map_err(|e| format!("Serialize sample timing sidecar failed: {e}"))?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&sidecar_path)
+        .map_err(|e| format!("Open sample timing sidecar failed: {e}"))?;
+    file.write_all(serialized.as_bytes())
+        .map_err(|e| format!("Write sample timing sidecar failed: {e}"))?;
+    file.write_all(b"\n")
+        .map_err(|e| format!("Write sample timing newline failed: {e}"))?;
+    Ok(())
+}
+
+fn eval_list_sample_generation_history_impl(
+    home: &Path,
+    skill_name: Option<String>,
+    model: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<EvalSampleGenerationTimingEntry>, String> {
+    let sidecar_path = sample_generation_sidecar_path(home);
+    if !sidecar_path.exists() {
+        return Ok(Vec::new());
+    }
+    let raw = fs::read_to_string(&sidecar_path)
+        .map_err(|e| format!("Read sample timing sidecar failed: {e}"))?;
+    let skill_filter = normalize_optional_text(skill_name);
+    let model_filter = normalize_optional_text(model).map(|value| value.to_lowercase());
+    let max_items = limit
+        .unwrap_or(DEFAULT_SAMPLE_TIMING_HISTORY_LIMIT)
+        .clamp(1, MAX_SAMPLE_TIMING_HISTORY_LIMIT);
+    let mut items: Vec<EvalSampleGenerationTimingEntry> = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(item) = serde_json::from_str::<EvalSampleGenerationTimingEntry>(trimmed) else {
+            continue;
+        };
+        if let Some(skill) = skill_filter.as_ref() {
+            if item.skill_name != *skill {
+                continue;
+            }
+        }
+        if let Some(model_key) = model_filter.as_ref() {
+            if item.model.to_lowercase() != *model_key {
+                continue;
+            }
+        }
+        items.push(item);
+    }
+    items.reverse();
+    items.truncate(max_items);
+    Ok(items)
+}
+
+fn normalize_final_verdict(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_lowercase().replace('-', "_");
+    if normalized.is_empty() {
+        return Err("finalVerdict is required.".to_string());
+    }
+    Ok(normalized)
+}
+
+fn read_review_record(history_path: &Path) -> Result<Option<EvalReviewRecord>, String> {
+    let sidecar_path = review_sidecar_path(history_path);
+    if !sidecar_path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&sidecar_path)
+        .map_err(|e| format!("Read review sidecar failed: {e}"))?;
+    let parsed = serde_json::from_str::<EvalReviewRecord>(&raw)
+        .map_err(|e| format!("Parse review sidecar failed: {e}"))?;
+    Ok(Some(parsed))
+}
+
+fn write_review_record(history_path: &Path, review: &EvalReviewRecord) -> Result<(), String> {
+    let sidecar_path = review_sidecar_path(history_path);
+    let raw = serde_json::to_string_pretty(review)
+        .map_err(|e| format!("Serialize review sidecar failed: {e}"))?;
+    fs::write(sidecar_path, format!("{raw}\n"))
+        .map_err(|e| format!("Write review sidecar failed: {e}"))?;
+    Ok(())
+}
+
+fn build_review_summary(record: &EvalReviewRecord) -> EvalReviewSummary {
+    EvalReviewSummary {
+        reviewed: true,
+        final_verdict: Some(record.final_verdict.clone()),
+        override_gate: record.override_gate,
+        decided_at_unix: Some(record.decided_at_unix),
+        reviewer: record.reviewer.clone(),
+    }
+}
+
+fn merge_review_into_output(output: &mut EvalPipelineOutput, review: Option<&EvalReviewRecord>) {
+    if let Some(record) = review {
+        output.review_summary = Some(build_review_summary(record));
+        output.final_verdict = Some(record.final_verdict.clone());
+        output.override_reason = record.override_reason.clone();
+        output.override_at = Some(record.decided_at_unix);
+        output.override_by = record.reviewer.clone();
+    } else if output.review_summary.is_none() {
+        output.review_summary = Some(EvalReviewSummary {
+            reviewed: false,
+            final_verdict: output.final_verdict.clone(),
+            override_gate: false,
+            decided_at_unix: None,
+            reviewer: None,
+        });
+    }
+}
+
+fn build_comparator_summary(
+    with_skill: &FunctionalEvalOutput,
+    without_skill: Option<&FunctionalEvalOutput>,
+) -> Option<EvalComparatorSummary> {
+    let without_skill = without_skill?;
+    let with_rows = with_skill.results.as_ref()?;
+    let without_rows = without_skill.results.as_ref()?;
+    if with_rows.is_empty() || without_rows.is_empty() {
+        return None;
+    }
+
+    let without_map = without_rows
+        .iter()
+        .map(|item| (item.case_id.clone(), item.pass_rate))
+        .collect::<HashMap<_, _>>();
+
+    let mut deltas: Vec<(String, f64)> = Vec::new();
+    let mut improved = 0usize;
+    let mut regressed = 0usize;
+    let mut unchanged = 0usize;
+    for item in with_rows {
+        let Some(without_rate) = without_map.get(&item.case_id) else {
+            continue;
+        };
+        let delta = item.pass_rate - without_rate;
+        if delta > 0.0001 {
+            improved += 1;
+        } else if delta < -0.0001 {
+            regressed += 1;
+        } else {
+            unchanged += 1;
+        }
+        deltas.push((item.case_id.clone(), delta));
+    }
+    if deltas.is_empty() {
+        return None;
+    }
+    deltas.sort_by(|a, b| {
+        b.1.abs()
+            .partial_cmp(&a.1.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let highlights = deltas
+        .iter()
+        .take(3)
+        .map(|(case_id, delta)| format!("{case_id}: delta={:+.4}", delta))
+        .collect::<Vec<_>>();
+    let avg = mean(&deltas.iter().map(|(_, value)| *value).collect::<Vec<_>>());
+    Some(EvalComparatorSummary {
+        evaluated_cases: deltas.len(),
+        improved_cases: improved,
+        regressed_cases: regressed,
+        unchanged_cases: unchanged,
+        average_delta: round4(avg),
+        highlights,
+    })
+}
+
+fn build_analyzer_summary(
+    trigger_clean: &TriggerEvalOutput,
+    trigger_complex: Option<&TriggerEvalOutput>,
+    functional_with_skill: &FunctionalEvalOutput,
+    functional_without_skill: Option<&FunctionalEvalOutput>,
+) -> EvalAnalyzerSummary {
+    let mut buckets: HashMap<String, usize> = HashMap::new();
+
+    for output in [Some(trigger_clean), trigger_complex].into_iter().flatten() {
+        if let Some(rows) = output.results.as_ref() {
+            for row in rows {
+                if row.pass {
+                    continue;
+                }
+                let key = row
+                    .error_type
+                    .as_deref()
+                    .map(|item| item.trim())
+                    .filter(|item| !item.is_empty())
+                    .unwrap_or("routing_mismatch");
+                *buckets.entry(format!("trigger:{key}")).or_insert(0) += 1;
+            }
+        }
+    }
+
+    for (output, prefix) in [
+        (functional_with_skill, "functional_with_skill"),
+        (
+            functional_without_skill.unwrap_or(functional_with_skill),
+            "functional_without_skill",
+        ),
+    ] {
+        if prefix == "functional_without_skill" && functional_without_skill.is_none() {
+            continue;
+        }
+        if let Some(rows) = output.results.as_ref() {
+            for row in rows {
+                if row.passed {
+                    continue;
+                }
+                let key = row
+                    .error_type
+                    .as_deref()
+                    .map(|item| item.trim())
+                    .filter(|item| !item.is_empty())
+                    .unwrap_or("assertion_or_quality_failed");
+                *buckets.entry(format!("{prefix}:{key}")).or_insert(0) += 1;
+            }
+        }
+    }
+
+    let mut ranked = buckets.into_iter().collect::<Vec<_>>();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let top_failure_patterns = ranked
+        .iter()
+        .take(5)
+        .map(|(name, count)| format!("{name} ({count})"))
+        .collect::<Vec<_>>();
+
+    let mut recommendations: Vec<String> = Vec::new();
+    for (name, _) in ranked.iter().take(3) {
+        if name.contains("network") {
+            recommendations.push(
+                "Add retry/backoff and timeout observability to reduce network-induced flakiness."
+                    .to_string(),
+            );
+        } else if name.contains("parse") || name.contains("json") {
+            recommendations.push(
+                "Harden structured-output parsing and add stricter output-format assertions."
+                    .to_string(),
+            );
+        } else if name.contains("routing_mismatch") {
+            recommendations.push(
+                "Expand trigger boundary and adjacent-skill confusion cases for disambiguation."
+                    .to_string(),
+            );
+        } else {
+            recommendations.push(
+                "Promote representative failed cases into the next-round regression dataset."
+                    .to_string(),
+            );
+        }
+    }
+    if recommendations.is_empty() {
+        recommendations
+            .push("No dominant failure pattern detected; keep monitoring variance.".to_string());
+    }
+    recommendations.dedup();
+
+    EvalAnalyzerSummary {
+        top_failure_patterns,
+        recommendations,
+        generated_at_unix: now_unix_secs().unwrap_or(0),
+    }
+}
+
+fn normalize_optional_text(value: Option<String>) -> Option<String> {
+    value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+}
+
+fn normalize_string_list(value: Option<Vec<String>>) -> Vec<String> {
+    let mut out = value
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn review_record_to_detail(record: &EvalReviewRecord) -> EvalReviewDetail {
+    EvalReviewDetail {
+        path: record.history_path.clone(),
+        final_verdict: record.final_verdict.clone(),
+        override_gate: record.override_gate,
+        override_reason: record.override_reason.clone(),
+        notes: record.notes.clone(),
+        reviewer: record.reviewer.clone(),
+        tags: record.tags.clone(),
+        failed_case_ids: record.failed_case_ids.clone(),
+        decided_at_unix: record.decided_at_unix,
+    }
+}
+
+fn collect_failed_case_ids_from_output(output: &EvalPipelineOutput) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    if let Some(results) = output.functional.results.as_ref() {
+        for item in results {
+            if !item.passed {
+                ids.push(item.case_id.clone());
+            }
+        }
+    }
+    if let Some(without_skill) = output.functional_without_skill.as_ref() {
+        if let Some(results) = without_skill.results.as_ref() {
+            for item in results {
+                if !item.passed {
+                    ids.push(item.case_id.clone());
+                }
+            }
+        }
+    }
+    if ids.is_empty() {
+        if let Some(rows) = output.trigger_clean.results.as_ref() {
+            for row in rows {
+                if !row.pass {
+                    ids.push(format!("trigger:{}", row.query));
+                }
+            }
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+fn bucket_for_should_trigger(should_trigger: bool) -> &'static str {
+    if should_trigger {
+        TRIGGER_BUCKET_POSITIVE
+    } else {
+        TRIGGER_BUCKET_NEGATIVE
+    }
+}
+
+fn build_feedback_drafts_from_history(
+    output: &EvalPipelineOutput,
+    review: Option<&EvalReviewRecord>,
+    trigger_count: Option<usize>,
+    functional_count: Option<usize>,
+) -> Result<EvalSampleDrafts, String> {
+    let requested_trigger = trigger_count.unwrap_or(DEFAULT_TRIGGER_CASE_COUNT).max(1);
+    let requested_functional = functional_count
+        .unwrap_or(DEFAULT_FUNCTIONAL_CASE_COUNT)
+        .max(1);
+
+    let mut trigger_rows: Vec<serde_json::Value> = Vec::new();
+    for rows in [
+        output.trigger_clean.results.as_ref(),
+        output
+            .trigger_complex
+            .as_ref()
+            .and_then(|item| item.results.as_ref()),
+    ] {
+        if let Some(rows) = rows {
+            for row in rows {
+                if !row.pass {
+                    trigger_rows.push(serde_json::json!({
+                        "query": row.query.clone(),
+                        "should_trigger": row.should_trigger,
+                        "test_bucket": bucket_for_should_trigger(row.should_trigger),
+                    }));
+                }
+            }
+        }
+    }
+    while trigger_rows.len() < requested_trigger {
+        let idx = trigger_rows.len() + 1;
+        let should_trigger = idx % 2 == 1;
+        trigger_rows.push(serde_json::json!({
+            "query": format!("Regression trigger case {idx}: verify routing boundary and adjacent-skill disambiguation."),
+            "should_trigger": should_trigger,
+            "test_bucket": bucket_for_should_trigger(should_trigger),
+        }));
+    }
+    trigger_rows.truncate(requested_trigger);
+
+    let mut functional_rows: Vec<serde_json::Value> = Vec::new();
+    if let Some(rows) = output.functional.results.as_ref() {
+        for row in rows {
+            if row.passed {
+                continue;
+            }
+            let suggestions = row.judge_suggestions.clone().unwrap_or_else(|| {
+                vec!["Address the failed assertion and keep output deterministic.".to_string()]
+            });
+            functional_rows.push(serde_json::json!({
+                "id": format!("{}-retry", row.case_id),
+                "prompt": format!(
+                    "Retry and fix functional case {}. Prior failure rationale: {}",
+                    row.case_id,
+                    row.judge_rationale.clone().unwrap_or_else(|| "missing rationale".to_string()),
+                ),
+                "assertions": suggestions,
+            }));
+        }
+    }
+
+    if let Some(review) = review {
+        for case_id in &review.failed_case_ids {
+            if functional_rows.len() >= requested_functional {
+                break;
+            }
+            if case_id.starts_with("trigger:") {
+                continue;
+            }
+            functional_rows.push(serde_json::json!({
+                "id": format!("{case_id}-review"),
+                "prompt": format!("Regenerate and verify {case_id} according to reviewer feedback."),
+                "assertions": [
+                    review
+                        .override_reason
+                        .clone()
+                        .unwrap_or_else(|| "Fix failed quality checks from the previous run.".to_string())
+                ],
+            }));
+        }
+    }
+
+    while functional_rows.len() < requested_functional {
+        let idx = functional_rows.len() + 1;
+        functional_rows.push(serde_json::json!({
+            "id": format!("feedback-case-{idx:03}"),
+            "prompt": format!("Create a regression case #{idx} from previous evaluation failures."),
+            "assertions": [
+                "Keep response deterministic and concise.",
+                "Satisfy all constraints in the prompt.",
+            ],
+        }));
+    }
+    functional_rows.truncate(requested_functional);
+
+    Ok(EvalSampleDrafts {
+        trigger_count: trigger_rows.len(),
+        functional_count: functional_rows.len(),
+        trigger_draft: serde_json::to_string_pretty(&trigger_rows)
+            .map_err(|e| format!("Serialize trigger feedback draft failed: {e}"))?,
+        functional_draft: serde_json::to_string_pretty(&functional_rows)
+            .map_err(|e| format!("Serialize functional feedback draft failed: {e}"))?,
+    })
+}
+
+fn read_evidence_case_text(path: &Path) -> Result<String, String> {
+    let raw = fs::read_to_string(path).map_err(|e| format!("Read evidence failed: {e}"))?;
+    let max_chars = 200_000usize;
+    if raw.chars().count() <= max_chars {
+        return Ok(raw);
+    }
+    let prefix = raw.chars().take(max_chars).collect::<String>();
+    Ok(format!(
+        "{prefix}\n\n...<truncated, original too large for in-app preview>..."
+    ))
+}
+
+fn find_evidence_case(
+    output: &EvalPipelineOutput,
+    case_id: &str,
+    stage: Option<&str>,
+) -> Option<EvalEvidenceCaseResult> {
+    let wanted = case_id.trim();
+    if wanted.is_empty() {
+        return None;
+    }
+    let stage_filter = stage
+        .map(|item| item.trim().to_lowercase())
+        .filter(|item| !item.is_empty());
+
+    let stage_allowed = |name: &str| -> bool {
+        stage_filter
+            .as_ref()
+            .is_none_or(|filter| filter == &name.to_lowercase())
+    };
+
+    if stage_allowed("trigger_clean") {
+        if let Some(rows) = output.trigger_clean.results.as_ref() {
+            for row in rows {
+                if row.query == wanted {
+                    return Some(EvalEvidenceCaseResult {
+                        case_id: row.query.clone(),
+                        stage: "trigger_clean".to_string(),
+                        evidence_path: row.raw_response_path.clone(),
+                        content: None,
+                    });
+                }
+            }
+        }
+    }
+    if stage_allowed("trigger_complex") {
+        if let Some(trigger_complex) = output.trigger_complex.as_ref() {
+            if let Some(rows) = trigger_complex.results.as_ref() {
+                for row in rows {
+                    if row.query == wanted {
+                        return Some(EvalEvidenceCaseResult {
+                            case_id: row.query.clone(),
+                            stage: "trigger_complex".to_string(),
+                            evidence_path: row.raw_response_path.clone(),
+                            content: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    if stage_allowed("functional") {
+        if let Some(rows) = output.functional.results.as_ref() {
+            for row in rows {
+                if row.case_id == wanted {
+                    return Some(EvalEvidenceCaseResult {
+                        case_id: row.case_id.clone(),
+                        stage: "functional".to_string(),
+                        evidence_path: row.raw_response_path.clone(),
+                        content: None,
+                    });
+                }
+            }
+        }
+    }
+    if stage_allowed("functional_without_skill") {
+        if let Some(without_skill) = output.functional_without_skill.as_ref() {
+            if let Some(rows) = without_skill.results.as_ref() {
+                for row in rows {
+                    if row.case_id == wanted {
+                        return Some(EvalEvidenceCaseResult {
+                            case_id: row.case_id.clone(),
+                            stage: "functional_without_skill".to_string(),
+                            evidence_path: row.raw_response_path.clone(),
+                            content: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_eval_pipeline_impl(
     app_handle: tauri::AppHandle,
@@ -3408,6 +4293,9 @@ fn run_eval_pipeline_impl(
     temperature: Option<f64>,
     max_cost_usd: Option<f64>,
     selected_modules: Option<Vec<String>>,
+    max_parallel_arms: Option<usize>,
+    trigger_max_workers: Option<usize>,
+    functional_max_workers: Option<usize>,
 ) -> Result<EvalPipelineOutput, String> {
     let home = crate::root_dir::default_home_dir();
     let mode = normalize_eval_mode(&mode)?.to_string();
@@ -3415,6 +4303,11 @@ fn run_eval_pipeline_impl(
     let judge_models = normalize_judge_models(&primary_model, &mode, judge_models);
     let selected_modules = normalize_selected_modules(&mode, selected_modules);
     let repeats = repeats.unwrap_or(DEFAULT_PIPELINE_REPEATS).max(1);
+    let max_parallel_arms = normalize_max_parallel_arms(max_parallel_arms);
+    let trigger_max_workers =
+        normalize_eval_workers(trigger_max_workers, DEFAULT_TRIGGER_MAX_WORKERS);
+    let functional_max_workers =
+        normalize_eval_workers(functional_max_workers, DEFAULT_FUNCTIONAL_MAX_WORKERS);
     let temp = temperature.unwrap_or(0.0);
     let taxonomy_result =
         ensure_skill_taxonomy(&skill_name, &skill_path, &primary_model, Some(&control));
@@ -3423,7 +4316,8 @@ fn run_eval_pipeline_impl(
     }
     let run_trigger_complex = should_run_trigger_complex(&mode, &selected_modules);
     let run_functional_with_skill = should_run_functional_with_skill(&mode, &selected_modules);
-    let run_functional_without_skill = should_run_functional_without_skill(&mode, &selected_modules);
+    let run_functional_without_skill =
+        should_run_functional_without_skill(&mode, &selected_modules);
     let mut total_steps_per_repeat = 1usize;
     if run_trigger_complex {
         total_steps_per_repeat += 1;
@@ -3437,12 +4331,12 @@ fn run_eval_pipeline_impl(
     let total_steps = total_steps_per_repeat * repeats;
 
     let trigger_cases = parse_json_file_case_count(&trigger_eval_set_path)?;
-    let functional_cases = if mode == "quick" || (!run_functional_with_skill && !run_functional_without_skill)
-    {
-        0
-    } else {
-        parse_json_file_case_count(&functional_eval_set_path)?
-    };
+    let functional_cases =
+        if mode == "quick" || (!run_functional_with_skill && !run_functional_without_skill) {
+            0
+        } else {
+            parse_json_file_case_count(&functional_eval_set_path)?
+        };
     if functional_cases > 0 {
         ensure_functional_case_floor(functional_cases)?;
     }
@@ -3467,7 +4361,8 @@ fn run_eval_pipeline_impl(
     let evidence_root = eval_pipeline_evidence_dir(&home, &skill_name, &run_id);
     fs::create_dir_all(&evidence_root)
         .map_err(|e| format!("Create eval evidence dir failed: {e}"))?;
-    let quick_checks = run_stage0_quick_checks(&skill_path, &trigger_eval_set_path, &taxonomy_result);
+    let quick_checks =
+        run_stage0_quick_checks(&skill_path, &trigger_eval_set_path, &taxonomy_result);
 
     let start = std::time::Instant::now();
     let mut executed_steps = 0usize;
@@ -3610,6 +4505,9 @@ fn run_eval_pipeline_impl(
                 model: primary_model.clone(),
                 judge_models: judge_models.clone(),
                 repeats,
+                max_parallel_arms,
+                trigger_max_workers,
+                functional_max_workers,
                 seed,
                 temperature: temp,
                 executed_steps: 0,
@@ -3623,13 +4521,27 @@ fn run_eval_pipeline_impl(
                 non_blocking: false,
             }),
             evidence_summary: Some(evidence_summary),
+            review_summary: Some(EvalReviewSummary {
+                reviewed: false,
+                final_verdict: Some("blocked".to_string()),
+                override_gate: false,
+                decided_at_unix: None,
+                reviewer: None,
+            }),
+            final_verdict: Some("blocked".to_string()),
+            override_reason: None,
+            override_at: None,
+            override_by: None,
+            comparator: None,
+            analyzer: None,
             taxonomy_status: Some(taxonomy_result.status.clone()),
             taxonomy_message: Some(taxonomy_result.message.clone()),
             taxonomy_applied: Some(taxonomy_result.applied),
             history_path: None,
             message: Some(blocked_message),
         };
-        blocked_output.history_path = persist_pipeline_history(&home, &skill_name, &blocked_output)?;
+        blocked_output.history_path =
+            persist_pipeline_history(&home, &skill_name, &blocked_output)?;
         return Ok(blocked_output);
     }
     let mut last_trigger_clean: Option<TriggerEvalOutput> = None;
@@ -3680,12 +4592,14 @@ fn run_eval_pipeline_impl(
             "clean".to_string(),
             installed_skills_dir.clone(),
             primary_model.clone(),
+            Some(trigger_max_workers),
             Some(
                 evidence_root
                     .join(format!("repeat-{current_repeat:02}"))
                     .join("trigger-clean"),
             ),
             Some(&control),
+            false,
         )
         .map_err(|err| {
             push_pipeline_progress(
@@ -3712,78 +4626,13 @@ fn run_eval_pipeline_impl(
         let mut repeat_trigger_passed = clean_summary.passed;
         last_trigger_clean = Some(trigger_clean);
 
-        if run_trigger_complex {
-            let next_step = executed_steps + 1;
-            wait_if_paused_or_cancelled(
-                &control,
-                &app_handle,
-                &run_id,
-                current_repeat,
-                repeats,
-                next_step,
-                total_steps,
-                "trigger_complex",
-                start.elapsed().as_millis(),
-            )?;
-            push_pipeline_progress(
-                &app_handle,
-                &run_id,
-                "running",
-                current_repeat,
-                repeats,
-                next_step,
-                total_steps,
-                "trigger_complex",
-                &format!("Round {current_repeat}/{repeats}: running trigger eval (complex)."),
-                start.elapsed().as_millis(),
-            );
-            let trigger_complex = run_trigger_eval_impl(
-                skill_name.clone(),
-                Some(skill_path.clone()),
-                trigger_eval_set_path.clone(),
-                "complex".to_string(),
-                installed_skills_dir.clone(),
-                primary_model.clone(),
-                Some(
-                    evidence_root
-                        .join(format!("repeat-{current_repeat:02}"))
-                        .join("trigger-complex"),
-                ),
-                Some(&control),
-            )
-            .map_err(|err| {
-                push_pipeline_progress(
-                    &app_handle,
-                    &run_id,
-                    status_for_error(&err),
-                    current_repeat,
-                    repeats,
-                    next_step,
-                    total_steps,
-                    "trigger_complex",
-                    &format!("Round {current_repeat}/{repeats}: trigger complex failed: {err}"),
-                    start.elapsed().as_millis(),
-                );
-                err
-            })?;
-            executed_steps += 1;
-            if let Some(rows) = trigger_complex.results.clone() {
-                trigger_rows_for_metrics.extend(rows);
-            }
-            let summary = safe_trigger_summary(&trigger_complex);
-            repeat_trigger_total += summary.total;
-            repeat_trigger_passed += summary.passed;
-            robustness_rates.push(summary.pass_rate);
-            last_trigger_complex = Some(trigger_complex);
-        } else {
-            robustness_rates.push(clean_summary.pass_rate);
-        }
-
         if mode == "quick" {
+            robustness_rates.push(clean_summary.pass_rate);
             last_functional = Some(skipped_functional_output(
                 &skill_name,
                 "Skipped in quick mode (Stage0 + Stage1 only).",
             ));
+            last_functional_without_skill = None;
             let repeat_total = repeat_trigger_total;
             let repeat_passed = repeat_trigger_passed;
             overall_pass_rates.push(if repeat_total > 0 {
@@ -3792,141 +4641,247 @@ fn run_eval_pipeline_impl(
                 0.0
             });
         } else {
-            let functional = if run_functional_with_skill {
-                let next_step = executed_steps + 1;
-                wait_if_paused_or_cancelled(
-                    &control,
-                    &app_handle,
-                    &run_id,
-                    current_repeat,
-                    repeats,
-                    next_step,
-                    total_steps,
-                    "functional_with_skill",
-                    start.elapsed().as_millis(),
-                )?;
-                push_pipeline_progress(
-                    &app_handle,
-                    &run_id,
-                    "running",
-                    current_repeat,
-                    repeats,
-                    next_step,
-                    total_steps,
-                    "functional_with_skill",
-                    &format!(
+            #[derive(Clone)]
+            enum RepeatArm {
+                TriggerComplex,
+                FunctionalWithSkill,
+                FunctionalWithoutSkill,
+            }
+
+            #[derive(Clone)]
+            struct ScheduledArm {
+                step_index: usize,
+                arm: RepeatArm,
+            }
+
+            enum ArmOutput {
+                TriggerComplex(TriggerEvalOutput),
+                FunctionalWithSkill(FunctionalEvalOutput),
+                FunctionalWithoutSkill(FunctionalEvalOutput),
+            }
+
+            let arm_step_name = |arm: &RepeatArm| -> &'static str {
+                match arm {
+                    RepeatArm::TriggerComplex => "trigger_complex",
+                    RepeatArm::FunctionalWithSkill => "functional_with_skill",
+                    RepeatArm::FunctionalWithoutSkill => "functional_without_skill",
+                }
+            };
+            let arm_start_message = |arm: &RepeatArm| -> String {
+                match arm {
+                    RepeatArm::TriggerComplex => {
+                        format!("Round {current_repeat}/{repeats}: running trigger eval (complex).")
+                    }
+                    RepeatArm::FunctionalWithSkill => format!(
                         "Round {current_repeat}/{repeats}: running functional eval (with skill)."
                     ),
-                    start.elapsed().as_millis(),
-                );
-                let functional = run_functional_eval_impl(
-                    skill_name.clone(),
-                    skill_path.clone(),
-                    functional_eval_set_path.clone(),
-                    functional_compare_mode_for_mode(&mode).to_string(),
-                    primary_model.clone(),
-                    Some(judge_models.clone()),
-                    Some(
-                        evidence_root
-                            .join(format!("repeat-{current_repeat:02}"))
-                            .join("functional-with-skill"),
+                    RepeatArm::FunctionalWithoutSkill => format!(
+                        "Round {current_repeat}/{repeats}: running functional eval (without skill)."
                     ),
-                    Some(&control),
-                )
-                .map_err(|err| {
+                }
+            };
+            let arm_failure_message = |arm: &RepeatArm, err: &str| -> String {
+                match arm {
+                    RepeatArm::TriggerComplex => {
+                        format!("Round {current_repeat}/{repeats}: trigger complex failed: {err}")
+                    }
+                    RepeatArm::FunctionalWithSkill => format!(
+                        "Round {current_repeat}/{repeats}: functional(with skill) failed: {err}"
+                    ),
+                    RepeatArm::FunctionalWithoutSkill => format!(
+                        "Round {current_repeat}/{repeats}: functional(without skill) failed: {err}"
+                    ),
+                }
+            };
+
+            let mut scheduled_arms: Vec<ScheduledArm> = Vec::new();
+            let mut next_step = executed_steps;
+            if run_trigger_complex {
+                next_step += 1;
+                scheduled_arms.push(ScheduledArm {
+                    step_index: next_step,
+                    arm: RepeatArm::TriggerComplex,
+                });
+            }
+            if run_functional_with_skill {
+                next_step += 1;
+                scheduled_arms.push(ScheduledArm {
+                    step_index: next_step,
+                    arm: RepeatArm::FunctionalWithSkill,
+                });
+            } else {
+                last_functional = Some(skipped_functional_output(
+                    &skill_name,
+                    "Skipped because selected modules do not require functional(with skill).",
+                ));
+            }
+            if run_functional_without_skill {
+                next_step += 1;
+                scheduled_arms.push(ScheduledArm {
+                    step_index: next_step,
+                    arm: RepeatArm::FunctionalWithoutSkill,
+                });
+            } else {
+                last_functional_without_skill = None;
+            }
+
+            let mut offset = 0usize;
+            while offset < scheduled_arms.len() {
+                let chunk_end = (offset + max_parallel_arms).min(scheduled_arms.len());
+                let chunk = scheduled_arms[offset..chunk_end].to_vec();
+                let mut handles = Vec::with_capacity(chunk.len());
+
+                for item in &chunk {
+                    let step_name = arm_step_name(&item.arm);
+                    wait_if_paused_or_cancelled(
+                        &control,
+                        &app_handle,
+                        &run_id,
+                        current_repeat,
+                        repeats,
+                        item.step_index,
+                        total_steps,
+                        step_name,
+                        start.elapsed().as_millis(),
+                    )?;
                     push_pipeline_progress(
                         &app_handle,
                         &run_id,
-                        status_for_error(&err),
+                        "running",
                         current_repeat,
                         repeats,
-                        next_step,
+                        item.step_index,
                         total_steps,
-                        "functional_with_skill",
-                        &format!(
-                            "Round {current_repeat}/{repeats}: functional(with skill) failed: {err}"
-                        ),
+                        step_name,
+                        &arm_start_message(&item.arm),
                         start.elapsed().as_millis(),
                     );
-                    err
-                })?;
-                executed_steps += 1;
-                functional_pass_rates.push(safe_functional_summary(&functional).pass_rate);
-                functional
-            } else {
+
+                    let item_cloned = item.clone();
+                    let run_control = control.clone();
+                    let skill_name_cloned = skill_name.clone();
+                    let skill_path_cloned = skill_path.clone();
+                    let trigger_set_cloned = trigger_eval_set_path.clone();
+                    let functional_set_cloned = functional_eval_set_path.clone();
+                    let installed_skills_dir_cloned = installed_skills_dir.clone();
+                    let model_cloned = primary_model.clone();
+                    let judge_models_cloned = judge_models.clone();
+                    let evidence_dir = evidence_root.join(format!("repeat-{current_repeat:02}"));
+                    let functional_compare_mode =
+                        functional_compare_mode_for_mode(&mode).to_string();
+                    handles.push((
+                        item_cloned.clone(),
+                        std::thread::spawn(move || -> Result<ArmOutput, String> {
+                            match item_cloned.arm {
+                                RepeatArm::TriggerComplex => run_trigger_eval_impl(
+                                    skill_name_cloned,
+                                    Some(skill_path_cloned),
+                                    trigger_set_cloned,
+                                    "complex".to_string(),
+                                    installed_skills_dir_cloned,
+                                    model_cloned,
+                                    Some(trigger_max_workers),
+                                    Some(evidence_dir.join("trigger-complex")),
+                                    Some(&run_control),
+                                    false,
+                                )
+                                .map(ArmOutput::TriggerComplex),
+                                RepeatArm::FunctionalWithSkill => run_functional_eval_impl(
+                                    skill_name_cloned,
+                                    skill_path_cloned,
+                                    functional_set_cloned,
+                                    functional_compare_mode,
+                                    model_cloned,
+                                    Some(judge_models_cloned),
+                                    Some(functional_max_workers),
+                                    Some(evidence_dir.join("functional-with-skill")),
+                                    Some(&run_control),
+                                    false,
+                                )
+                                .map(ArmOutput::FunctionalWithSkill),
+                                RepeatArm::FunctionalWithoutSkill => run_functional_eval_impl(
+                                    skill_name_cloned,
+                                    skill_path_cloned,
+                                    functional_set_cloned,
+                                    "without_skill".to_string(),
+                                    model_cloned,
+                                    Some(judge_models_cloned),
+                                    Some(functional_max_workers),
+                                    Some(evidence_dir.join("functional-without-skill")),
+                                    Some(&run_control),
+                                    false,
+                                )
+                                .map(ArmOutput::FunctionalWithoutSkill),
+                            }
+                        }),
+                    ));
+                }
+
+                for (item, handle) in handles {
+                    let result = handle
+                        .join()
+                        .map_err(|_| format!("Eval arm '{}' panicked", arm_step_name(&item.arm)))?;
+                    let output = result.map_err(|err| {
+                        push_pipeline_progress(
+                            &app_handle,
+                            &run_id,
+                            status_for_error(&err),
+                            current_repeat,
+                            repeats,
+                            item.step_index,
+                            total_steps,
+                            arm_step_name(&item.arm),
+                            &arm_failure_message(&item.arm, &err),
+                            start.elapsed().as_millis(),
+                        );
+                        err
+                    })?;
+                    executed_steps += 1;
+                    match output {
+                        ArmOutput::TriggerComplex(trigger_complex) => {
+                            if let Some(rows) = trigger_complex.results.clone() {
+                                trigger_rows_for_metrics.extend(rows);
+                            }
+                            let summary = safe_trigger_summary(&trigger_complex);
+                            repeat_trigger_total += summary.total;
+                            repeat_trigger_passed += summary.passed;
+                            robustness_rates.push(summary.pass_rate);
+                            last_trigger_complex = Some(trigger_complex);
+                        }
+                        ArmOutput::FunctionalWithSkill(functional) => {
+                            last_functional = Some(functional);
+                        }
+                        ArmOutput::FunctionalWithoutSkill(functional_without_skill) => {
+                            last_functional_without_skill = Some(functional_without_skill);
+                        }
+                    }
+                }
+                offset = chunk_end;
+            }
+
+            if !run_trigger_complex {
+                robustness_rates.push(clean_summary.pass_rate);
+            }
+
+            let functional = last_functional.clone().unwrap_or_else(|| {
                 skipped_functional_output(
                     &skill_name,
                     "Skipped because selected modules do not require functional(with skill).",
                 )
-            };
+            });
             let functional_summary = safe_functional_summary(&functional);
+            if run_functional_with_skill {
+                functional_pass_rates.push(functional_summary.pass_rate);
+            }
             last_functional = Some(functional);
 
             if run_functional_without_skill {
-                let next_step = executed_steps + 1;
-                wait_if_paused_or_cancelled(
-                    &control,
-                    &app_handle,
-                    &run_id,
-                    current_repeat,
-                    repeats,
-                    next_step,
-                    total_steps,
-                    "functional_without_skill",
-                    start.elapsed().as_millis(),
-                )?;
-                push_pipeline_progress(
-                    &app_handle,
-                    &run_id,
-                    "running",
-                    current_repeat,
-                    repeats,
-                    next_step,
-                    total_steps,
-                    "functional_without_skill",
-                    &format!(
-                        "Round {current_repeat}/{repeats}: running functional eval (without skill)."
-                    ),
-                    start.elapsed().as_millis(),
-                );
-                let functional_without_skill = run_functional_eval_impl(
-                    skill_name.clone(),
-                    skill_path.clone(),
-                    functional_eval_set_path.clone(),
-                    "without_skill".to_string(),
-                    primary_model.clone(),
-                    Some(judge_models.clone()),
-                    Some(
-                        evidence_root
-                            .join(format!("repeat-{current_repeat:02}"))
-                            .join("functional-without-skill"),
-                    ),
-                    Some(&control),
-                )
-                .map_err(|err| {
-                    push_pipeline_progress(
-                        &app_handle,
-                        &run_id,
-                        status_for_error(&err),
-                        current_repeat,
-                        repeats,
-                        next_step,
-                        total_steps,
-                        "functional_without_skill",
-                        &format!(
-                            "Round {current_repeat}/{repeats}: functional(without skill) failed: {err}"
-                        ),
-                        start.elapsed().as_millis(),
-                    );
-                    err
-                })?;
-                executed_steps += 1;
-                let without_summary = safe_functional_summary(&functional_without_skill);
-                without_skill_pass_rates.push(without_summary.pass_rate);
-                value_added_rates.push(functional_summary.pass_rate - without_summary.pass_rate);
-                last_functional_without_skill = Some(functional_without_skill);
-            } else {
-                last_functional_without_skill = None;
+                if let Some(without_skill) = last_functional_without_skill.as_ref() {
+                    let without_summary = safe_functional_summary(without_skill);
+                    without_skill_pass_rates.push(without_summary.pass_rate);
+                    value_added_rates
+                        .push(functional_summary.pass_rate - without_summary.pass_rate);
+                }
             }
 
             let repeat_total = repeat_trigger_total + functional_summary.total;
@@ -4008,6 +4963,13 @@ fn run_eval_pipeline_impl(
         }),
         _ => None,
     };
+    let comparator = build_comparator_summary(&functional, functional_without_skill.as_ref());
+    let analyzer = build_analyzer_summary(
+        &trigger_clean,
+        trigger_complex.as_ref(),
+        &functional,
+        functional_without_skill.as_ref(),
+    );
     let advisory = build_eval_advisory(
         &mode,
         &trigger_metrics,
@@ -4047,6 +5009,17 @@ fn run_eval_pipeline_impl(
             "Release gate failed for selected modules: {}",
             gate.failed_modules.join(", ")
         ))
+    };
+    let default_final_verdict = if mode == "quick" {
+        if quick_checks.all_passed {
+            "pass".to_string()
+        } else {
+            "fail".to_string()
+        }
+    } else if gate.full_release_pass == Some(true) {
+        "pass".to_string()
+    } else {
+        "fail".to_string()
     };
 
     let mut output = EvalPipelineOutput {
@@ -4092,6 +5065,9 @@ fn run_eval_pipeline_impl(
             model: primary_model,
             judge_models,
             repeats,
+            max_parallel_arms,
+            trigger_max_workers,
+            functional_max_workers,
             seed,
             temperature: temp,
             executed_steps,
@@ -4101,6 +5077,19 @@ fn run_eval_pipeline_impl(
         evidence_level: Some("real".to_string()),
         advisory: Some(advisory),
         evidence_summary: Some(evidence_summary),
+        review_summary: Some(EvalReviewSummary {
+            reviewed: false,
+            final_verdict: Some(default_final_verdict.clone()),
+            override_gate: false,
+            decided_at_unix: None,
+            reviewer: None,
+        }),
+        final_verdict: Some(default_final_verdict),
+        override_reason: None,
+        override_at: None,
+        override_by: None,
+        comparator,
+        analyzer: Some(analyzer),
         taxonomy_status: Some(taxonomy_result.status.clone()),
         taxonomy_message: Some(taxonomy_result.message.clone()),
         taxonomy_applied: Some(taxonomy_result.applied),
@@ -4140,11 +5129,20 @@ fn read_eval_set_case_count(path: &Path) -> Result<usize, String> {
     parse_json_case_count(&raw)
 }
 
+fn timeout_secs_for_estimated_runtime(estimated_seconds: u64) -> u64 {
+    let safe_estimated = estimated_seconds.max(1);
+    let scaled = safe_estimated
+        .saturating_mul(EVAL_TIMEOUT_ESTIMATE_SCALE_NUM)
+        .saturating_add(EVAL_TIMEOUT_ESTIMATE_SCALE_DEN.saturating_sub(1))
+        / EVAL_TIMEOUT_ESTIMATE_SCALE_DEN;
+    let computed = scaled.saturating_add(EVAL_TIMEOUT_ESTIMATE_BUFFER_SECS);
+    computed.clamp(EVAL_TIMEOUT_SECS, MAX_EVAL_TIMEOUT_SECS)
+}
+
 fn timeout_secs_for_case_count(case_count: usize) -> u64 {
     let safe_cases = case_count.max(1) as u64;
-    let computed =
-        EVAL_TIMEOUT_SECS.saturating_add(safe_cases.saturating_mul(EVAL_TIMEOUT_PER_CASE_SECS));
-    computed.clamp(EVAL_TIMEOUT_SECS, MAX_EVAL_TIMEOUT_SECS)
+    let estimated = safe_cases.saturating_mul(EVAL_TIMEOUT_PER_CASE_SECS);
+    timeout_secs_for_estimated_runtime(estimated)
 }
 
 fn sample_generation_request_timeout_secs(trigger_count: usize, functional_count: usize) -> u64 {
@@ -4212,7 +5210,7 @@ fn eval_generate_samples_impl(
     }
 
     let timeout_secs = timeout_secs_for_case_count(trigger_count.saturating_add(functional_count));
-    let output = run_eval_engine(&cmd_args, None, timeout_secs)?;
+    let output = run_eval_engine(&cmd_args, None, timeout_secs, true)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let _ = fs::remove_dir_all(&output_dir);
@@ -4310,6 +5308,7 @@ fn build_eval_history_entry(
         total_cases: output.summary.total_cases,
         model: output.run_meta.model,
         status: output.status,
+        review_summary: output.review_summary,
     })
 }
 
@@ -4340,9 +5339,11 @@ fn list_eval_history_impl(
         let Ok(raw) = fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(output) = serde_json::from_str::<EvalPipelineOutput>(&raw) else {
+        let Ok(mut output) = serde_json::from_str::<EvalPipelineOutput>(&raw) else {
             continue;
         };
+        let review = read_review_record(&path).ok().flatten();
+        merge_review_into_output(&mut output, review.as_ref());
         let Ok(entry) = build_eval_history_entry(&path, output) else {
             continue;
         };
@@ -4362,8 +5363,196 @@ fn list_eval_history_impl(
 
 fn load_eval_history_impl(path: PathBuf) -> Result<EvalPipelineOutput, String> {
     let raw = fs::read_to_string(&path).map_err(|e| format!("Read eval history failed: {e}"))?;
-    serde_json::from_str::<EvalPipelineOutput>(&raw)
-        .map_err(|e| format!("Parse eval history failed: {e}"))
+    let mut output = serde_json::from_str::<EvalPipelineOutput>(&raw)
+        .map_err(|e| format!("Parse eval history failed: {e}"))?;
+    let review = read_review_record(&path)?;
+    merge_review_into_output(&mut output, review.as_ref());
+    Ok(output)
+}
+
+fn eval_get_review_impl(path: PathBuf) -> Result<Option<EvalReviewDetail>, String> {
+    let review = read_review_record(&path)?;
+    Ok(review.as_ref().map(review_record_to_detail))
+}
+
+fn eval_submit_review_impl(
+    path: PathBuf,
+    final_verdict: String,
+    override_gate: Option<bool>,
+    override_reason: Option<String>,
+    notes: Option<String>,
+    reviewer: Option<String>,
+    tags: Option<Vec<String>>,
+    failed_case_ids: Option<Vec<String>>,
+) -> Result<EvalSubmitReviewResult, String> {
+    if !path.exists() {
+        return Err("History file not found.".to_string());
+    }
+    let normalized_verdict = normalize_final_verdict(&final_verdict)?;
+    let override_gate = override_gate.unwrap_or(false);
+    let override_reason = normalize_optional_text(override_reason);
+    if override_gate && override_reason.is_none() {
+        return Err("overrideReason is required when overrideGate is true.".to_string());
+    }
+
+    let mut output = load_eval_history_impl(path.clone())?;
+    let history_path = path_to_utf8(&path)?;
+    let decided_at = now_unix_secs()?;
+    let failed_case_ids = {
+        let provided = normalize_string_list(failed_case_ids);
+        if provided.is_empty() {
+            collect_failed_case_ids_from_output(&output)
+        } else {
+            provided
+        }
+    };
+    let review = EvalReviewRecord {
+        history_path: history_path.clone(),
+        final_verdict: normalized_verdict.clone(),
+        override_gate,
+        override_reason: override_reason.clone(),
+        notes: normalize_optional_text(notes),
+        reviewer: normalize_optional_text(reviewer),
+        tags: normalize_string_list(tags),
+        failed_case_ids,
+        decided_at_unix: decided_at,
+    };
+    write_review_record(&path, &review)?;
+    merge_review_into_output(&mut output, Some(&review));
+
+    Ok(EvalSubmitReviewResult {
+        success: true,
+        review: review_record_to_detail(&review),
+        review_summary: output.review_summary.unwrap_or(EvalReviewSummary {
+            reviewed: true,
+            final_verdict: Some(normalized_verdict.clone()),
+            override_gate,
+            decided_at_unix: Some(decided_at),
+            reviewer: review.reviewer.clone(),
+        }),
+        final_verdict: normalized_verdict,
+        override_reason,
+        override_by: review.reviewer.clone(),
+        override_at: Some(decided_at),
+    })
+}
+
+fn eval_list_review_queue_impl(
+    home: &Path,
+    skill_name: String,
+    limit: Option<usize>,
+) -> Result<Vec<EvalReviewQueueItem>, String> {
+    let max_items = limit.unwrap_or(DEFAULT_REVIEW_QUEUE_LIMIT).max(1);
+    let history = list_eval_history_impl(home, skill_name, Some(max_items))?;
+    let mut queue: Vec<EvalReviewQueueItem> = Vec::new();
+    for item in history {
+        let path = PathBuf::from(&item.path);
+        let output = load_eval_history_impl(path).ok();
+        let gate_pass = output.as_ref().and_then(|report| {
+            report.gate.as_ref().and_then(|gate| {
+                if report.mode == "quick" {
+                    Some(gate.quick_blocking_pass)
+                } else {
+                    gate.full_release_pass
+                }
+            })
+        });
+        let review_summary = output
+            .as_ref()
+            .and_then(|report| report.review_summary.clone())
+            .or(item.review_summary.clone())
+            .unwrap_or(EvalReviewSummary {
+                reviewed: false,
+                final_verdict: None,
+                override_gate: false,
+                decided_at_unix: None,
+                reviewer: None,
+            });
+
+        queue.push(EvalReviewQueueItem {
+            path: item.path,
+            file_name: item.file_name,
+            saved_at_unix: item.saved_at_unix,
+            pass_rate: item.pass_rate,
+            total_cases: item.total_cases,
+            model: item.model,
+            gate_pass,
+            reviewed: review_summary.reviewed,
+            final_verdict: review_summary.final_verdict,
+            decided_at_unix: review_summary.decided_at_unix,
+        });
+    }
+    Ok(queue)
+}
+
+fn eval_generate_feedback_drafts_impl(
+    path: PathBuf,
+    trigger_count: Option<usize>,
+    functional_count: Option<usize>,
+) -> Result<EvalSampleDrafts, String> {
+    let output = load_eval_history_impl(path.clone())?;
+    let review = read_review_record(&path)?;
+    build_feedback_drafts_from_history(&output, review.as_ref(), trigger_count, functional_count)
+}
+
+fn eval_read_evidence_case_impl(
+    path: PathBuf,
+    case_id: String,
+    stage: Option<String>,
+) -> Result<EvalEvidenceCaseResult, String> {
+    let output = load_eval_history_impl(path)?;
+    let mut found = find_evidence_case(&output, &case_id, stage.as_deref())
+        .ok_or_else(|| format!("No evidence entry found for case '{case_id}'."))?;
+    if let Some(evidence_path) = found.evidence_path.clone() {
+        let evidence_path_buf = PathBuf::from(&evidence_path);
+        if evidence_path_buf.exists() {
+            found.content = Some(read_evidence_case_text(&evidence_path_buf)?);
+        }
+    }
+    Ok(found)
+}
+
+fn dataset_file_matches_kind(path: &Path, kind: &str) -> bool {
+    let Some(file_name) = path.file_name().and_then(|item| item.to_str()) else {
+        return false;
+    };
+    let normalized_name = file_name.to_lowercase();
+    match kind {
+        "trigger" => normalized_name.contains("trigger"),
+        "functional" => normalized_name.contains("functional"),
+        _ => false,
+    }
+}
+
+fn find_latest_dataset_for_kind(dataset_dir: &Path, kind: &str) -> Option<PathBuf> {
+    if !dataset_dir.exists() {
+        return None;
+    }
+    let mut best: Option<(SystemTime, PathBuf)> = None;
+    let entries = fs::read_dir(dataset_dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_json = path
+            .extension()
+            .and_then(|item| item.to_str())
+            .map(|item| item.eq_ignore_ascii_case("json"))
+            .unwrap_or(false);
+        if !is_json || !dataset_file_matches_kind(&path, kind) {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .unwrap_or(UNIX_EPOCH);
+        match &best {
+            Some((current, _)) if modified <= *current => {}
+            _ => {
+                best = Some((modified, path));
+            }
+        }
+    }
+    best.map(|(_, path)| path)
 }
 
 #[tauri::command]
@@ -4376,10 +5565,30 @@ pub fn eval_get_storage_paths(skill_name: Option<String>) -> Result<EvalStorageP
     let home = crate::root_dir::default_home_dir();
     let dataset_dir = eval_dataset_dir(&home, skill_name.as_deref());
     let history_dir = eval_history_dir(&home, skill_name.as_deref());
+    let latest_trigger_path = find_latest_dataset_for_kind(&dataset_dir, "trigger")
+        .and_then(|path| path_to_utf8(&path).ok());
+    let latest_functional_path = find_latest_dataset_for_kind(&dataset_dir, "functional")
+        .and_then(|path| path_to_utf8(&path).ok());
     Ok(EvalStoragePaths {
         dataset_dir: path_to_utf8(&dataset_dir)?,
         history_dir: path_to_utf8(&history_dir)?,
+        latest_trigger_path,
+        latest_functional_path,
     })
+}
+
+#[tauri::command]
+pub fn eval_list_sample_generation_history(
+    skill_name: Option<String>,
+    model: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<EvalSampleGenerationTimingEntry>, String> {
+    eval_list_sample_generation_history_impl(
+        &crate::root_dir::default_home_dir(),
+        skill_name,
+        model,
+        limit,
+    )
 }
 
 #[tauri::command]
@@ -4395,12 +5604,20 @@ pub fn eval_estimate_pipeline(
     repeats: Option<usize>,
     max_cost_usd: Option<f64>,
     selected_modules: Option<Vec<String>>,
+    max_parallel_arms: Option<usize>,
+    trigger_max_workers: Option<usize>,
+    functional_max_workers: Option<usize>,
 ) -> Result<EvalPipelineEstimate, String> {
     let mode = normalize_eval_mode(&mode)?.to_string();
     let primary_model = normalize_model(&model);
     let judge_models = normalize_judge_models(&primary_model, &mode, judge_models);
     let selected_modules = normalize_selected_modules(&mode, selected_modules);
     let repeats = repeats.unwrap_or(DEFAULT_PIPELINE_REPEATS).max(1);
+    let max_parallel_arms = normalize_max_parallel_arms(max_parallel_arms);
+    let trigger_max_workers =
+        normalize_eval_workers(trigger_max_workers, DEFAULT_TRIGGER_MAX_WORKERS);
+    let functional_max_workers =
+        normalize_eval_workers(functional_max_workers, DEFAULT_FUNCTIONAL_MAX_WORKERS);
     let trigger_cases = parse_json_file_case_count(&trigger_eval_set_path)
         .map_err(|err| format!("Invalid trigger eval dataset: {err}"))?;
     let needs_functional = should_run_functional_with_skill(&mode, &selected_modules)
@@ -4424,6 +5641,9 @@ pub fn eval_estimate_pipeline(
         trigger_cases,
         functional_cases,
         max_cost_usd,
+        max_parallel_arms,
+        trigger_max_workers,
+        functional_max_workers,
     ))
 }
 
@@ -4441,18 +5661,91 @@ pub fn eval_load_history(path: PathBuf) -> Result<EvalPipelineOutput, String> {
 }
 
 #[tauri::command]
+pub fn eval_get_review(path: PathBuf) -> Result<Option<EvalReviewDetail>, String> {
+    eval_get_review_impl(path)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn eval_submit_review(
+    path: PathBuf,
+    final_verdict: String,
+    override_gate: Option<bool>,
+    override_reason: Option<String>,
+    notes: Option<String>,
+    reviewer: Option<String>,
+    tags: Option<Vec<String>>,
+    failed_case_ids: Option<Vec<String>>,
+) -> Result<EvalSubmitReviewResult, String> {
+    eval_submit_review_impl(
+        path,
+        final_verdict,
+        override_gate,
+        override_reason,
+        notes,
+        reviewer,
+        tags,
+        failed_case_ids,
+    )
+}
+
+#[tauri::command]
+pub fn eval_list_review_queue(
+    skill_name: String,
+    limit: Option<usize>,
+) -> Result<Vec<EvalReviewQueueItem>, String> {
+    eval_list_review_queue_impl(&crate::root_dir::default_home_dir(), skill_name, limit)
+}
+
+#[tauri::command]
+pub fn eval_generate_feedback_drafts(
+    path: PathBuf,
+    trigger_count: Option<usize>,
+    functional_count: Option<usize>,
+) -> Result<EvalSampleDrafts, String> {
+    eval_generate_feedback_drafts_impl(path, trigger_count, functional_count)
+}
+
+#[tauri::command]
+pub fn eval_read_evidence_case(
+    path: PathBuf,
+    case_id: String,
+    stage: Option<String>,
+) -> Result<EvalEvidenceCaseResult, String> {
+    eval_read_evidence_case_impl(path, case_id, stage)
+}
+
+#[tauri::command]
 pub fn eval_save_config(
     api_key: String,
     provider: Option<String>,
     base_url: Option<String>,
-    default_model: String,
+    sample_model: Option<String>,
+    run_model: Option<String>,
+    default_model: Option<String>,
     cost_currency: Option<String>,
 ) -> Result<EvalMutationResult, String> {
+    let normalized_sample_model = normalize_model(
+        sample_model
+            .as_deref()
+            .or(default_model.as_deref())
+            .or(run_model.as_deref())
+            .unwrap_or(DEFAULT_MODEL),
+    );
+    let normalized_run_model = normalize_model(
+        run_model
+            .as_deref()
+            .or(default_model.as_deref())
+            .or(sample_model.as_deref())
+            .unwrap_or(DEFAULT_MODEL),
+    );
     let config = EvalConfig {
         api_key: api_key.trim().to_string(),
         provider: normalize_provider(provider.as_deref().unwrap_or(DEFAULT_PROVIDER)),
         base_url: normalize_base_url(base_url),
-        default_model: normalize_model(&default_model),
+        sample_model: normalized_sample_model,
+        run_model: normalized_run_model.clone(),
+        default_model: normalized_run_model,
         cost_currency: normalize_cost_currency(
             cost_currency.as_deref().unwrap_or(DEFAULT_COST_CURRENCY),
         ),
@@ -4491,9 +5784,10 @@ pub async fn run_trigger_eval(
     installed_skills_dir: Option<PathBuf>,
     model: String,
 ) -> Result<TriggerEvalOutput, String> {
-    let timeout_secs = timeout_secs_for_case_count(
-        read_eval_set_case_count(&eval_set_path).unwrap_or(DEFAULT_TRIGGER_CASE_COUNT),
-    );
+    let eval_case_count = read_eval_set_case_count(&eval_set_path).unwrap_or(DEFAULT_TRIGGER_CASE_COUNT);
+    let estimated_seconds =
+        (eval_case_count.max(1) as u64).saturating_mul(ESTIMATE_TRIGGER_SECONDS_PER_CALL);
+    let timeout_secs = timeout_secs_for_estimated_runtime(estimated_seconds);
     run_eval_blocking("run_trigger_eval", timeout_secs, move || {
         run_trigger_eval_impl(
             skill_name,
@@ -4504,6 +5798,8 @@ pub async fn run_trigger_eval(
             model,
             None,
             None,
+            None,
+            true,
         )
     })
     .await
@@ -4517,9 +5813,17 @@ pub async fn run_functional_eval(
     compare_mode: String,
     model: String,
 ) -> Result<FunctionalEvalOutput, String> {
-    let timeout_secs = timeout_secs_for_case_count(
-        read_eval_set_case_count(&eval_set_path).unwrap_or(DEFAULT_FUNCTIONAL_CASE_COUNT),
-    );
+    let eval_case_count = read_eval_set_case_count(&eval_set_path).unwrap_or(DEFAULT_FUNCTIONAL_CASE_COUNT);
+    let functional_seconds_per_case = if compare_mode.trim().eq_ignore_ascii_case("without_skill") {
+        ESTIMATE_FUNCTIONAL_BASELINE_SECONDS_PER_CALL + ESTIMATE_JUDGE_SECONDS_PER_CALL
+    } else {
+        ESTIMATE_FUNCTIONAL_EXEC_SECONDS_PER_CALL
+            + ESTIMATE_FUNCTIONAL_BASELINE_SECONDS_PER_CALL
+            + ESTIMATE_JUDGE_SECONDS_PER_CALL
+    };
+    let estimated_seconds =
+        (eval_case_count.max(1) as u64).saturating_mul(functional_seconds_per_case);
+    let timeout_secs = timeout_secs_for_estimated_runtime(estimated_seconds);
     run_eval_blocking("run_functional_eval", timeout_secs, move || {
         run_functional_eval_impl(
             skill_name,
@@ -4530,6 +5834,8 @@ pub async fn run_functional_eval(
             None,
             None,
             None,
+            None,
+            true,
         )
     })
     .await
@@ -4552,6 +5858,9 @@ pub async fn run_eval_pipeline(
     temperature: Option<f64>,
     max_cost_usd: Option<f64>,
     selected_modules: Option<Vec<String>>,
+    max_parallel_arms: Option<usize>,
+    trigger_max_workers: Option<usize>,
+    functional_max_workers: Option<usize>,
     run_id: Option<String>,
 ) -> Result<EvalPipelineOutput, String> {
     let resolved_run_id = run_id
@@ -4562,30 +5871,44 @@ pub async fn run_eval_pipeline(
     let run_id_for_task = resolved_run_id.clone();
     let expected_repeats = repeats.unwrap_or(DEFAULT_PIPELINE_REPEATS).max(1);
     let mode_for_timeout = normalize_eval_mode(&mode).unwrap_or("standard");
+    let primary_model_for_timeout = normalize_model(&model);
+    let judge_models_for_timeout =
+        normalize_judge_models(&primary_model_for_timeout, mode_for_timeout, judge_models.clone());
     let selected_modules_for_timeout =
         normalize_selected_modules(mode_for_timeout, selected_modules.clone());
-    let run_trigger_complex_for_timeout =
-        should_run_trigger_complex(mode_for_timeout, &selected_modules_for_timeout);
+    let max_parallel_arms_for_timeout = normalize_max_parallel_arms(max_parallel_arms);
+    let trigger_max_workers_for_timeout =
+        normalize_eval_workers(trigger_max_workers, DEFAULT_TRIGGER_MAX_WORKERS);
+    let functional_max_workers_for_timeout =
+        normalize_eval_workers(functional_max_workers, DEFAULT_FUNCTIONAL_MAX_WORKERS);
     let run_functional_with_for_timeout =
         should_run_functional_with_skill(mode_for_timeout, &selected_modules_for_timeout);
     let run_functional_without_for_timeout =
         should_run_functional_without_skill(mode_for_timeout, &selected_modules_for_timeout);
     let trigger_case_count =
         read_eval_set_case_count(&trigger_eval_set_path).unwrap_or(DEFAULT_TRIGGER_CASE_COUNT);
-    let functional_case_count = if run_functional_with_for_timeout || run_functional_without_for_timeout
+    let functional_case_count = if run_functional_with_for_timeout
+        || run_functional_without_for_timeout
     {
         read_eval_set_case_count(&functional_eval_set_path).unwrap_or(DEFAULT_FUNCTIONAL_CASE_COUNT)
     } else {
         0
     };
-    let trigger_runs_per_repeat_for_timeout = 1 + usize::from(run_trigger_complex_for_timeout);
-    let functional_runs_per_repeat_for_timeout =
-        usize::from(run_functional_with_for_timeout) + usize::from(run_functional_without_for_timeout);
-    let estimated_case_count = expected_repeats.saturating_mul(
-        trigger_case_count.saturating_mul(trigger_runs_per_repeat_for_timeout)
-            + functional_case_count.saturating_mul(functional_runs_per_repeat_for_timeout),
+    let timeout_plan = estimate_pipeline_plan(
+        &skill_path,
+        mode_for_timeout,
+        &primary_model_for_timeout,
+        &judge_models_for_timeout,
+        &selected_modules_for_timeout,
+        expected_repeats,
+        trigger_case_count,
+        functional_case_count,
+        max_cost_usd,
+        max_parallel_arms_for_timeout,
+        trigger_max_workers_for_timeout,
+        functional_max_workers_for_timeout,
     );
-    let timeout_secs = timeout_secs_for_case_count(estimated_case_count.max(1));
+    let timeout_secs = timeout_secs_for_estimated_runtime(timeout_plan.estimated_seconds);
     run_eval_blocking("run_eval_pipeline", timeout_secs, move || {
         let control = register_eval_run_control(&run_id_for_task)?;
         let _guard = EvalRunControlGuard::new(run_id_for_task.clone());
@@ -4606,6 +5929,9 @@ pub async fn run_eval_pipeline(
             temperature,
             max_cost_usd,
             selected_modules,
+            max_parallel_arms,
+            trigger_max_workers,
+            functional_max_workers,
         );
 
         if let Err(err) = result.as_ref() {
@@ -4644,7 +5970,10 @@ pub async fn eval_generate_samples(
                 .max(1),
         );
     let timeout_secs = timeout_secs_for_case_count(planned_case_count);
-    run_eval_blocking("eval_generate_samples", timeout_secs, move || {
+    let skill_name_for_record = skill_name.trim().to_string();
+    let model_for_record = normalize_model(&model);
+    let started = std::time::Instant::now();
+    let drafts = run_eval_blocking("eval_generate_samples", timeout_secs, move || {
         eval_generate_samples_impl(
             skill_name,
             skill_path,
@@ -4653,7 +5982,18 @@ pub async fn eval_generate_samples(
             functional_count,
         )
     })
-    .await
+    .await?;
+    let elapsed_seconds = started.elapsed().as_secs().max(1);
+    let record = EvalSampleGenerationTimingEntry {
+        recorded_at_unix: now_unix_secs().unwrap_or(0),
+        skill_name: skill_name_for_record,
+        model: model_for_record,
+        trigger_count: drafts.trigger_count,
+        functional_count: drafts.functional_count,
+        elapsed_seconds,
+    };
+    append_sample_generation_timing_record(&crate::root_dir::default_home_dir(), &record)?;
+    Ok(drafts)
 }
 
 #[tauri::command]
@@ -4806,6 +6146,9 @@ mod tests {
                 model: "gpt-4o-mini".to_string(),
                 judge_models: vec!["gpt-4o-mini".to_string()],
                 repeats: 1,
+                max_parallel_arms: DEFAULT_MAX_PARALLEL_ARMS,
+                trigger_max_workers: DEFAULT_TRIGGER_MAX_WORKERS,
+                functional_max_workers: DEFAULT_FUNCTIONAL_MAX_WORKERS,
                 seed: Some(1),
                 temperature: 0.0,
                 executed_steps: 3,
@@ -4824,6 +6167,19 @@ mod tests {
                 captured_timing: 10,
                 captured_tokens: 10,
             }),
+            review_summary: Some(EvalReviewSummary {
+                reviewed: false,
+                final_verdict: None,
+                override_gate: false,
+                decided_at_unix: None,
+                reviewer: None,
+            }),
+            final_verdict: None,
+            override_reason: None,
+            override_at: None,
+            override_by: None,
+            comparator: None,
+            analyzer: None,
             taxonomy_status: Some("skipped".to_string()),
             taxonomy_message: Some("Taxonomy already present.".to_string()),
             taxonomy_applied: Some(false),
@@ -4908,6 +6264,8 @@ mod tests {
         let home = temp_root("myskills-tauri-evals-test");
         let config = read_eval_config_with_home(&home).expect("read eval config");
         assert_eq!(config.provider, DEFAULT_PROVIDER);
+        assert_eq!(config.sample_model, DEFAULT_MODEL);
+        assert_eq!(config.run_model, DEFAULT_MODEL);
         assert_eq!(config.default_model, DEFAULT_MODEL);
         assert_eq!(config.cost_currency, DEFAULT_COST_CURRENCY);
         assert!(config.api_key.is_empty());
@@ -4921,7 +6279,9 @@ mod tests {
             api_key: "  key-value  ".to_string(),
             provider: " openai-compatible ".to_string(),
             base_url: Some(" https://api.openai.com/v1 ".to_string()),
-            default_model: " gpt-4.1-mini ".to_string(),
+            sample_model: " gpt-4.1-mini ".to_string(),
+            run_model: " gpt-4.1 ".to_string(),
+            default_model: " gpt-4.1 ".to_string(),
             cost_currency: " cny ".to_string(),
         };
         write_eval_config_with_home(&home, &config).expect("write eval config");
@@ -4932,7 +6292,9 @@ mod tests {
             loaded.base_url.as_deref(),
             Some("https://api.openai.com/v1")
         );
-        assert_eq!(loaded.default_model, "gpt-4.1-mini");
+        assert_eq!(loaded.sample_model, "gpt-4.1-mini");
+        assert_eq!(loaded.run_model, "gpt-4.1");
+        assert_eq!(loaded.default_model, "gpt-4.1");
         assert_eq!(loaded.cost_currency, "CNY");
     }
 
@@ -4976,6 +6338,73 @@ mod tests {
         let saved_path = PathBuf::from(&saved.path);
         assert!(saved_path.exists());
         assert!(saved_path.starts_with(eval_dataset_dir(&home, Some("demo-skill"))));
+    }
+
+    #[test]
+    fn sample_generation_sidecar_roundtrip_supports_filter_and_limit() {
+        let home = temp_root("myskills-tauri-evals-test");
+        append_sample_generation_timing_record(
+            &home,
+            &EvalSampleGenerationTimingEntry {
+                recorded_at_unix: 10,
+                skill_name: "skill-a".to_string(),
+                model: "gpt-4o-mini".to_string(),
+                trigger_count: 48,
+                functional_count: 24,
+                elapsed_seconds: 120,
+            },
+        )
+        .expect("append first");
+        append_sample_generation_timing_record(
+            &home,
+            &EvalSampleGenerationTimingEntry {
+                recorded_at_unix: 20,
+                skill_name: "skill-a".to_string(),
+                model: "gpt-4.1-mini".to_string(),
+                trigger_count: 48,
+                functional_count: 24,
+                elapsed_seconds: 180,
+            },
+        )
+        .expect("append second");
+        append_sample_generation_timing_record(
+            &home,
+            &EvalSampleGenerationTimingEntry {
+                recorded_at_unix: 30,
+                skill_name: "skill-b".to_string(),
+                model: "gpt-4o-mini".to_string(),
+                trigger_count: 48,
+                functional_count: 24,
+                elapsed_seconds: 90,
+            },
+        )
+        .expect("append third");
+
+        let skill_filtered = eval_list_sample_generation_history_impl(
+            &home,
+            Some("skill-a".to_string()),
+            None,
+            Some(10),
+        )
+        .expect("list by skill");
+        assert_eq!(skill_filtered.len(), 2);
+        assert_eq!(skill_filtered[0].recorded_at_unix, 20);
+
+        let model_filtered = eval_list_sample_generation_history_impl(
+            &home,
+            Some("skill-a".to_string()),
+            Some("gpt-4o-mini".to_string()),
+            Some(10),
+        )
+        .expect("list by model");
+        assert_eq!(model_filtered.len(), 1);
+        assert_eq!(model_filtered[0].elapsed_seconds, 120);
+
+        let limited =
+            eval_list_sample_generation_history_impl(&home, None, None, Some(2)).expect("limit");
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0].recorded_at_unix, 30);
+        assert_eq!(limited[1].recorded_at_unix, 20);
     }
 
     #[test]
@@ -5535,10 +6964,18 @@ description: A skill that declares agent shape but misses openai metadata.
                 message: None,
             },
         ];
-        let gate = build_eval_gate("standard", &quick_checks, &selected_modules, &module_results);
+        let gate = build_eval_gate(
+            "standard",
+            &quick_checks,
+            &selected_modules,
+            &module_results,
+        );
         assert_eq!(gate.quick_blocking_pass, true);
         assert_eq!(gate.full_release_pass, Some(false));
-        assert_eq!(gate.failed_modules, vec![EVAL_MODULE_TRIGGER_ACCURACY.to_string()]);
+        assert_eq!(
+            gate.failed_modules,
+            vec![EVAL_MODULE_TRIGGER_ACCURACY.to_string()]
+        );
         assert_eq!(gate.partial_release, Some(true));
     }
 

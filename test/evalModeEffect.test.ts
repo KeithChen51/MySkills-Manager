@@ -189,6 +189,129 @@ test("EvalPage keeps a sticky run dock and includes repeat count in history over
   );
 });
 
+test("Eval header follows shared page grid layout without custom sticky-offset bookkeeping", () => {
+  const source = read("src/pages/EvalPage.tsx");
+  assert.ok(
+    source.includes("className=\"page-header eval-page-header page-header-grid\""),
+    "Eval header should use shared page-header grid classes for top/title alignment consistency",
+  );
+  assert.ok(
+    !source.includes("pageHeaderRef"),
+    "Eval header should not rely on custom header ref measurements for top offsets",
+  );
+  assert.ok(
+    !source.includes("--eval-header-top") && !source.includes("--eval-header-offset"),
+    "Eval page style vars should avoid header-top/header-offset bookkeeping that caused overlap regressions",
+  );
+});
+
+test("EvalPage separates sample-generation model and run model, with ETA based on history", () => {
+  const source = read("src/pages/EvalPage.tsx");
+  const i18n = read("src/i18n/messages.ts");
+  assert.ok(
+    source.includes("[sampleModel, setSampleModel]"),
+    "EvalPage should keep independent state for sample-generation model",
+  );
+  assert.ok(
+    source.includes("eval.config.runModel") && source.includes("eval.config.generationModel"),
+    "EvalPage should render distinct fields for generation model and run model",
+  );
+  assert.ok(
+    source.includes("estimateSampleGenerationSeconds(") &&
+      source.includes("evalListSampleGenerationHistory("),
+    "EvalPage should estimate sample generation time with backend sidecar history feedback",
+  );
+  assert.ok(
+    !source.includes("localStorage"),
+    "EvalPage should not persist sample timing history in localStorage after sidecar migration",
+  );
+  assert.ok(
+    source.includes("eval.samples.eta.title") && source.includes("eval.samples.history.item"),
+    "EvalPage should display ETA and recent generation timing records in dataset step",
+  );
+  assert.ok(
+    i18n.includes("\"eval.error.generationModelRequired\""),
+    "i18n should define generation-model-specific validation copy",
+  );
+});
+
+test("EvalPage step3 removes run-model preset selector and exposes parallel worker controls", () => {
+  const source = read("src/pages/EvalPage.tsx");
+  const i18n = read("src/i18n/messages.ts");
+  assert.ok(
+    !source.includes("eval.config.runModelPreset"),
+    "step 3 should remove run-model preset selector to avoid confusing custom-model fallback",
+  );
+  assert.ok(
+    source.includes("eval.config.maxParallelArms") &&
+      source.includes("eval.config.triggerMaxWorkers") &&
+      source.includes("eval.config.functionalMaxWorkers"),
+    "step 3 should expose controlled parallelism knobs for pipeline/trigger/functional workers",
+  );
+  assert.ok(
+    source.includes("maxParallelArms: maxParallelArmsValue") &&
+      source.includes("triggerMaxWorkers: triggerMaxWorkersValue") &&
+      source.includes("functionalMaxWorkers: functionalMaxWorkersValue"),
+    "run request should forward user-selected parallelism values instead of hardcoded defaults",
+  );
+  assert.ok(
+    i18n.includes("\"eval.config.maxParallelArms\"") &&
+      i18n.includes("\"eval.config.triggerMaxWorkers\"") &&
+      i18n.includes("\"eval.config.functionalMaxWorkers\""),
+    "i18n should define labels for new parallelism controls",
+  );
+});
+
+test("Shared page layout defines grid spacing tokens for consistent top/title offsets", () => {
+  const css = read("src/styles/primitives.css");
+  assert.ok(
+    css.includes("--page-grid-inset-x") && css.includes("--page-grid-inset-y"),
+    "shared page layout should define horizontal/vertical grid inset tokens",
+  );
+  assert.ok(
+    css.includes("padding: var(--page-grid-inset-y) var(--page-grid-inset-x);"),
+    "page container should consume shared grid inset tokens for consistent title top spacing",
+  );
+});
+
+test("Eval header follows shared page-header visual language instead of card shell", () => {
+  const css = read("src/pages/EvalPage.css");
+  assert.ok(
+    css.includes(".eval-page-header {"),
+    "EvalPage CSS should declare eval-page-header block",
+  );
+  assert.ok(
+    css.includes("align-items: flex-end;"),
+    "Eval header should align with shared page-header baseline treatment",
+  );
+  assert.ok(
+    css.includes("background: transparent;") && css.includes("border: 0;"),
+    "Eval header should not use card-like background/border shell",
+  );
+  assert.ok(
+    css.includes("padding: 0;"),
+    "Eval header spacing should follow page-header layout, not card padding",
+  );
+});
+
+test("Eval flow uses step color blocks and does not mark step 3 done before report exists", () => {
+  const source = read("src/pages/EvalPage.tsx");
+  assert.ok(
+    source.includes("className={`eval-flow-step is-${step1Status}`}") &&
+      source.includes("className={`eval-flow-step is-${step2Status}`}") &&
+      source.includes("className={`eval-flow-step is-${step3Status}`}"),
+    "Eval flow should rely on status color blocks for per-step awareness",
+  );
+  assert.ok(
+    source.includes("const step3Status = resolveFlowStatus(3, activeStep, report !== null);"),
+    "step 3 should only be marked done when a report exists, not merely when run config is ready",
+  );
+  assert.ok(
+    source.includes("const flowCompletedCount = [setupReady, datasetReady, report !== null].filter(Boolean).length;"),
+    "completed step count should reflect actual completion states instead of pre-run readiness",
+  );
+});
+
 test("Rust eval backend uses adaptive timeout instead of fixed 300s cap", () => {
   const source = read("src-tauri/src/evals.rs");
   assert.ok(
@@ -198,6 +321,10 @@ test("Rust eval backend uses adaptive timeout instead of fixed 300s cap", () => 
   assert.ok(
     source.includes("MAX_EVAL_TIMEOUT_SECS"),
     "adaptive timeout should still enforce an upper bound",
+  );
+  assert.ok(
+    source.includes("timeout_secs_for_estimated_runtime"),
+    "backend timeout should derive from estimated runtime to avoid timeout < preflight estimate mismatch",
   );
 });
 
@@ -332,5 +459,85 @@ test("Eval section is marked as BETA in sidebar and page title", () => {
   assert.ok(
     sidebarCss.includes(".sidebar-beta-badge") && evalCss.includes(".eval-beta-badge"),
     "CSS should define badge styles for sidebar and eval page title",
+  );
+});
+
+test("EvalPage embeds review workbench with override-reason gate and feedback draft entry", () => {
+  const source = read("src/pages/EvalPage.tsx");
+  assert.ok(
+    source.includes("eval.review.title"),
+    "EvalPage should render review workbench title",
+  );
+  assert.ok(
+    source.includes("eval.review.overrideGate") && source.includes("eval.review.overrideReason"),
+    "review workbench should expose override toggle and mandatory reason input",
+  );
+  assert.ok(
+    source.includes("evalSubmitReview("),
+    "EvalPage should submit review decision through evalSubmitReview",
+  );
+  assert.ok(
+    source.includes("evalGenerateFeedbackDrafts("),
+    "EvalPage should expose feedback-to-next-round draft generation",
+  );
+});
+
+test("EvalPage auto-prefills latest preset datasets for selected skill", () => {
+  const source = read("src/pages/EvalPage.tsx");
+  assert.ok(
+    source.includes("paths.latestTriggerPath") && source.includes("paths.latestFunctionalPath"),
+    "refreshHistory should prefill latest trigger/functional dataset files from preset storage path",
+  );
+  assert.ok(
+    source.includes("setTriggerSetPath((current) => current.trim() || paths.latestTriggerPath || \"\")"),
+    "trigger dataset should auto-fill only when current input is empty",
+  );
+});
+
+test("EvalPage preflight estimate reacts to parallel knobs", () => {
+  const source = read("src/pages/EvalPage.tsx");
+  assert.ok(
+    source.includes("maxParallelArmsInput") &&
+      source.includes("triggerMaxWorkersInput") &&
+      source.includes("functionalMaxWorkersInput"),
+    "preflight effect should watch all parallel controls",
+  );
+  assert.ok(
+    source.includes("maxParallelArms,") &&
+      source.includes("triggerMaxWorkers,") &&
+      source.includes("functionalMaxWorkers,"),
+    "estimate request should include parallel controls so total time changes with concurrency",
+  );
+});
+
+test("EvalPage routes to dedicated running view then review/result by mode", () => {
+  const source = read("src/pages/EvalPage.tsx");
+  assert.ok(
+    source.includes("setView(\"running\")"),
+    "starting evaluation should enter dedicated running view",
+  );
+  assert.ok(
+    source.includes("setView(pipeline.mode === \"full\" ? \"review\" : \"result\")"),
+    "pipeline completion should route full mode to review-first and quick mode directly to results",
+  );
+  assert.ok(
+    source.includes("showRunningView && runSnapshot"),
+    "running view should render dedicated runtime panel with run snapshot metadata",
+  );
+  assert.ok(
+    source.includes("showReviewView && report?.mode === \"full\""),
+    "review workbench should only appear in review stage for full mode",
+  );
+});
+
+test("Eval history entry shows merged review summary metadata", () => {
+  const source = read("src/pages/EvalPage.tsx");
+  assert.ok(
+    source.includes("item.reviewSummary"),
+    "history list should consume reviewSummary merged by backend",
+  );
+  assert.ok(
+    source.includes("eval.history.reviewStatus"),
+    "history list should show review status label",
   );
 });

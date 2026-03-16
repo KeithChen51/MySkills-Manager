@@ -2,6 +2,7 @@
 
 .eval-page {
   --eval-page-gutter: clamp(var(--sp-lg), 1.6vw + var(--sp-sm), var(--sp-2xl));
+  gap: var(--sp-md);
   padding-bottom: var(--eval-run-dock-offset, clamp(230px, 30vh, 320px));
   scroll-padding-top: var(--eval-header-offset, 96px);
 }
@@ -66,26 +67,54 @@
   display: grid;
   gap: var(--sp-sm);
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin: var(--sp-md) 0 var(--sp-sm);
+  margin: var(--sp-sm) 0 var(--sp-sm);
 }
 
 .eval-flow-step {
   align-items: center;
-  background: color-mix(in srgb, var(--bg-input) 50%, var(--bg-card) 50%);
-  border: 1px solid var(--border-card);
+  background: color-mix(in srgb, var(--bg-input) 60%, var(--bg-card) 40%);
+  border: 1px solid color-mix(in srgb, var(--border-card) 88%, var(--text-secondary) 12%);
   border-radius: var(--radius-md);
   display: grid;
   gap: var(--sp-sm);
   grid-template-columns: auto 1fr;
+  overflow: hidden;
   padding: var(--sp-sm);
+  position: relative;
+}
+
+.eval-flow-step::before {
+  background: transparent;
+  content: "";
+  inset: 0 auto 0 0;
+  position: absolute;
+  width: 4px;
 }
 
 .eval-flow-step.is-active {
-  border-color: color-mix(in srgb, var(--accent) 48%, var(--border-card));
+  background: color-mix(in srgb, var(--accent) 13%, var(--bg-card) 87%);
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border-card) 38%);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent),
+    0 10px 20px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.eval-flow-step.is-active::before {
+  background: color-mix(in srgb, var(--accent) 88%, white 12%);
 }
 
 .eval-flow-step.is-done {
-  border-color: color-mix(in srgb, var(--success) 45%, var(--border-card));
+  background: color-mix(in srgb, var(--success) 10%, var(--bg-card) 90%);
+  border-color: color-mix(in srgb, var(--success) 55%, var(--border-card) 45%);
+}
+
+.eval-flow-step.is-done::before {
+  background: color-mix(in srgb, var(--success) 72%, white 28%);
+}
+
+.eval-flow-step.is-pending {
+  background: color-mix(in srgb, var(--bg-input) 48%, var(--bg-card) 52%);
+  opacity: 0.9;
 }
 
 .eval-flow-index {
@@ -99,6 +128,19 @@
   height: 22px;
   justify-content: center;
   width: 22px;
+  z-index: 1;
+}
+
+.eval-flow-step.is-active .eval-flow-index {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-card) 82%);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-card) 55%);
+  color: var(--accent);
+}
+
+.eval-flow-step.is-done .eval-flow-index {
+  background: color-mix(in srgb, var(--success) 18%, var(--bg-card) 82%);
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border-card) 55%);
+  color: var(--success);
 }
 
 .eval-flow-step strong {
@@ -110,6 +152,35 @@
   color: var(--text-secondary);
   display: block;
   font-size: var(--text-xs);
+}
+
+.eval-flow-state {
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 700;
+  justify-self: end;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  padding: 5px 10px;
+  text-transform: uppercase;
+}
+
+.eval-flow-state-active {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 36%, transparent);
+}
+
+.eval-flow-state-done {
+  background: color-mix(in srgb, var(--success) 24%, transparent);
+  color: var(--success);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--success) 30%, transparent);
+}
+
+.eval-flow-state-pending {
+  background: color-mix(in srgb, var(--bg-input) 86%, transparent);
+  color: var(--text-secondary);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-card) 72%, transparent);
 }
 
 .eval-flow-next {
@@ -129,6 +200,36 @@
   margin-top: var(--sp-sm);
 }
 
+.eval-flow-head {
+  align-items: center;
+  display: flex;
+  gap: var(--sp-sm);
+  justify-content: space-between;
+}
+
+.eval-flow-current {
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  margin: 0;
+}
+
+.eval-flow-complete {
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1;
+  padding: 4px 8px;
+}
+
+.eval-flow-stage-hint {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  margin: var(--sp-xs) 0 0;
+}
+
 .eval-step-lock-hint {
   background: color-mix(in srgb, var(--warning) 12%, var(--bg-card) 88%);
   border: 1px solid color-mix(in srgb, var(--warning) 38%, var(--border-card));
@@ -141,26 +242,28 @@
 }
 
 .eval-page-header {
-  align-items: flex-start;
-  backdrop-filter: blur(10px);
-  background: color-mix(in srgb, var(--bg-app) 88%, transparent);
-  border: 1px solid var(--border-card);
-  border-radius: var(--radius-md);
+  align-items: flex-end;
+  background: transparent;
+  border: 0;
   display: flex;
   gap: var(--sp-md);
   justify-content: space-between;
   margin: 0;
-  margin-bottom: var(--sp-sm);
-  padding: var(--sp-sm) var(--sp-md);
-  position: sticky;
-  top: var(--eval-header-top, 56px);
-  z-index: var(--z-eval-header, 15);
+  padding: 0;
 }
 
 .eval-page-header-main {
   display: grid;
   gap: 4px;
   min-width: 0;
+}
+
+.eval-page-header-actions {
+  margin-left: auto;
+}
+
+.eval-page-header-actions-row {
+  justify-content: flex-end;
 }
 
 .eval-page-header-hint {
@@ -176,7 +279,7 @@
 }
 
 .eval-page-run-btn {
-  align-self: center;
+  align-self: flex-end;
   font-weight: 700;
   min-height: var(--control-height-touch);
   min-width: 150px;
@@ -191,8 +294,8 @@
   margin-bottom: var(--sp-sm);
   padding: var(--sp-sm);
   position: sticky;
-  top: var(--eval-header-offset, 96px);
-  z-index: var(--z-eval-flow, 14);
+  top: var(--sp-sm);
+  z-index: var(--z-eval-flow, 12);
 }
 
 .eval-flow-sticky .eval-flow-guide {
@@ -274,6 +377,46 @@
   font-weight: 600;
 }
 
+.eval-sample-eta-card {
+  background: color-mix(in srgb, var(--bg-input) 42%, var(--bg-card) 58%);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--sp-xs);
+  padding: var(--sp-md);
+}
+
+.eval-sample-eta-head {
+  align-items: center;
+  display: flex;
+  gap: var(--sp-sm);
+  justify-content: space-between;
+}
+
+.eval-sample-eta-head .chart-title {
+  margin: 0;
+}
+
+.eval-sample-eta-head strong {
+  color: var(--text-primary);
+  font-size: var(--text-md);
+}
+
+.eval-sample-eta-history {
+  display: grid;
+  gap: 4px;
+}
+
+.eval-sample-eta-history ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.eval-sample-eta-history li {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
 .eval-module-selector {
   background: color-mix(in srgb, var(--bg-input) 45%, var(--bg-card) 55%);
   border: 1px solid var(--border-card);
@@ -342,14 +485,20 @@
 
 .eval-quick-check-list li {
   display: grid;
-  gap: 2px;
+  gap: 4px;
   font-size: var(--text-sm);
   margin-bottom: 6px;
 }
 
 .eval-quick-check-list li strong {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.eval-quick-check-list li small {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
 }
 
 .eval-quick-pass span {
@@ -460,6 +609,121 @@
 
 .eval-action-btn-run {
   min-width: 120px;
+}
+
+.eval-running-stage-card {
+  display: grid;
+  gap: var(--sp-sm);
+}
+
+.eval-running-stage-head {
+  align-items: center;
+  display: flex;
+  gap: var(--sp-sm);
+  justify-content: space-between;
+}
+
+.eval-running-stage-actions {
+  display: flex;
+  gap: var(--sp-sm);
+}
+
+.eval-running-stage-status {
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  margin: 0;
+}
+
+.eval-running-stage-grid {
+  display: grid;
+  gap: var(--sp-sm) var(--sp-md);
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.eval-running-stage-grid strong {
+  display: block;
+  font-size: var(--text-sm);
+}
+
+.eval-running-stage-wide {
+  grid-column: 1 / -1;
+}
+
+.eval-running-flow {
+  margin: 0;
+}
+
+@keyframes eval-running-breathe {
+  0%,
+  100% {
+    background: color-mix(in srgb, var(--accent) 12%, var(--bg-card) 88%);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent),
+      0 10px 20px color-mix(in srgb, var(--accent) 16%, transparent);
+    transform: translateY(0);
+  }
+  50% {
+    background: color-mix(in srgb, var(--accent) 18%, var(--bg-card) 82%);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
+      0 14px 28px color-mix(in srgb, var(--accent) 24%, transparent);
+    transform: translateY(-1px);
+  }
+}
+
+.eval-running-flow .eval-flow-step.is-active {
+  animation: eval-running-breathe 1.8s ease-in-out infinite;
+  will-change: box-shadow, background, transform;
+}
+
+.eval-running-flow .eval-flow-step.is-active .eval-flow-state-active {
+  animation: eval-running-pill-breathe 1.4s ease-in-out infinite;
+}
+
+@keyframes eval-running-pill-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 36%, transparent);
+    opacity: 0.9;
+  }
+  50% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 58%, transparent);
+    opacity: 1;
+  }
+}
+
+@keyframes eval-running-breathe-reduced {
+  0%,
+  100% {
+    background: color-mix(in srgb, var(--accent) 11%, var(--bg-card) 89%);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  50% {
+    background: color-mix(in srgb, var(--accent) 15%, var(--bg-card) 85%);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .eval-running-flow .eval-flow-step.is-active {
+    animation: eval-running-breathe-reduced 2.8s ease-in-out infinite;
+  }
+
+  .eval-running-flow .eval-flow-step.is-active .eval-flow-state-active {
+    animation: eval-running-pill-breathe 2.2s ease-in-out infinite;
+  }
+}
+
+.eval-review-entry-card {
+  display: grid;
+  gap: var(--sp-xs);
+}
+
+.eval-review-entry-head {
+  align-items: center;
+  display: flex;
+  gap: var(--sp-sm);
+  justify-content: space-between;
 }
 
 .eval-run-dock {
@@ -863,6 +1127,13 @@
   font-size: var(--text-sm);
 }
 
+.eval-advisory-why {
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  margin: 0;
+}
+
 .eval-advisory-reasons {
   margin: 0;
   padding-left: 18px;
@@ -990,6 +1261,11 @@
     grid-template-columns: 1fr;
   }
 
+  .eval-flow-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .eval-config-grid {
     grid-template-columns: 1fr;
   }
@@ -1060,6 +1336,12 @@
 
   .eval-advanced-toggle-wrap {
     align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .eval-running-stage-head,
+  .eval-review-entry-head {
+    align-items: stretch;
     flex-direction: column;
   }
 

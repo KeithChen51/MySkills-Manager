@@ -513,8 +513,10 @@ export default function GitPage() {
   }, [selectedRepository?.id, selectedRepository?.sourcePath]);
 
   useEffect(() => {
-    if (viewMode !== "detail" || !selectedRepository) return;
-    const initialRules = sortIgnoreRules(selectedRepository.ignorePaths ?? []);
+    const selectedRepositoryId = selectedRepository?.id;
+    const selectedIgnorePaths = selectedRepository?.ignorePaths;
+    if (viewMode !== "detail" || !selectedRepositoryId) return;
+    const initialRules = sortIgnoreRules(selectedIgnorePaths ?? []);
     setIgnoreDraft(initialRules);
     setIgnoreInitial(initialRules);
     setSyncTree({});
@@ -526,7 +528,7 @@ export default function GitPage() {
     setGraphLoading(false);
     setGraphStatus("");
     setGraphCommits([]);
-  }, [selectedRepository?.id, viewMode]);
+  }, [selectedRepository?.id, selectedRepository?.ignorePaths, viewMode]);
 
   useEffect(() => {
     if (!showAddForm) return;
@@ -1053,30 +1055,36 @@ export default function GitPage() {
 
   return (
     <div className="page animate-fadein git-page">
-      <header className="page-header">
-        <h1 className="page-title">{t("git.title")}</h1>
-        <div className="dash-actions">
-          {viewMode === "detail" ? (
-            <button className="btn btn-ghost" onClick={() => setViewMode("overview")}>
-              {t("git.backToList")}
-            </button>
-          ) : (
-            <button
-              className="btn btn-primary"
-              onClick={() => setShowAddForm((previous) => !previous)}
-              disabled={addingRepository}
-            >
-              {showAddForm ? t("git.repo.addForm.hide") : t("git.repo.addForm.show")}
-            </button>
+      <header className="page-header git-page-header page-header-grid">
+        <div className="git-header-copy page-header-copy">
+          <h1 className="page-title">{t("git.title")}</h1>
+          {(status || repositoryStatus) && (
+            <span className="page-count git-header-status">{status || repositoryStatus}</span>
           )}
-          <button className="btn btn-ghost" onClick={() => void openGuideModal()}>
-            {t("git.guide.open")}
-          </button>
-          <button className="btn btn-ghost" onClick={() => void refreshRepositories()} disabled={loadingRepositories}>
-            {t("git.refresh")}
-          </button>
         </div>
-        {(status || repositoryStatus) && <span className="page-count">{status || repositoryStatus}</span>}
+        <div className="git-header-actions page-header-actions-grid">
+          <div className="git-header-actions-row page-header-actions-row">
+            {viewMode === "detail" ? (
+              <button className="btn btn-ghost" onClick={() => setViewMode("overview")}>
+                {t("git.backToList")}
+              </button>
+            ) : (
+              <button
+                className="btn btn-primary"
+                onClick={() => setShowAddForm((previous) => !previous)}
+                disabled={addingRepository}
+              >
+                {showAddForm ? t("git.repo.addForm.hide") : t("git.repo.addForm.show")}
+              </button>
+            )}
+            <button className="btn btn-ghost" onClick={() => void openGuideModal()}>
+              {t("git.guide.open")}
+            </button>
+            <button className="btn btn-ghost" onClick={() => void refreshRepositories()} disabled={loadingRepositories}>
+              {t("git.refresh")}
+            </button>
+          </div>
+        </div>
       </header>
 
       {viewMode === "overview" ? (

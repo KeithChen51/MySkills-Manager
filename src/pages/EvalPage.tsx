@@ -1,13 +1,17 @@
 ﻿import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import ReactECharts from "echarts-for-react";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import {
   evalGenerateSamples,
+  evalGenerateFeedbackDrafts,
+  evalReadEvidenceCase,
+  evalSubmitReview,
   evalControl,
   evalEstimatePipeline,
   evalGetConfig,
+  evalListSampleGenerationHistory,
   evalGetStoragePaths,
   evalListHistory,
   evalLoadHistory,
@@ -19,6 +23,7 @@ import {
   type EvalModuleKey,
   type EvalPipelineEstimate,
   type EvalPipelineOutput,
+  type EvalSampleGenerationTimingEntry,
   type EvalStoragePaths,
   type SkillMeta,
 } from "../api/tauri";
@@ -32,6 +37,7 @@ type Props = { skills: SkillMeta[] };
 type EvalMode = "quick" | "full";
 type EvalControlAction = "pause" | "resume" | "cancel";
 type EvalDraftKind = "trigger" | "functional";
+type EvalFlowStatus = "active" | "done" | "pending";
 
 type TriggerDraftRow = {
   query: string;
@@ -70,6 +76,21 @@ type EvalProgressEvent = {
   elapsedMs: number;
 };
 
+type EvalView = "setup" | "running" | "review" | "result";
+
+type EvalRunSnapshot = {
+  skillName: string;
+  mode: EvalMode;
+  model: string;
+  repeats: number;
+  maxParallelArms: number;
+  triggerMaxWorkers: number;
+  functionalMaxWorkers: number;
+  selectedModules: EvalModuleKey[];
+  triggerSetPath: string;
+  functionalSetPath: string;
+};
+
 const EVAL_PROGRESS_STEP_KEYS: Record<string, MessageKey> = {
   pipeline: "eval.progress.step.pipeline",
   quick_checks: "eval.progress.step.quickChecks",
@@ -79,15 +100,13 @@ const EVAL_PROGRESS_STEP_KEYS: Record<string, MessageKey> = {
   functional_without_skill: "eval.progress.step.functionalWithoutSkill",
 };
 
-const MODEL_PRESETS = [
-  "gpt-4o-mini",
-  "gpt-4.1-mini",
-  "gpt-4.1",
-  "gpt-4o",
-];
 const USD_TO_CNY_RATE = 7.2;
 const TRIGGER_BUCKET_MIN_SAMPLES = 12;
 const FUNCTIONAL_MIN_SAMPLES = 24;
+const MIN_MAX_PARALLEL_ARMS = 1;
+const MAX_MAX_PARALLEL_ARMS = 4;
+const MIN_EVAL_WORKERS = 1;
+const MAX_EVAL_WORKERS = 16;
 const EVAL_MODULE_OPTIONS: Array<{
   key: EvalModuleKey;
   labelKey: string;
@@ -106,6 +125,91 @@ const TRIGGER_BUCKET_OPTIONS: Array<{ key: TriggerBucketKey; labelKey: string }>
   { key: "adjacent_skill_confusion", labelKey: "eval.samples.bucket.adjacent" },
 ];
 const DEFAULT_TRIGGER_SAMPLE_COUNT = TRIGGER_BUCKET_OPTIONS.length * TRIGGER_BUCKET_MIN_SAMPLES;
+const BASE_SAMPLE_GENERATION_OVERHEAD_SECONDS = 4;
+
+function normalizeModelKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function estimateModelSpeedSecondsPerCase(model: string): number {
+  const key = normalizeModelKey(model);
+  if (!key) return 2.6;
+  if (key.includes("nano")) return 1.4;
+  if (key.includes("mini")) return 1.9;
+  if (key.includes("4.1")) return 2.4;
+  if (key.includes("4o")) return 2.2;
+  if (key.includes("o3") || key.includes("reason")) return 3.2;
+  if (key.includes("m2.5")) return 2.8;
+  return 2.6;
+}
+
+function estimateSampleGenerationSeconds(
+  model: string,
+  triggerCount: number,
+  functionalCount: number,
+  history: EvalSampleGenerationTimingEntry[],
+): { seconds: number; historyMatches: number; lastSeconds?: number } {
+  const totalCases = Math.max(1, triggerCount + functionalCount);
+  const modelKey = normalizeModelKey(model);
+  const basePerCase = estimateModelSpeedSecondsPerCase(modelKey);
+  const exactMatches = history
+    .filter((item) => normalizeModelKey(item.model) === modelKey)
+    .slice(0, 12);
+  const familyMatches = history
+    .filter(
+      (item) =>
+        !exactMatches.includes(item) &&
+        modelKey &&
+        normalizeModelKey(item.model).split("-")[0] === modelKey.split("-")[0],
+    )
+    .slice(0, 8);
+  const historyMatches = exactMatches.length + familyMatches.length;
+  const blendedMatches = [...exactMatches, ...familyMatches];
+  const historyPerCase =
+    blendedMatches.length > 0
+      ? blendedMatches.reduce((sum, item) => {
+          const itemCases = Math.max(1, item.triggerCount + item.functionalCount);
+          return sum + item.elapsedSeconds / itemCases;
+        }, 0) / blendedMatches.length
+      : basePerCase;
+  const historyWeight = Math.min(0.85, historyMatches * 0.16);
+  const adjustedPerCase = basePerCase * (1 - historyWeight) + historyPerCase * historyWeight;
+  const estimatedSeconds = Math.max(
+    1,
+    Math.round(BASE_SAMPLE_GENERATION_OVERHEAD_SECONDS + adjustedPerCase * totalCases),
+  );
+  return {
+    seconds: estimatedSeconds,
+    historyMatches,
+    lastSeconds: exactMatches[0]?.elapsedSeconds ?? familyMatches[0]?.elapsedSeconds,
+  };
+}
+
+function resolveFlowStatus(
+  step: 1 | 2 | 3,
+  activeStep: 1 | 2 | 3,
+  done: boolean,
+): EvalFlowStatus {
+  if (activeStep === step) return "active";
+  if (done) return "done";
+  return "pending";
+}
+
+function resolveRunViewStage(stepName: string | undefined, status: string | undefined): 1 | 2 | 3 {
+  const normalized = (stepName || "").trim().toLowerCase();
+  if (
+    normalized === "pipeline" ||
+    normalized === "taxonomy" ||
+    normalized === "quick_checks" ||
+    normalized.startsWith("quick-")
+  ) {
+    return 1;
+  }
+  if (normalized === "repeat_complete" || status === "completed") {
+    return 3;
+  }
+  return 2;
+}
 
 function defaultSelectedModules(): EvalModuleKey[] {
   return EVAL_MODULE_OPTIONS.map((item) => item.key);
@@ -289,7 +393,11 @@ export default function EvalPage({ skills }: Props) {
 
   const [selectedSkill, setSelectedSkill] = useState("");
   const [evalMode, setEvalMode] = useState<EvalMode>("full");
+  const [sampleModel, setSampleModel] = useState("gpt-4o-mini");
   const [model, setModel] = useState("gpt-4o-mini");
+  const [maxParallelArmsInput, setMaxParallelArmsInput] = useState("2");
+  const [triggerMaxWorkersInput, setTriggerMaxWorkersInput] = useState("6");
+  const [functionalMaxWorkersInput, setFunctionalMaxWorkersInput] = useState("3");
   const [costCurrency, setCostCurrency] = useState<CostCurrency>("USD");
   const [repeatsInput, setRepeatsInput] = useState("1");
   const [maxCostUsdInput, setMaxCostUsdInput] = useState("");
@@ -323,13 +431,21 @@ export default function EvalPage({ skills }: Props) {
   const [preflightEstimate, setPreflightEstimate] = useState<EvalPipelineEstimate | null>(null);
   const [preflightEstimateError, setPreflightEstimateError] = useState("");
   const [preflightEstimating, setPreflightEstimating] = useState(false);
-  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [stepOverride, setStepOverride] = useState<1 | 2 | 3 | null>(null);
-  const pageRef = useRef<HTMLDivElement | null>(null);
-  const pageHeaderRef = useRef<HTMLElement | null>(null);
+  const [view, setView] = useState<EvalView>("setup");
+  const [runSnapshot, setRunSnapshot] = useState<EvalRunSnapshot | null>(null);
+  const [sampleTimingHistory, setSampleTimingHistory] = useState<EvalSampleGenerationTimingEntry[]>([]);
+  const [reviewFinalVerdict, setReviewFinalVerdict] = useState("pass");
+  const [reviewOverrideGate, setReviewOverrideGate] = useState(false);
+  const [reviewOverrideReason, setReviewOverrideReason] = useState("");
+  const [reviewNotes, setReviewNotes] = useState("");
+  const [reviewReviewer, setReviewReviewer] = useState("");
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+  const [feedbackDrafting, setFeedbackDrafting] = useState(false);
+  const [reviewCaseId, setReviewCaseId] = useState("");
+  const [reviewEvidence, setReviewEvidence] = useState("");
+  const [reviewEvidenceLoading, setReviewEvidenceLoading] = useState(false);
   const runDockRef = useRef<HTMLElement | null>(null);
-  const [headerTopPx, setHeaderTopPx] = useState(56);
-  const [headerOffsetPx, setHeaderOffsetPx] = useState(96);
   const [runDockOffsetPx, setRunDockOffsetPx] = useState(280);
 
   const selectedSkillMeta = useMemo(
@@ -400,11 +516,28 @@ export default function EvalPage({ skills }: Props) {
     [t],
   );
 
+  const refreshSampleTimingHistory = useCallback(async (skillName?: string) => {
+    try {
+      const items = await evalListSampleGenerationHistory({
+        skillName: skillName?.trim() || undefined,
+        limit: 80,
+      });
+      setSampleTimingHistory(items);
+    } catch {
+      setSampleTimingHistory([]);
+    }
+  }, []);
+
   useEffect(() => {
     void evalGetConfig()
       .then((config) => {
-        if (config.defaultModel?.trim()) {
-          setModel(config.defaultModel.trim());
+        const sample = (config.sampleModel || config.defaultModel || "").trim();
+        const run = (config.runModel || config.defaultModel || "").trim();
+        if (sample) {
+          setSampleModel(sample);
+        }
+        if (run) {
+          setModel(run);
         }
         setCostCurrency(normalizeCostCurrency(config.costCurrency));
       })
@@ -420,12 +553,16 @@ export default function EvalPage({ skills }: Props) {
       .catch(() => {
         // keep undefined
       });
-  }, []);
+    void refreshSampleTimingHistory();
+  }, [refreshSampleTimingHistory]);
 
   useEffect(() => {
     if (!selectedSkill) {
       setStoragePaths(null);
       setHistoryEntries([]);
+      setSampleTimingHistory([]);
+      setRunSnapshot(null);
+      setView("setup");
       setShowSamples(false);
       setShowHistory(false);
       setExpandedHistoryPath(null);
@@ -435,7 +572,8 @@ export default function EvalPage({ skills }: Props) {
       return;
     }
     void refreshHistory(selectedSkill);
-  }, [selectedSkill]);
+    void refreshSampleTimingHistory(selectedSkill);
+  }, [refreshSampleTimingHistory, selectedSkill]);
 
   useEffect(() => {
     if (!showHistory && !showSamples) return;
@@ -460,6 +598,24 @@ export default function EvalPage({ skills }: Props) {
   useEffect(() => {
     activeRunIdRef.current = activeRunId;
   }, [activeRunId]);
+
+  useEffect(() => {
+    if (!report) {
+      setReviewFinalVerdict("pass");
+      setReviewOverrideGate(false);
+      setReviewOverrideReason("");
+      setReviewNotes("");
+      setReviewCaseId("");
+      setReviewEvidence("");
+      return;
+    }
+    setReviewFinalVerdict(report.finalVerdict || report.reviewSummary?.finalVerdict || "pass");
+    setReviewOverrideGate(Boolean(report.reviewSummary?.overrideGate));
+    setReviewOverrideReason(report.overrideReason || "");
+    const firstFailedCase = report.functional.results?.find((item) => !item.passed)?.caseId || "";
+    setReviewCaseId(firstFailedCase);
+    setReviewEvidence("");
+  }, [report]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -529,6 +685,54 @@ export default function EvalPage({ skills }: Props) {
       setPreflightEstimating(false);
       return;
     }
+    const maxParallelArms = Number.parseInt(maxParallelArmsInput, 10);
+    if (
+      !Number.isFinite(maxParallelArms) ||
+      maxParallelArms < MIN_MAX_PARALLEL_ARMS ||
+      maxParallelArms > MAX_MAX_PARALLEL_ARMS
+    ) {
+      setPreflightEstimate(null);
+      setPreflightEstimateError(
+        t("eval.error.maxParallelArmsInvalid", {
+          min: MIN_MAX_PARALLEL_ARMS,
+          max: MAX_MAX_PARALLEL_ARMS,
+        }),
+      );
+      setPreflightEstimating(false);
+      return;
+    }
+    const triggerMaxWorkers = Number.parseInt(triggerMaxWorkersInput, 10);
+    if (
+      !Number.isFinite(triggerMaxWorkers) ||
+      triggerMaxWorkers < MIN_EVAL_WORKERS ||
+      triggerMaxWorkers > MAX_EVAL_WORKERS
+    ) {
+      setPreflightEstimate(null);
+      setPreflightEstimateError(
+        t("eval.error.triggerMaxWorkersInvalid", {
+          min: MIN_EVAL_WORKERS,
+          max: MAX_EVAL_WORKERS,
+        }),
+      );
+      setPreflightEstimating(false);
+      return;
+    }
+    const functionalMaxWorkers = Number.parseInt(functionalMaxWorkersInput, 10);
+    if (
+      !Number.isFinite(functionalMaxWorkers) ||
+      functionalMaxWorkers < MIN_EVAL_WORKERS ||
+      functionalMaxWorkers > MAX_EVAL_WORKERS
+    ) {
+      setPreflightEstimate(null);
+      setPreflightEstimateError(
+        t("eval.error.functionalMaxWorkersInvalid", {
+          min: MIN_EVAL_WORKERS,
+          max: MAX_EVAL_WORKERS,
+        }),
+      );
+      setPreflightEstimating(false);
+      return;
+    }
 
     const budgetInputValue = maxCostUsdInput.trim() ? Number(maxCostUsdInput.trim()) : undefined;
     if (budgetInputValue !== undefined && (!Number.isFinite(budgetInputValue) || budgetInputValue <= 0)) {
@@ -563,6 +767,9 @@ export default function EvalPage({ skills }: Props) {
         repeats,
         maxCostUsd,
         selectedModules: selectedModulesForRun,
+        maxParallelArms,
+        triggerMaxWorkers,
+        functionalMaxWorkers,
       })
         .then((estimate) => {
           if (!cancelled) {
@@ -593,6 +800,9 @@ export default function EvalPage({ skills }: Props) {
     model,
     costCurrency,
     repeatsInput,
+    maxParallelArmsInput,
+    triggerMaxWorkersInput,
+    functionalMaxWorkersInput,
     maxCostUsdInput,
     triggerSetPath,
     functionalSetPath,
@@ -628,6 +838,8 @@ export default function EvalPage({ skills }: Props) {
         evalListHistory(skillName, 30),
       ]);
       setStoragePaths(paths);
+      setTriggerSetPath((current) => current.trim() || paths.latestTriggerPath || "");
+      setFunctionalSetPath((current) => current.trim() || paths.latestFunctionalPath || "");
       setHistoryEntries(items);
     } catch {
       setHistoryEntries([]);
@@ -641,6 +853,27 @@ export default function EvalPage({ skills }: Props) {
     try {
       const loaded = await evalLoadHistory(path);
       setReport(loaded);
+      setRunSnapshot({
+        skillName: selectedSkill.trim() || loaded.triggerClean.skillName || "--",
+        mode: loaded.mode === "quick" ? "quick" : "full",
+        model: loaded.runMeta.model,
+        repeats: loaded.runMeta.repeats,
+        maxParallelArms: loaded.runMeta.maxParallelArms,
+        triggerMaxWorkers: loaded.runMeta.triggerMaxWorkers,
+        functionalMaxWorkers: loaded.runMeta.functionalMaxWorkers,
+        selectedModules:
+          loaded.mode === "quick"
+            ? []
+            : (loaded.moduleResults
+                ?.map((item) => item.key)
+                .filter(
+                  (key): key is EvalModuleKey =>
+                    EVAL_MODULE_OPTIONS.some((option) => option.key === key),
+                ) ?? []),
+        triggerSetPath: triggerSetPath.trim(),
+        functionalSetPath: functionalSetPath.trim(),
+      });
+      setView(loaded.mode === "full" ? "review" : "result");
       setStatus(t("eval.history.loaded", { path }));
       setShowHistory(false);
     } catch (error: unknown) {
@@ -683,8 +916,8 @@ export default function EvalPage({ skills }: Props) {
       setStatus(t("eval.error.selectSkill"));
       return;
     }
-    if (!model.trim()) {
-      setStatus(t("eval.error.modelRequired"));
+    if (!sampleModel.trim()) {
+      setStatus(t("eval.error.generationModelRequired"));
       return;
     }
     const docPath = skillDocPath(selectedSkillMeta);
@@ -702,7 +935,7 @@ export default function EvalPage({ skills }: Props) {
       const drafts = await evalGenerateSamples({
         skillName: selectedSkill,
         skillPath: docPath,
-        model: model.trim(),
+        model: sampleModel.trim(),
         triggerCount: DEFAULT_TRIGGER_SAMPLE_COUNT,
         functionalCount: FUNCTIONAL_MIN_SAMPLES,
       });
@@ -718,6 +951,7 @@ export default function EvalPage({ skills }: Props) {
           functional: nextFunctionalRows.length,
         }),
       );
+      await refreshSampleTimingHistory(selectedSkill);
     } catch (error: unknown) {
       setStatus(`${t("eval.error.generateFailed")}: ${String(error)}`);
     } finally {
@@ -811,9 +1045,11 @@ export default function EvalPage({ skills }: Props) {
       setStatus(t("eval.error.datasetRequired", { type: t("eval.dataset.trigger") }));
       return;
     }
-    if (requiresFunctionalByModules && !functionalSetPath.trim()) {
-      setStatus(t("eval.error.datasetRequired", { type: t("eval.dataset.functional") }));
-      return;
+    if (evalMode !== "quick" && !functionalSetPath.trim()) {
+      if (requiresFunctionalByModules) {
+        setStatus(t("eval.error.datasetRequired", { type: t("eval.dataset.functional") }));
+        return;
+      }
     }
 
     const docPath = skillDocPath(selectedSkillMeta);
@@ -824,6 +1060,48 @@ export default function EvalPage({ skills }: Props) {
     const repeats = Number.parseInt(repeatsInput, 10);
     if (!Number.isFinite(repeats) || repeats < 1) {
       setStatus(t("eval.error.repeatsInvalid"));
+      return;
+    }
+    const maxParallelArmsValue = Number.parseInt(maxParallelArmsInput, 10);
+    if (
+      !Number.isFinite(maxParallelArmsValue) ||
+      maxParallelArmsValue < MIN_MAX_PARALLEL_ARMS ||
+      maxParallelArmsValue > MAX_MAX_PARALLEL_ARMS
+    ) {
+      setStatus(
+        t("eval.error.maxParallelArmsInvalid", {
+          min: MIN_MAX_PARALLEL_ARMS,
+          max: MAX_MAX_PARALLEL_ARMS,
+        }),
+      );
+      return;
+    }
+    const triggerMaxWorkersValue = Number.parseInt(triggerMaxWorkersInput, 10);
+    if (
+      !Number.isFinite(triggerMaxWorkersValue) ||
+      triggerMaxWorkersValue < MIN_EVAL_WORKERS ||
+      triggerMaxWorkersValue > MAX_EVAL_WORKERS
+    ) {
+      setStatus(
+        t("eval.error.triggerMaxWorkersInvalid", {
+          min: MIN_EVAL_WORKERS,
+          max: MAX_EVAL_WORKERS,
+        }),
+      );
+      return;
+    }
+    const functionalMaxWorkersValue = Number.parseInt(functionalMaxWorkersInput, 10);
+    if (
+      !Number.isFinite(functionalMaxWorkersValue) ||
+      functionalMaxWorkersValue < MIN_EVAL_WORKERS ||
+      functionalMaxWorkersValue > MAX_EVAL_WORKERS
+    ) {
+      setStatus(
+        t("eval.error.functionalMaxWorkersInvalid", {
+          min: MIN_EVAL_WORKERS,
+          max: MAX_EVAL_WORKERS,
+        }),
+      );
       return;
     }
     const budgetInputValue = maxCostUsdInput.trim()
@@ -851,8 +1129,22 @@ export default function EvalPage({ skills }: Props) {
     setProgressStartedAtMs(Date.now());
     setShowSamples(false);
     setShowHistory(false);
+    setView("running");
+    setRunSnapshot({
+      skillName: selectedSkill.trim(),
+      mode: evalMode,
+      model: model.trim(),
+      repeats,
+      maxParallelArms: maxParallelArmsValue,
+      triggerMaxWorkers: triggerMaxWorkersValue,
+      functionalMaxWorkers: functionalMaxWorkersValue,
+      selectedModules: selectedModulesForRun,
+      triggerSetPath: triggerSetPath.trim(),
+      functionalSetPath: functionalSetPath.trim(),
+    });
     setStatus(t("eval.running"));
 
+    let runSucceeded = false;
     try {
       const requestedModels = resolveRequestedJudgeModels(evalMode, model);
       const pipeline = await runEvalPipeline({
@@ -870,15 +1162,20 @@ export default function EvalPage({ skills }: Props) {
         temperature: 0,
         maxCostUsd,
         selectedModules: selectedModulesForRun,
+        maxParallelArms: maxParallelArmsValue,
+        triggerMaxWorkers: triggerMaxWorkersValue,
+        functionalMaxWorkers: functionalMaxWorkersValue,
         runId,
       });
       if (pipeline.status !== "success") {
         throw new Error(pipeline.message || "Evaluation failed");
       }
+      runSucceeded = true;
       setReport(pipeline);
       if (selectedSkill) {
         await refreshHistory(selectedSkill);
       }
+      setView(pipeline.mode === "full" ? "review" : "result");
       if (pipeline.historyPath) {
         setStatus(t("eval.history.saved", { path: pipeline.historyPath }));
       } else if (pipeline.message?.trim()) {
@@ -887,11 +1184,97 @@ export default function EvalPage({ skills }: Props) {
         setStatus("");
       }
     } catch (error: unknown) {
+      setView("setup");
+      setRunSnapshot(null);
       setStatus(`${t("eval.error.runFailed")}: ${String(error)}`);
     } finally {
       setActiveRunId(null);
       setPauseRequested(false);
       setRunning(false);
+      if (!runSucceeded) {
+        setProgressStartedAtMs(null);
+      }
+    }
+  }
+
+  async function handleSubmitReview() {
+    if (!report?.historyPath) {
+      setStatus(t("eval.review.historyRequired"));
+      return;
+    }
+    if (reviewOverrideGate && !reviewOverrideReason.trim()) {
+      setStatus(t("eval.review.overrideReasonRequired"));
+      return;
+    }
+    setReviewSubmitting(true);
+    try {
+      await evalSubmitReview({
+        path: report.historyPath,
+        finalVerdict: reviewFinalVerdict.trim() || "pass",
+        overrideGate: reviewOverrideGate,
+        overrideReason: reviewOverrideReason.trim() || undefined,
+        notes: reviewNotes.trim() || undefined,
+        reviewer: reviewReviewer.trim() || undefined,
+      });
+      const reloaded = await evalLoadHistory(report.historyPath);
+      setReport(reloaded);
+      if (selectedSkill.trim()) {
+        await refreshHistory(selectedSkill);
+      }
+      setStatus(t("eval.review.saved"));
+    } catch (error: unknown) {
+      setStatus(`${t("eval.error.runFailed")}: ${String(error)}`);
+    } finally {
+      setReviewSubmitting(false);
+    }
+  }
+
+  async function handleGenerateFeedbackDrafts() {
+    if (!report?.historyPath) {
+      setStatus(t("eval.review.historyRequired"));
+      return;
+    }
+    setFeedbackDrafting(true);
+    try {
+      const drafts = await evalGenerateFeedbackDrafts({
+        path: report.historyPath,
+        triggerCount: triggerDraftRows.length > 0 ? triggerDraftRows.length : undefined,
+        functionalCount: functionalDraftRows.length > 0 ? functionalDraftRows.length : undefined,
+      });
+      const nextTriggerRows = parseTriggerDraftRows(drafts.triggerDraft);
+      const nextFunctionalRows = parseFunctionalDraftRows(drafts.functionalDraft);
+      setTriggerDraftRows(nextTriggerRows);
+      setFunctionalDraftRows(nextFunctionalRows);
+      setShowSamples(true);
+      setShowHistory(false);
+      setStatus(
+        t("eval.review.feedbackGenerated", {
+          trigger: nextTriggerRows.length,
+          functional: nextFunctionalRows.length,
+        }),
+      );
+    } catch (error: unknown) {
+      setStatus(`${t("eval.error.runFailed")}: ${String(error)}`);
+    } finally {
+      setFeedbackDrafting(false);
+    }
+  }
+
+  async function handlePreviewEvidenceCase() {
+    if (!report?.historyPath || !reviewCaseId.trim()) {
+      return;
+    }
+    setReviewEvidenceLoading(true);
+    try {
+      const payload = await evalReadEvidenceCase({
+        path: report.historyPath,
+        caseId: reviewCaseId.trim(),
+      });
+      setReviewEvidence(payload.content || payload.evidencePath || "");
+    } catch (error: unknown) {
+      setReviewEvidence(String(error));
+    } finally {
+      setReviewEvidenceLoading(false);
     }
   }
 
@@ -1025,6 +1408,250 @@ export default function EvalPage({ skills }: Props) {
       default:
         return stepKey;
     }
+  }
+
+  function renderQuickCheckLabel(rawKey: string): string {
+    switch (rawKey) {
+      case "skill-shape-analysis":
+        return t("eval.quickCheck.skillShape");
+      case "taxonomy-validity":
+        return t("eval.quickCheck.taxonomyValidity");
+      case "structure-syntax":
+        return t("eval.quickCheck.structureSyntax");
+      case "generation-guardrail":
+        return t("eval.quickCheck.generationGuardrail");
+      case "ui-metadata-consistency":
+        return t("eval.quickCheck.uiMetadataConsistency");
+      case "script-smoke":
+        return t("eval.quickCheck.scriptSmoke");
+      case "trigger-bucket-coverage":
+        return t("eval.quickCheck.triggerBucketCoverage");
+      default:
+        return rawKey;
+    }
+  }
+
+  function renderQuickCheckDescription(rawKey: string): string {
+    switch (rawKey) {
+      case "skill-shape-analysis":
+        return t("eval.quickCheck.desc.skillShape");
+      case "taxonomy-validity":
+        return t("eval.quickCheck.desc.taxonomyValidity");
+      case "structure-syntax":
+        return t("eval.quickCheck.desc.structureSyntax");
+      case "generation-guardrail":
+        return t("eval.quickCheck.desc.generationGuardrail");
+      case "ui-metadata-consistency":
+        return t("eval.quickCheck.desc.uiMetadataConsistency");
+      case "script-smoke":
+        return t("eval.quickCheck.desc.scriptSmoke");
+      case "trigger-bucket-coverage":
+        return t("eval.quickCheck.desc.triggerBucketCoverage");
+      default:
+        return t("eval.quickCheck.desc.generic");
+    }
+  }
+
+  function renderQuickCheckMessage(rawKey: string, message: string): string {
+    const normalized = message.trim();
+    if (!normalized) {
+      return t("eval.common.na");
+    }
+    if (rawKey === "skill-shape-analysis") {
+      const shapeMatch = normalized.match(
+        /^Detected skill shape '([^']+)' \(agents_dir=(true|false), openai_yaml=(true|false), scripts_dir=(true|false), references_dir=(true|false), assets_dir=(true|false)\)\.$/i,
+      );
+      if (shapeMatch) {
+        return t("eval.quickCheck.msg.skillShape", {
+          shape: shapeMatch[1],
+          agents: shapeMatch[2],
+          openaiYaml: shapeMatch[3],
+          scripts: shapeMatch[4],
+          references: shapeMatch[5],
+          assets: shapeMatch[6],
+        });
+      }
+    }
+    if (normalized === "Taxonomy classification fields and enum values are valid.") {
+      return t("eval.quickCheck.msg.taxonomyValid");
+    }
+    if (normalized === "SKILL.md frontmatter structure is valid.") {
+      return t("eval.quickCheck.msg.structureValid");
+    }
+    if (normalized.startsWith("Skipped: skill shape")) {
+      const skippedShape = normalized.match(/^Skipped: skill shape '([^']+)'/i);
+      const suffix = rawKey === "generation-guardrail"
+        ? t("eval.quickCheck.msg.skipGeneration")
+        : rawKey === "ui-metadata-consistency"
+          ? t("eval.quickCheck.msg.skipUiMetadata")
+          : t("eval.quickCheck.msg.skipGeneric");
+      return t("eval.quickCheck.msg.skipped", {
+        shape: skippedShape?.[1] ?? t("eval.common.na"),
+        detail: suffix,
+      });
+    }
+    const scriptSmokeMatch = normalized.match(/^Script smoke requirement passed for (\d+) scripts\.$/i);
+    if (scriptSmokeMatch) {
+      return t("eval.quickCheck.msg.scriptSmokePassed", { count: scriptSmokeMatch[1] });
+    }
+    const triggerCoveragePassMatch = normalized.match(
+      /^Trigger bucket coverage passed with minimum (\d+) per bucket\.$/i,
+    );
+    if (triggerCoveragePassMatch) {
+      return t("eval.quickCheck.msg.triggerCoveragePassed", {
+        minimum: triggerCoveragePassMatch[1],
+      });
+    }
+    const triggerCoverageFailMatch = normalized.match(
+      /^Trigger bucket coverage failed\. Buckets below minimum (\d+): (.+)$/i,
+    );
+    if (triggerCoverageFailMatch) {
+      return t("eval.quickCheck.msg.triggerCoverageFailed", {
+        minimum: triggerCoverageFailMatch[1],
+        buckets: triggerCoverageFailMatch[2],
+      });
+    }
+    return normalized;
+  }
+
+  function renderAdvisoryReason(reason: string): string {
+    const normalized = reason.trim();
+    if (!normalized) return t("eval.advisory.reason.missing");
+
+    const triggerPrecisionPassMatch = normalized.match(
+      /^Trigger precision ([+-]?\d*\.?\d+) is below pass threshold ([+-]?\d*\.?\d+)\.$/i,
+    );
+    if (triggerPrecisionPassMatch) {
+      return t("eval.advisory.reason.triggerPrecisionBelowPass", {
+        value: triggerPrecisionPassMatch[1],
+        threshold: triggerPrecisionPassMatch[2],
+      });
+    }
+    const triggerRecallPassMatch = normalized.match(
+      /^Trigger recall ([+-]?\d*\.?\d+) is below pass threshold ([+-]?\d*\.?\d+)\.$/i,
+    );
+    if (triggerRecallPassMatch) {
+      return t("eval.advisory.reason.triggerRecallBelowPass", {
+        value: triggerRecallPassMatch[1],
+        threshold: triggerRecallPassMatch[2],
+      });
+    }
+    if (normalized === "Functional delta unavailable; compared using trigger metrics only.") {
+      return t("eval.advisory.reason.functionalDeltaMissing");
+    }
+    const functionalDeltaRegressionMatch = normalized.match(
+      /^Functional delta ([+-]?\d*\.?\d+) indicates regression vs no-skill baseline\.$/i,
+    );
+    if (functionalDeltaRegressionMatch) {
+      return t("eval.advisory.reason.functionalDeltaRegression", {
+        value: functionalDeltaRegressionMatch[1],
+      });
+    }
+    const functionalDeltaNonNegativeMatch = normalized.match(
+      /^Functional delta ([+-]?\d*\.?\d+) is non-negative vs no-skill baseline\.$/i,
+    );
+    if (functionalDeltaNonNegativeMatch) {
+      return t("eval.advisory.reason.functionalDeltaNonNegative", {
+        value: functionalDeltaNonNegativeMatch[1],
+      });
+    }
+    const precisionHighRiskMatch = normalized.match(
+      /^Precision ([+-]?\d*\.?\d+) is below high-risk threshold ([+-]?\d*\.?\d+)\.$/i,
+    );
+    if (precisionHighRiskMatch) {
+      return t("eval.advisory.reason.precisionBelowHighRisk", {
+        value: precisionHighRiskMatch[1],
+        threshold: precisionHighRiskMatch[2],
+      });
+    }
+    const recallHighRiskMatch = normalized.match(
+      /^Recall ([+-]?\d*\.?\d+) is below high-risk threshold ([+-]?\d*\.?\d+)\.$/i,
+    );
+    if (recallHighRiskMatch) {
+      return t("eval.advisory.reason.recallBelowHighRisk", {
+        value: recallHighRiskMatch[1],
+        threshold: recallHighRiskMatch[2],
+      });
+    }
+    const functionalHighRiskMatch = normalized.match(
+      /^Functional delta ([+-]?\d*\.?\d+) is below high-risk threshold ([+-]?\d*\.?\d+)\.$/i,
+    );
+    if (functionalHighRiskMatch) {
+      return t("eval.advisory.reason.functionalDeltaBelowHighRisk", {
+        value: functionalHighRiskMatch[1],
+        threshold: functionalHighRiskMatch[2],
+      });
+    }
+    if (normalized === "All advisory pass thresholds are satisfied; keep this skill available.") {
+      return t("eval.advisory.reason.passThresholdsSatisfied");
+    }
+    if (normalized === "One or more pass thresholds are not met.") {
+      return t("eval.advisory.reason.passThresholdsNotMet");
+    }
+    const quickChecksBlockedMatch = normalized.match(
+      /^Quick checks failed; pipeline blocked\. Failed checks: (.+)$/i,
+    );
+    if (quickChecksBlockedMatch) {
+      return t("eval.advisory.reason.quickChecksBlocked", {
+        checks: quickChecksBlockedMatch[1],
+      });
+    }
+    return normalized;
+  }
+
+  function renderAnalyzerPattern(raw: string): string {
+    const normalized = raw.trim();
+    if (!normalized) return t("eval.common.na");
+    const match = normalized.match(/^([a-z_]+):([a-z0-9_]+)\s+\((\d+)\)$/i);
+    if (!match) return normalized;
+    const scope = match[1];
+    const errorType = match[2];
+    const count = match[3];
+    const scopeLabel =
+      scope === "trigger"
+        ? t("eval.analysis.pattern.trigger")
+        : scope === "functional_with_skill"
+          ? t("eval.analysis.pattern.functionalWithSkill")
+          : scope === "functional_without_skill"
+            ? t("eval.analysis.pattern.functionalWithoutSkill")
+            : scope;
+    const errorLabel =
+      errorType === "routing_mismatch"
+        ? t("eval.analysis.error.routingMismatch")
+        : errorType === "assertion_or_quality_failed"
+          ? t("eval.analysis.error.assertionOrQualityFailed")
+          : errorType.includes("network")
+            ? t("eval.analysis.error.network")
+            : errorType.includes("parse") || errorType.includes("json")
+              ? t("eval.analysis.error.parse")
+              : t("eval.analysis.error.generic", { type: errorType });
+    return t("eval.analysis.pattern.localized", {
+      scope: scopeLabel,
+      error: errorLabel,
+      count,
+    });
+  }
+
+  function renderAnalyzerRecommendation(raw: string): string {
+    const normalized = raw.trim();
+    if (!normalized) return t("eval.common.na");
+    const lower = normalized.toLowerCase();
+    if (lower.includes("retry/backoff") || lower.includes("network-induced flakiness")) {
+      return t("eval.analysis.recommendation.network");
+    }
+    if (lower.includes("structured-output parsing") || lower.includes("output-format assertions")) {
+      return t("eval.analysis.recommendation.parse");
+    }
+    if (lower.includes("trigger boundary") || lower.includes("adjacent-skill confusion")) {
+      return t("eval.analysis.recommendation.routing");
+    }
+    if (lower.includes("next-round regression dataset")) {
+      return t("eval.analysis.recommendation.regressionSet");
+    }
+    if (lower.includes("no dominant failure pattern")) {
+      return t("eval.analysis.recommendation.noDominant");
+    }
+    return normalized;
   }
 
   function handleToggleModule(moduleKey: EvalModuleKey) {
@@ -1217,11 +1844,13 @@ export default function EvalPage({ skills }: Props) {
         {quickChecks && (
           <div className="eval-quick-check-list">
             <span className="eval-history-item-label">{t("eval.gate.quickChecksStage0")}</span>
+            <p className="eval-path-hint">{t("eval.quickCheck.legend")}</p>
             <ul>
               {quickChecks.checks.map((item) => (
                 <li key={item.key} className={item.passed ? "eval-quick-pass" : "eval-quick-fail"}>
-                  <strong>{item.key}</strong>
-                  <span>{item.message}</span>
+                  <strong title={item.key}>{renderQuickCheckLabel(item.key)}</strong>
+                  <small>{renderQuickCheckDescription(item.key)}</small>
+                  <span>{renderQuickCheckMessage(item.key, item.message)}</span>
                 </li>
               ))}
             </ul>
@@ -1336,6 +1965,7 @@ export default function EvalPage({ skills }: Props) {
           </span>
         </div>
         <p className="eval-advisory-note">{t("eval.notice.nonBlocking")}</p>
+        {level === "high_risk" && <p className="eval-advisory-why">{t("eval.advisory.whyHighRisk")}</p>}
         <div className="eval-advisory-grid">
           <div>
             <span className="eval-history-item-label">{t("eval.advisory.evidenceLevel")}</span>
@@ -1360,11 +1990,187 @@ export default function EvalPage({ skills }: Props) {
             <strong title={samplePath ?? undefined}>{samplePath ? compactPath(samplePath) : "--"}</strong>
           </div>
         </div>
+        <p className="eval-advisory-why">{t("eval.advisory.reasonLabel")}</p>
         <ul className="eval-advisory-reasons">
           {(advisory?.reasons ?? [t("eval.advisory.reason.missing")]).map((reason, index) => (
-            <li key={`advisory-reason-${index}`}>{reason}</li>
+            <li key={`advisory-reason-${index}`}>{renderAdvisoryReason(reason)}</li>
           ))}
         </ul>
+      </article>
+    );
+  }
+
+  function renderComparatorAnalyzerPanel() {
+    if (!report) return null;
+    const comparator = report.comparator;
+    const analyzer = report.analyzer;
+    if (!comparator && !analyzer) return null;
+    return (
+      <article className="chart-card">
+        <h3 className="chart-title">{t("eval.analysis.title")}</h3>
+        <div className="eval-history-detail-grid">
+          {comparator && (
+            <>
+              <div>
+                <span className="eval-history-item-label">{t("eval.analysis.comparator")}</span>
+                <strong>{`${comparator.improvedCases}/${comparator.regressedCases}/${comparator.unchangedCases}`}</strong>
+              </div>
+              <div>
+                <span className="eval-history-item-label">{t("eval.analysis.averageDelta")}</span>
+                <strong>{comparator.averageDelta.toFixed(4)}</strong>
+              </div>
+            </>
+          )}
+          {analyzer && (
+            <div>
+              <span className="eval-history-item-label">{t("eval.analysis.analyzer")}</span>
+              <strong>
+                {analyzer.topFailurePatterns.length > 0
+                  ? analyzer.topFailurePatterns.map((item) => renderAnalyzerPattern(item)).join("；")
+                  : naLabel}
+              </strong>
+            </div>
+          )}
+        </div>
+        {comparator?.highlights?.length ? (
+          <ul className="eval-advisory-reasons">
+            {comparator.highlights.map((item, index) => (
+              <li key={`cmp-${index}`}>{item}</li>
+            ))}
+          </ul>
+        ) : null}
+        {analyzer?.recommendations?.length ? (
+          <ul className="eval-advisory-reasons">
+            {analyzer.recommendations.map((item, index) => (
+              <li key={`anlz-${index}`}>{renderAnalyzerRecommendation(item)}</li>
+            ))}
+          </ul>
+        ) : null}
+      </article>
+    );
+  }
+
+  function renderReviewWorkbench() {
+    if (!report) return null;
+    const reviewed = Boolean(report.reviewSummary?.reviewed);
+    const reviewedVerdict = report.reviewSummary?.finalVerdict || report.finalVerdict || naLabel;
+    const failedCaseOptions = report.functional.results?.filter((item) => !item.passed) || [];
+    return (
+      <article className="chart-card eval-review-card">
+        <div className="eval-advisory-head">
+          <h3 className="chart-title">{t("eval.review.title")}</h3>
+          <span className={`eval-badge ${reviewed ? "eval-badge-pass" : "eval-badge-fail"}`}>
+            {reviewed ? t("eval.review.reviewed") : t("eval.review.pending")}
+          </span>
+        </div>
+        <div className="eval-history-detail-grid">
+          <div>
+            <span className="eval-history-item-label">{t("eval.review.currentVerdict")}</span>
+            <strong>{reviewedVerdict}</strong>
+          </div>
+          <div>
+            <span className="eval-history-item-label">{t("eval.review.reviewer")}</span>
+            <strong>{report.reviewSummary?.reviewer || report.overrideBy || naLabel}</strong>
+          </div>
+          <div>
+            <span className="eval-history-item-label">{t("eval.review.overrideReason")}</span>
+            <strong>{report.overrideReason || naLabel}</strong>
+          </div>
+          <div>
+            <span className="eval-history-item-label">{t("eval.review.decidedAt")}</span>
+            <strong>
+              {typeof report.overrideAt === "number"
+                ? new Date(report.overrideAt * 1000).toLocaleString()
+                : naLabel}
+            </strong>
+          </div>
+        </div>
+        <div className="eval-draft-actions">
+          <select
+            className="filter-select"
+            value={reviewCaseId}
+            onChange={(event) => setReviewCaseId(event.target.value)}
+          >
+            <option value="">{t("eval.review.caseSelect")}</option>
+            {failedCaseOptions.map((item) => (
+              <option key={item.caseId} value={item.caseId}>
+                {item.caseId}
+              </option>
+            ))}
+          </select>
+          <button
+            className="btn btn-ghost"
+            onClick={() => void handlePreviewEvidenceCase()}
+            disabled={reviewEvidenceLoading || !reviewCaseId.trim()}
+          >
+            {reviewEvidenceLoading ? t("eval.review.loadingEvidence") : t("eval.review.previewEvidence")}
+          </button>
+        </div>
+        {reviewEvidence.trim() && (
+          <pre className="eval-draft-textarea" style={{ whiteSpace: "pre-wrap" }}>{reviewEvidence}</pre>
+        )}
+        <div className="eval-draft-grid">
+          <div className="field">
+            <label className="field-label">{t("eval.review.finalVerdict")}</label>
+            <select
+              className="filter-select"
+              value={reviewFinalVerdict}
+              onChange={(event) => setReviewFinalVerdict(event.target.value)}
+            >
+              <option value="pass">pass</option>
+              <option value="fail">fail</option>
+              <option value="warn">warn</option>
+              <option value="blocked">blocked</option>
+            </select>
+          </div>
+          <div className="field">
+            <label className="field-label">{t("eval.review.reviewer")}</label>
+            <input
+              className="field-input"
+              value={reviewReviewer}
+              onChange={(event) => setReviewReviewer(event.target.value)}
+              placeholder={t("eval.review.reviewerPlaceholder")}
+            />
+          </div>
+          <div className="field eval-field-wide">
+            <label className="field-label">
+              <input
+                type="checkbox"
+                checked={reviewOverrideGate}
+                onChange={(event) => setReviewOverrideGate(event.target.checked)}
+              />{" "}
+              {t("eval.review.overrideGate")}
+            </label>
+            <textarea
+              className="eval-draft-textarea"
+              value={reviewOverrideReason}
+              onChange={(event) => setReviewOverrideReason(event.target.value)}
+              placeholder={t("eval.review.overrideReason")}
+            />
+          </div>
+          <div className="field eval-field-wide">
+            <label className="field-label">{t("eval.review.notes")}</label>
+            <textarea
+              className="eval-draft-textarea"
+              value={reviewNotes}
+              onChange={(event) => setReviewNotes(event.target.value)}
+            />
+          </div>
+        </div>
+        <div className="eval-draft-actions">
+          <button className="btn btn-ghost" onClick={() => void handleSubmitReview()} disabled={reviewSubmitting}>
+            {reviewSubmitting ? t("eval.review.submitting") : t("eval.review.submit")}
+          </button>
+          <button
+            className="btn btn-ghost"
+            onClick={() => void handleGenerateFeedbackDrafts()}
+            disabled={feedbackDrafting}
+          >
+            {feedbackDrafting
+              ? t("eval.review.generatingFeedback")
+              : t("eval.review.generateFeedbackDrafts")}
+          </button>
+        </div>
       </article>
     );
   }
@@ -1536,7 +2342,24 @@ export default function EvalPage({ skills }: Props) {
   const configuredRepeats = Number.isFinite(parsedRepeats) && parsedRepeats > 0 ? parsedRepeats : 1;
   const totalSteps = Math.max(progressEvent?.totalSteps ?? 1, 1);
   const currentStep = Math.min(progressEvent?.stepIndex ?? 0, totalSteps);
-  const progressPercent = running ? Math.round((currentStep / totalSteps) * 100) : report ? 100 : 0;
+  const isRunningProgress = progressEvent?.status === "running";
+  const isCompletedProgress = progressEvent?.status === "completed";
+  const runningStepInFlight =
+    isRunningProgress && progressEvent?.stepName !== "repeat_complete" && progressEvent?.stepName !== "pipeline";
+  const completedSteps = isRunningProgress
+    ? runningStepInFlight
+      ? Math.max(currentStep - 1, 0)
+      : currentStep
+    : currentStep;
+  const inFlightFraction = runningStepInFlight ? 0.5 : 0;
+  const runningProgressPercentRaw = Math.round(((completedSteps + inFlightFraction) / totalSteps) * 100);
+  const progressPercent = isCompletedProgress
+    ? 100
+    : running
+      ? Math.min(99, Math.max(0, runningProgressPercentRaw))
+      : report
+        ? 100
+        : 0;
   const progressStepLabel = (stepName: string) => {
     const messageKey = EVAL_PROGRESS_STEP_KEYS[stepName];
     if (!messageKey) {
@@ -1596,16 +2419,18 @@ export default function EvalPage({ skills }: Props) {
       })
     : progressMessage;
   const hasSelectedSkill = selectedSkill.trim().length > 0;
-  const hasModel = model.trim().length > 0;
+  const hasSampleModel = sampleModel.trim().length > 0;
+  const hasRunModel = model.trim().length > 0;
   const hasTriggerDataset = triggerSetPath.trim().length > 0;
   const hasFunctionalDataset = !requiresFunctionalByModules || functionalSetPath.trim().length > 0;
   const repeatsValid = Number.isFinite(parsedRepeats) && parsedRepeats >= 1;
   const budgetValue = maxCostUsdInput.trim() ? Number(maxCostUsdInput.trim()) : undefined;
   const budgetValid =
     budgetValue === undefined || (Number.isFinite(budgetValue) && budgetValue > 0);
-  const setupReady = hasSelectedSkill && hasModel && repeatsValid && budgetValid;
-  const datasetReady = hasTriggerDataset && hasFunctionalDataset;
-  const readyToRun = setupReady && datasetReady;
+  const setupReady = hasSelectedSkill;
+  const datasetReady = hasTriggerDataset;
+  const runConfigReady = hasRunModel && repeatsValid && budgetValid;
+  const readyToRun = setupReady && datasetReady && runConfigReady && hasFunctionalDataset;
   const autoStep: 1 | 2 | 3 = !setupReady ? 1 : !datasetReady ? 2 : 3;
   const activeStep: 1 | 2 | 3 =
     stepOverride === null
@@ -1617,22 +2442,70 @@ export default function EvalPage({ skills }: Props) {
           : stepOverride;
   const runBlockedReason = !hasSelectedSkill
     ? t("eval.error.selectSkill")
-    : !hasModel
-      ? t("eval.error.modelRequired")
-      : !repeatsValid
+    : !hasTriggerDataset
+        ? t("eval.error.datasetRequired", { type: t("eval.dataset.trigger") })
+        : !hasRunModel
+          ? t("eval.error.modelRequired")
+          : !repeatsValid
         ? t("eval.error.repeatsInvalid")
         : !budgetValid
           ? t("eval.error.maxCostInvalid")
-          : !hasTriggerDataset
-            ? t("eval.error.datasetRequired", { type: t("eval.dataset.trigger") })
             : !hasFunctionalDataset
             ? t("eval.error.datasetRequired", { type: t("eval.dataset.functional") })
               : "";
+  const flowCompletedCount = [setupReady, datasetReady, report !== null].filter(Boolean).length;
+  const step1Status = resolveFlowStatus(1, activeStep, setupReady);
+  const step2Status = resolveFlowStatus(2, activeStep, datasetReady);
+  const step3Status = resolveFlowStatus(3, activeStep, report !== null);
+  const generationEstimate = useMemo(
+    () =>
+      estimateSampleGenerationSeconds(
+        sampleModel,
+        DEFAULT_TRIGGER_SAMPLE_COUNT,
+        FUNCTIONAL_MIN_SAMPLES,
+        sampleTimingHistory,
+      ),
+    [sampleModel, sampleTimingHistory],
+  );
+  const sampleTimingHistoryForSkill = useMemo(
+    () =>
+      sampleTimingHistory
+        .filter((item) => !selectedSkill.trim() || item.skillName === selectedSkill.trim())
+        .slice(0, 4),
+    [sampleTimingHistory, selectedSkill],
+  );
   const flowNextMessage = readyToRun
     ? t("eval.flow.ready")
-    : t("eval.flow.next", { reason: runBlockedReason });
+    : t("eval.flow.next", { reason: runBlockedReason || t("eval.flow.stageHint.step3") });
   const runPrimaryLabel = running ? t("eval.running") : t("eval.run");
   const naLabel = t("eval.common.na");
+  const showSetupView = view === "setup";
+  const showRunningView = view === "running";
+  const showReviewView = view === "review";
+  const showResultView = view === "result";
+  const showFixedRunDock = showSetupView;
+  const runStage = resolveRunViewStage(progressEvent?.stepName, progressEvent?.status);
+  const runStage1Status: EvalFlowStatus =
+    runStage <= 1 ? "active" : "done";
+  const runStage2Status: EvalFlowStatus =
+    runStage === 1 ? "pending" : runStage === 2 ? "active" : "done";
+  const runStage3Status: EvalFlowStatus = runStage >= 3 ? "active" : "pending";
+  const runSnapshotModeLabel =
+    runSnapshot?.mode === "quick" ? t("eval.config.mode.quick") : t("eval.config.mode.full");
+  const runSnapshotModulesLabel =
+    runSnapshot?.mode === "quick"
+      ? t("eval.running.dimensions.quick")
+      : runSnapshot?.selectedModules && runSnapshot.selectedModules.length > 0
+        ? runSnapshot.selectedModules
+            .map(
+              (key) =>
+                t(
+                  (EVAL_MODULE_OPTIONS.find((option) => option.key === key)?.labelKey ??
+                    "eval.common.na") as Parameters<typeof t>[0],
+                ),
+            )
+            .join(" / ")
+        : t("eval.common.na");
 
   useEffect(() => {
     if (stepOverride === null) return;
@@ -1646,21 +2519,11 @@ export default function EvalPage({ skills }: Props) {
   }, [stepOverride, setupReady, datasetReady]);
 
   useEffect(() => {
-    const headerEl = pageHeaderRef.current;
     const dockEl = runDockRef.current;
-    const statusBarEl = document.querySelector<HTMLElement>(".app-status-bar");
-    if (!headerEl || !dockEl) return;
+    if (!dockEl) return;
 
     const updateOffsets = () => {
-      const statusBarHeight = Math.ceil(statusBarEl?.getBoundingClientRect().height ?? 0);
-      const nextHeaderTop = Math.max(0, statusBarHeight + 8);
-      const nextHeaderOffset = Math.max(
-        80,
-        nextHeaderTop + Math.ceil(headerEl.getBoundingClientRect().height) + 8,
-      );
       const nextDockOffset = Math.max(220, Math.ceil(dockEl.getBoundingClientRect().height) + 24);
-      setHeaderTopPx((current) => (current === nextHeaderTop ? current : nextHeaderTop));
-      setHeaderOffsetPx((current) => (current === nextHeaderOffset ? current : nextHeaderOffset));
       setRunDockOffsetPx((current) => (current === nextDockOffset ? current : nextDockOffset));
     };
 
@@ -1673,16 +2536,12 @@ export default function EvalPage({ skills }: Props) {
     }
 
     const observer = new ResizeObserver(updateOffsets);
-    observer.observe(headerEl);
     observer.observe(dockEl);
-    if (statusBarEl) {
-      observer.observe(statusBarEl);
-    }
     return () => {
       window.removeEventListener("resize", updateOffsets);
       observer.disconnect();
     };
-  }, [activeStep, progressDetail, running, showAdvancedSettings, status, t]);
+  }, [activeStep, progressDetail, running, status, t]);
 
   function jumpToStep(step: 1 | 2 | 3) {
     if (step === 1) {
@@ -1704,21 +2563,20 @@ export default function EvalPage({ skills }: Props) {
       setFunctionalSetPath("");
       setTriggerDraftRows([]);
       setFunctionalDraftRows([]);
+      setReport(null);
+      setRunSnapshot(null);
       setShowSamples(false);
       setShowHistory(false);
       setPreflightEstimate(null);
       setPreflightEstimateError("");
+      setView("setup");
     }
     setSelectedSkill(nextSkill);
     if (!nextSkill.trim()) {
       setStepOverride(1);
       return;
     }
-    if (hasModel && repeatsValid && budgetValid) {
-      setStepOverride(2);
-      return;
-    }
-    setStepOverride(1);
+    setStepOverride(2);
   }
 
   function resolveResultLabel(status: string): string {
@@ -1737,58 +2595,90 @@ export default function EvalPage({ skills }: Props) {
   const pageStyle = useMemo<CSSProperties>(
     () =>
       ({
-        "--eval-header-top": `${headerTopPx}px`,
-        "--eval-header-offset": `${headerOffsetPx}px`,
-        "--eval-run-dock-offset": `${runDockOffsetPx}px`,
+        "--eval-run-dock-offset": showFixedRunDock ? `${runDockOffsetPx}px` : "0px",
       }) as CSSProperties,
-    [headerOffsetPx, headerTopPx, runDockOffsetPx],
+    [runDockOffsetPx, showFixedRunDock],
   );
 
   return (
-    <div className="page animate-fadein eval-page" ref={pageRef} style={pageStyle}>
-      <header className="page-header eval-page-header" ref={pageHeaderRef}>
-        <div className="eval-page-header-main">
+    <div className="page animate-fadein eval-page" style={pageStyle}>
+      <header className="page-header eval-page-header page-header-grid">
+        <div className="eval-page-header-main page-header-copy">
           <h1 className="page-title eval-page-title">
             <span>{t("eval.title")}</span>
-            <span className="eval-beta-badge">{t("eval.beta")}</span>
+            <span className="eval-beta-badge">BETA</span>
           </h1>
           <p className="eval-page-header-hint">{flowNextMessage}</p>
         </div>
-        <button
-          className="btn btn-primary eval-page-run-btn"
-          onClick={() => void handleRunEval()}
-          disabled={running || generating || !readyToRun}
-          title={!readyToRun ? runBlockedReason : undefined}
-        >
-          {runPrimaryLabel}
-        </button>
+        <div className="eval-page-header-actions page-header-actions-grid">
+          <div className="eval-page-header-actions-row page-header-actions-row">
+            {showSetupView ? (
+              <button
+                className="btn btn-primary eval-page-run-btn"
+                onClick={() => void handleRunEval()}
+                disabled={running || generating || !readyToRun}
+                title={!readyToRun ? runBlockedReason : undefined}
+              >
+                {runPrimaryLabel}
+              </button>
+            ) : (
+              <button
+                className="btn btn-ghost eval-page-run-btn"
+                onClick={() => {
+                  setView("setup");
+                  setReport(null);
+                  setRunSnapshot(null);
+                  setStatus("");
+                }}
+                disabled={running}
+              >
+                {t("eval.running.backToSetup")}
+              </button>
+            )}
+          </div>
+        </div>
       </header>
 
-      <article className="chart-card eval-config-card">
+      {showSetupView && (
+        <article className="chart-card eval-config-card">
         <h3 className="chart-title">{t("eval.config.title")}</h3>
         <p className="eval-advisory-note">{t("eval.notice.nonBlocking")}</p>
         <div className="eval-flow-sticky">
+          <div className="eval-flow-head">
+            <span className="eval-flow-complete">
+              {t("eval.flow.completed", { done: flowCompletedCount, total: 3 })}
+            </span>
+          </div>
           <section className="eval-flow-guide" aria-label={t("eval.flow.aria")}>
-            <div className={`eval-flow-step ${activeStep === 1 ? "is-active" : setupReady ? "is-done" : ""}`}>
+            <div className={`eval-flow-step is-${step1Status}`} aria-current={activeStep === 1 ? "step" : undefined}>
               <span className="eval-flow-index">1</span>
               <div>
                 <strong>{t("eval.flow.step1.title")}</strong>
                 <small>{t("eval.flow.step1.desc")}</small>
               </div>
+              <span className={`eval-flow-state eval-flow-state-${step1Status}`}>
+                {t(`eval.flow.state.${step1Status}` as Parameters<typeof t>[0])}
+              </span>
             </div>
-            <div className={`eval-flow-step ${activeStep === 2 ? "is-active" : datasetReady ? "is-done" : ""}`}>
+            <div className={`eval-flow-step is-${step2Status}`} aria-current={activeStep === 2 ? "step" : undefined}>
               <span className="eval-flow-index">2</span>
               <div>
                 <strong>{t("eval.flow.step2.title")}</strong>
                 <small>{t("eval.flow.step2.desc")}</small>
               </div>
+              <span className={`eval-flow-state eval-flow-state-${step2Status}`}>
+                {t(`eval.flow.state.${step2Status}` as Parameters<typeof t>[0])}
+              </span>
             </div>
-            <div className={`eval-flow-step ${activeStep === 3 ? "is-active" : report ? "is-done" : ""}`}>
+            <div className={`eval-flow-step is-${step3Status}`} aria-current={activeStep === 3 ? "step" : undefined}>
               <span className="eval-flow-index">3</span>
               <div>
                 <strong>{t("eval.flow.step3.title")}</strong>
                 <small>{t("eval.flow.step3.desc")}</small>
               </div>
+              <span className={`eval-flow-state eval-flow-state-${step3Status}`}>
+                {t(`eval.flow.state.${step3Status}` as Parameters<typeof t>[0])}
+              </span>
             </div>
           </section>
           <div className="eval-flow-jump">
@@ -1833,96 +2723,21 @@ export default function EvalPage({ skills }: Props) {
                   ))}
                 </select>
               </div>
-
-              <div className="field">
-                <label className="field-label">{t("eval.config.mode")}</label>
-                <select
-                  className="filter-select"
-                  value={evalMode}
-                  onChange={(e) => setEvalMode(e.target.value as EvalMode)}
-                >
-                  <option value="quick">{t("eval.config.mode.quick")}</option>
-                  <option value="full">{t("eval.config.mode.full")}</option>
-                </select>
-              </div>
-
-              <div className="field">
-                <label className="field-label">{t("eval.config.model")}</label>
-                <input
-                  className="field-input"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder={t("eval.config.model.placeholder")}
-                />
-              </div>
-
-              <div className="eval-advanced-toggle-wrap">
-                <button
-                  className="btn btn-ghost eval-action-btn"
-                  onClick={() => setShowAdvancedSettings((prev) => !prev)}
-                  aria-expanded={showAdvancedSettings}
-                >
-                  {showAdvancedSettings ? t("eval.advanced.hide") : t("eval.advanced.show")}
-                </button>
-                <p className="eval-path-hint">{t("eval.advanced.hint")}</p>
-              </div>
-
-              {showAdvancedSettings && (
-                <>
-                  <div className="field">
-                    <label className="field-label">{t("eval.config.modelPreset")}</label>
-                    <select
-                      className="filter-select"
-                      value={MODEL_PRESETS.includes(model) ? model : ""}
-                      onChange={(e) => {
-                        if (e.target.value) {
-                          setModel(e.target.value);
-                        }
-                      }}
-                    >
-                      <option value="">{t("eval.config.modelPreset.custom")}</option>
-                      {MODEL_PRESETS.map((item) => (
-                        <option key={item} value={item}>
-                          {item}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="field">
-                    <label className="field-label">{t("eval.config.repeats")}</label>
-                    <input
-                      className="field-input"
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={repeatsInput}
-                      onChange={(e) => setRepeatsInput(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="field">
-                    <label className="field-label">{t("eval.config.maxCost", { currency: costCurrency })}</label>
-                    <input
-                      className="field-input"
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={maxCostUsdInput}
-                      onChange={(e) => setMaxCostUsdInput(e.target.value)}
-                      placeholder={t("eval.config.maxCost.placeholder", { currency: costCurrency })}
-                    />
-                  </div>
-
-                  {renderModuleSelector()}
-                </>
-              )}
             </>
           )}
 
           {activeStep === 2 && (
             <>
               <p className="eval-config-group-title">{t("eval.flow.group.step2")}</p>
+              <div className="field eval-field-wide">
+                <label className="field-label">{t("eval.config.generationModel")}</label>
+                <input
+                  className="field-input"
+                  value={sampleModel}
+                  onChange={(e) => setSampleModel(e.target.value)}
+                  placeholder={t("eval.config.model.placeholder")}
+                />
+              </div>
 
               <div className="field eval-field-wide">
                 <label className="field-label">{t("eval.dataset.trigger")}</label>
@@ -1965,11 +2780,47 @@ export default function EvalPage({ skills }: Props) {
                 </p>
               </div>
 
+              <section className="eval-sample-eta-card eval-field-wide">
+                <div className="eval-sample-eta-head">
+                  <h4 className="chart-title">{t("eval.samples.eta.title")}</h4>
+                  <strong>{formatDurationLabel(generationEstimate.seconds)}</strong>
+                </div>
+                <p className="eval-path-hint">
+                  {t("eval.samples.eta.meta", {
+                    model: sampleModel.trim() || naLabel,
+                    history: generationEstimate.historyMatches,
+                    last:
+                      typeof generationEstimate.lastSeconds === "number"
+                        ? generationEstimate.lastSeconds
+                        : naLabel,
+                  })}
+                </p>
+                <div className="eval-sample-eta-history">
+                  <span className="eval-history-item-label">{t("eval.samples.history.title")}</span>
+                  {sampleTimingHistoryForSkill.length === 0 ? (
+                    <p className="eval-path-hint">{t("eval.samples.history.empty")}</p>
+                  ) : (
+                    <ul>
+                      {sampleTimingHistoryForSkill.map((item) => (
+                        <li key={`sample-history-${item.recordedAtUnix}-${item.model}`}>
+                          {t("eval.samples.history.item", {
+                            model: item.model,
+                            seconds: item.elapsedSeconds,
+                            trigger: item.triggerCount,
+                            functional: item.functionalCount,
+                          })}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </section>
+
               <div className="eval-dataset-actions">
                 <button
                   className="btn btn-ghost eval-action-btn"
                   onClick={() => void handleGenerateSamples()}
-                  disabled={running || generating || !hasSelectedSkill || !hasModel}
+                  disabled={running || generating || !hasSelectedSkill || !hasSampleModel}
                 >
                   {t("eval.samples.generate", {
                     trigger: DEFAULT_TRIGGER_SAMPLE_COUNT,
@@ -1997,6 +2848,93 @@ export default function EvalPage({ skills }: Props) {
           {activeStep === 3 && (
             <>
               <p className="eval-config-group-title">{t("eval.flow.group.step3")}</p>
+              <div className="field">
+                <label className="field-label">{t("eval.config.mode")}</label>
+                <select
+                  className="filter-select"
+                  value={evalMode}
+                  onChange={(e) => setEvalMode(e.target.value as EvalMode)}
+                >
+                  <option value="quick">{t("eval.config.mode.quick")}</option>
+                  <option value="full">{t("eval.config.mode.full")}</option>
+                </select>
+              </div>
+
+              <div className="field">
+                <label className="field-label">{t("eval.config.runModel")}</label>
+                <input
+                  className="field-input"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={t("eval.config.model.placeholder")}
+                />
+              </div>
+
+              <div className="field">
+                <label className="field-label">{t("eval.config.maxParallelArms")}</label>
+                <input
+                  className="field-input"
+                  type="number"
+                  min={MIN_MAX_PARALLEL_ARMS}
+                  max={MAX_MAX_PARALLEL_ARMS}
+                  step={1}
+                  value={maxParallelArmsInput}
+                  onChange={(e) => setMaxParallelArmsInput(e.target.value)}
+                />
+              </div>
+
+              <div className="field">
+                <label className="field-label">{t("eval.config.triggerMaxWorkers")}</label>
+                <input
+                  className="field-input"
+                  type="number"
+                  min={MIN_EVAL_WORKERS}
+                  max={MAX_EVAL_WORKERS}
+                  step={1}
+                  value={triggerMaxWorkersInput}
+                  onChange={(e) => setTriggerMaxWorkersInput(e.target.value)}
+                />
+              </div>
+
+              <div className="field">
+                <label className="field-label">{t("eval.config.functionalMaxWorkers")}</label>
+                <input
+                  className="field-input"
+                  type="number"
+                  min={MIN_EVAL_WORKERS}
+                  max={MAX_EVAL_WORKERS}
+                  step={1}
+                  value={functionalMaxWorkersInput}
+                  onChange={(e) => setFunctionalMaxWorkersInput(e.target.value)}
+                />
+              </div>
+
+              <div className="field">
+                <label className="field-label">{t("eval.config.repeats")}</label>
+                <input
+                  className="field-input"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={repeatsInput}
+                  onChange={(e) => setRepeatsInput(e.target.value)}
+                />
+              </div>
+
+              <div className="field eval-field-wide">
+                <label className="field-label">{t("eval.config.maxCostUsd", { currency: costCurrency })}</label>
+                <input
+                  className="field-input"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={maxCostUsdInput}
+                  onChange={(e) => setMaxCostUsdInput(e.target.value)}
+                  placeholder={t("eval.config.maxCost.placeholder", { currency: costCurrency })}
+                />
+              </div>
+
+              {renderModuleSelector()}
               {renderPreflightEstimate()}
               <div className="eval-config-actions">
                 <span className="eval-action-group-label">{t("eval.flow.actions.secondary")}</span>
@@ -2020,9 +2958,127 @@ export default function EvalPage({ skills }: Props) {
             </>
           )}
         </div>
-      </article>
+        </article>
+      )}
 
-      <article className="eval-run-dock" ref={runDockRef}>
+      {showRunningView && runSnapshot && (
+        <article className="chart-card eval-running-stage-card">
+          <div className="eval-running-stage-head">
+            <h3 className="chart-title">{t("eval.running.title")}</h3>
+            <div className="eval-running-stage-actions">
+              <button
+                className="btn btn-ghost"
+                onClick={() => void handleEvalControl(pauseRequested ? "resume" : "pause")}
+                disabled={controlBusy || !activeRunId}
+              >
+                {pauseRequested ? t("eval.control.resume") : t("eval.control.pause")}
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={() => void handleEvalControl("cancel")}
+                disabled={controlBusy || !activeRunId}
+              >
+                {t("eval.control.stop")}
+              </button>
+            </div>
+          </div>
+          <p className="eval-running-stage-status">{progressDetail || status || t("eval.running")}</p>
+          <div className="eval-running-stage-grid">
+            <div>
+              <span className="eval-history-item-label">{t("eval.config.skill")}</span>
+              <strong>{runSnapshot.skillName || naLabel}</strong>
+            </div>
+            <div>
+              <span className="eval-history-item-label">{t("eval.config.mode")}</span>
+              <strong>{runSnapshotModeLabel}</strong>
+            </div>
+            <div>
+              <span className="eval-history-item-label">{t("eval.config.runModel")}</span>
+              <strong>{runSnapshot.model || naLabel}</strong>
+            </div>
+            <div>
+              <span className="eval-history-item-label">{t("eval.config.repeats")}</span>
+              <strong>{runSnapshot.repeats}</strong>
+            </div>
+            <div>
+              <span className="eval-history-item-label">{t("eval.running.progressPercent")}</span>
+              <strong>{`${progressPercent}%`}</strong>
+            </div>
+            <div>
+              <span className="eval-history-item-label">{t("eval.runDock.elapsed", { seconds: elapsedSeconds })}</span>
+              <strong>
+                {t("eval.runDock.steps", {
+                  current: progressEvent?.stepIndex ?? 0,
+                  total: progressEvent?.totalSteps ?? 0,
+                })}
+              </strong>
+            </div>
+            <div className="eval-running-stage-wide">
+              <span className="eval-history-item-label">{t("eval.running.dimensions")}</span>
+              <strong>{runSnapshotModulesLabel}</strong>
+            </div>
+            <div>
+              <span className="eval-history-item-label">{t("eval.config.maxParallelArms")}</span>
+              <strong>{runSnapshot.maxParallelArms}</strong>
+            </div>
+            <div>
+              <span className="eval-history-item-label">{t("eval.config.triggerMaxWorkers")}</span>
+              <strong>{runSnapshot.triggerMaxWorkers}</strong>
+            </div>
+            <div>
+              <span className="eval-history-item-label">{t("eval.config.functionalMaxWorkers")}</span>
+              <strong>{runSnapshot.functionalMaxWorkers}</strong>
+            </div>
+            <div className="eval-running-stage-wide">
+              <span className="eval-history-item-label">{t("eval.dataset.trigger")}</span>
+              <strong title={runSnapshot.triggerSetPath}>{compactPath(runSnapshot.triggerSetPath) || naLabel}</strong>
+            </div>
+            {runSnapshot.mode !== "quick" && (
+              <div className="eval-running-stage-wide">
+                <span className="eval-history-item-label">{t("eval.dataset.functional")}</span>
+                <strong title={runSnapshot.functionalSetPath}>
+                  {compactPath(runSnapshot.functionalSetPath) || naLabel}
+                </strong>
+              </div>
+            )}
+          </div>
+          <section className="eval-flow-guide eval-running-flow" aria-label={t("eval.running.flowAria")}>
+            <div className={`eval-flow-step is-${runStage1Status}`}>
+              <span className="eval-flow-index">1</span>
+              <div>
+                <strong>{t("eval.running.stage.prepare")}</strong>
+                <small>{t("eval.running.stage.prepareDesc")}</small>
+              </div>
+              <span className={`eval-flow-state eval-flow-state-${runStage1Status}`}>
+                {t(`eval.flow.state.${runStage1Status}` as Parameters<typeof t>[0])}
+              </span>
+            </div>
+            <div className={`eval-flow-step is-${runStage2Status}`}>
+              <span className="eval-flow-index">2</span>
+              <div>
+                <strong>{t("eval.running.stage.execute")}</strong>
+                <small>{t("eval.running.stage.executeDesc")}</small>
+              </div>
+              <span className={`eval-flow-state eval-flow-state-${runStage2Status}`}>
+                {t(`eval.flow.state.${runStage2Status}` as Parameters<typeof t>[0])}
+              </span>
+            </div>
+            <div className={`eval-flow-step is-${runStage3Status}`}>
+              <span className="eval-flow-index">3</span>
+              <div>
+                <strong>{t("eval.running.stage.finalize")}</strong>
+                <small>{t("eval.running.stage.finalizeDesc")}</small>
+              </div>
+              <span className={`eval-flow-state eval-flow-state-${runStage3Status}`}>
+                {t(`eval.flow.state.${runStage3Status}` as Parameters<typeof t>[0])}
+              </span>
+            </div>
+          </section>
+        </article>
+      )}
+
+      {showFixedRunDock && (
+        <article className="eval-run-dock" ref={runDockRef}>
         <div className="eval-run-dock-head">
           <h3 className="chart-title">{t("eval.runDock.title")}</h3>
           <div className="eval-run-dock-actions">
@@ -2078,7 +3134,8 @@ export default function EvalPage({ skills }: Props) {
         >
           <span style={{ width: `${progressPercent}%` }} />
         </div>
-      </article>
+        </article>
+      )}
 
       {showSamples && (triggerDraftRows.length > 0 || functionalDraftRows.length > 0) && (
         <div
@@ -2396,6 +3453,14 @@ export default function EvalPage({ skills }: Props) {
                               <span className="eval-history-item-label">{t("eval.config.model")}</span>
                               <strong>{item.model}</strong>
                             </div>
+                            <div>
+                              <span className="eval-history-item-label">{t("eval.history.reviewStatus")}</span>
+                              <strong>
+                                {item.reviewSummary?.reviewed
+                                  ? item.reviewSummary.finalVerdict || t("eval.review.reviewed")
+                                  : t("eval.review.pending")}
+                              </strong>
+                            </div>
                           </div>
                           <div className="eval-history-item-actions">
                             <button
@@ -2499,11 +3564,39 @@ export default function EvalPage({ skills }: Props) {
         </div>
       )}
 
-      {report && (
+      {showReviewView && report?.mode === "full" && (
         <>
+          <article className="chart-card eval-review-entry-card">
+            <div className="eval-review-entry-head">
+              <h3 className="chart-title">{t("eval.review.entryTitle")}</h3>
+              <button className="btn btn-primary" onClick={() => setView("result")}>
+                {t("eval.review.enterResults")}
+              </button>
+            </div>
+            <p className="eval-path-hint">{t("eval.review.entryHint")}</p>
+          </article>
+          {renderGateAndQuickChecks()}
+          {renderEvidenceOverview()}
+          {renderReviewWorkbench()}
+        </>
+      )}
+
+      {showResultView && report && (
+        <>
+          {report.mode === "full" && (
+            <article className="chart-card eval-review-entry-card">
+              <div className="eval-review-entry-head">
+                <h3 className="chart-title">{t("eval.results.title")}</h3>
+                <button className="btn btn-ghost" onClick={() => setView("review")}>
+                  {t("eval.results.backToReview")}
+                </button>
+              </div>
+            </article>
+          )}
           {renderGateAndQuickChecks()}
           {renderEvidenceOverview()}
           {renderEconomicsPanel()}
+          {renderComparatorAnalyzerPanel()}
           {renderModuleResultsPanel()}
           {renderSummaryKpis()}
           {renderModeKpis()}
@@ -2516,7 +3609,7 @@ export default function EvalPage({ skills }: Props) {
         </>
       )}
 
-      {!report && !running && !status && <div className="empty-state">{t("eval.empty")}</div>}
+      {showSetupView && !report && !running && !status && <div className="empty-state">{t("eval.empty")}</div>}
     </div>
   );
 }

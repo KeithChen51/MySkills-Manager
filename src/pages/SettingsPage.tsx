@@ -66,7 +66,8 @@ export default function SettingsPage({
   const [apiConfig, setApiConfig] = useState<EvalConfig>({
     apiKey: "",
     provider: "openai-compatible",
-    defaultModel: "gpt-4o-mini",
+    sampleModel: "gpt-4o-mini",
+    runModel: "gpt-4o-mini",
     costCurrency: "USD",
   });
   const [busy, setBusy] = useState(false);
@@ -94,7 +95,8 @@ export default function SettingsPage({
           apiKey: evalConfig.apiKey,
           provider: evalConfig.provider || "openai-compatible",
           baseUrl: evalConfig.baseUrl,
-          defaultModel: evalConfig.defaultModel || "gpt-4o-mini",
+          sampleModel: evalConfig.sampleModel || evalConfig.defaultModel || "gpt-4o-mini",
+          runModel: evalConfig.runModel || evalConfig.defaultModel || "gpt-4o-mini",
           costCurrency: normalizeCostCurrency(evalConfig.costCurrency),
         });
         setAppVersion(version);
@@ -170,7 +172,8 @@ export default function SettingsPage({
         apiKey: apiConfig.apiKey.trim(),
         provider: "openai-compatible",
         baseUrl: apiConfig.baseUrl?.trim() || undefined,
-        defaultModel: apiConfig.defaultModel.trim() || "gpt-4o-mini",
+        sampleModel: apiConfig.sampleModel.trim() || "gpt-4o-mini",
+        runModel: apiConfig.runModel.trim() || "gpt-4o-mini",
         costCurrency: normalizeCostCurrency(apiConfig.costCurrency),
       };
       await evalSaveConfig(normalized);
@@ -476,14 +479,30 @@ export default function SettingsPage({
           />
         </div>
         <div className="field">
-          <label className="field-label">{t("settings.evalConfig.defaultModel")}</label>
+          <label className="field-label">{t("settings.evalConfig.sampleModel")}</label>
           <input
             className="field-input"
-            value={apiConfig.defaultModel}
+            value={apiConfig.sampleModel}
             onChange={(e) =>
               setApiConfig((prev) => ({
                 ...prev,
-                defaultModel: e.target.value,
+                sampleModel: e.target.value,
+              }))
+            }
+            placeholder="gpt-4o-mini"
+            autoComplete="off"
+            disabled={busy || apiBusy}
+          />
+        </div>
+        <div className="field">
+          <label className="field-label">{t("settings.evalConfig.runModel")}</label>
+          <input
+            className="field-input"
+            value={apiConfig.runModel}
+            onChange={(e) =>
+              setApiConfig((prev) => ({
+                ...prev,
+                runModel: e.target.value,
               }))
             }
             placeholder="gpt-4o-mini"

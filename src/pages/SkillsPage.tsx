@@ -279,8 +279,8 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
 
   return (
     <div className="page animate-fadein skills-page">
-      <header className="page-header skills-page-header">
-        <div className="skills-header-copy">
+      <header className="page-header skills-page-header page-header-grid">
+        <div className="skills-header-copy page-header-copy">
           <h1 className="page-title">{t("skills.title")}</h1>
           <p className="skills-installed">{t("skills.installed", { count: skills.length })}</p>
           <p className="skills-installed">
@@ -289,8 +289,8 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
           <p className="skills-installed">{t("skills.eval.nonBlockingHint")}</p>
           {actionStatus ? <p className="skills-action-status">{actionStatus}</p> : null}
         </div>
-        <div className="skills-header-actions">
-          <div className="skills-actions-row skills-actions-row-primary">
+        <div className="skills-header-actions page-header-actions-grid">
+          <div className="skills-actions-row skills-actions-row-primary page-header-actions-row">
             <div className="skills-insight-window-switch" role="tablist" aria-label={t("skills.insights.window.label")}>
               {[7, 30, 90].map((window) => (
                 <button
@@ -336,7 +336,7 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
             </div>
           </div>
 
-          <div className="skills-actions-row skills-actions-row-secondary">
+          <div className="skills-actions-row skills-actions-row-secondary page-header-actions-row">
             <section className="skills-filter-cluster" aria-label={t("skills.taxonomy.standard.label")}>
               <p className="skills-filter-cluster-title">{t("skills.taxonomy.standard.label")}</p>
               <div className="skills-filter-cluster-controls">

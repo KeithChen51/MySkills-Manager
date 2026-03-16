@@ -1,11 +1,15 @@
 .page {
+  --page-grid-inset-x: var(--sp-xl);
+  --page-grid-inset-y: var(--sp-xl);
+  --page-grid-gap: var(--sp-lg);
+  --page-header-actions-max-width: 1140px;
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: var(--sp-lg);
+  gap: var(--page-grid-gap);
   min-height: 0;
   overflow-y: auto;
-  padding: var(--sp-xl);
+  padding: var(--page-grid-inset-y) var(--page-grid-inset-x);
 }
 
 .page-header {
@@ -13,6 +17,34 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--sp-md);
+}
+
+.page-header-grid {
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+.page-header-copy {
+  display: grid;
+  gap: var(--sp-2xs);
+  min-width: 0;
+}
+
+.page-header-actions-grid {
+  display: grid;
+  gap: var(--sp-sm);
+  justify-items: end;
+  margin-left: auto;
+  width: min(100%, var(--page-header-actions-max-width, 1140px));
+}
+
+.page-header-actions-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-sm);
+  justify-content: flex-end;
+  width: 100%;
 }
 
 .page-title {
@@ -172,7 +204,21 @@
 
 @media (max-width: 900px) {
   .page {
-    padding: var(--sp-lg);
+    --page-grid-inset-x: var(--sp-lg);
+    --page-grid-inset-y: var(--sp-lg);
+  }
+
+  .page-header-grid {
+    align-items: stretch;
+  }
+
+  .page-header-actions-grid {
+    justify-items: stretch;
+    width: 100%;
+  }
+
+  .page-header-actions-row {
+    justify-content: flex-start;
   }
 
   .kpi-row {

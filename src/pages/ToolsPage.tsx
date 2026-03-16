@@ -110,37 +110,39 @@ export default function ToolsPage() {
 
   return (
     <div className="page animate-fadein tools-page">
-      <header className="page-header tools-page-header">
-        <div className="tools-header-copy">
+      <header className="page-header tools-page-header page-header-grid">
+        <div className="tools-header-copy page-header-copy">
           <h1 className="page-title">{t("tools.title")}</h1>
           <p className="tools-installed">{t("tools.count", { count: tools.length })}</p>
         </div>
-        <div className="tools-header-actions">
-          {status && (
-            <span className="tools-header-status" role="status" aria-live="polite">
-              {status}
-            </span>
-          )}
-          <button className="btn btn-ghost tools-header-btn" onClick={() => void loadStatus()} disabled={busy}>
-            <IconRefresh size={14} />
-            {t("tools.refresh")}
-          </button>
-          <button
-            className={`btn tools-header-btn ${showCustomForm ? "btn-ghost" : "btn-primary"}`}
-            onClick={() => setShowCustomForm((prev) => !prev)}
-            disabled={submitting}
-          >
-            {showCustomForm ? <IconClose size={14} /> : <IconPlus size={14} />}
-            {showCustomForm ? t("tools.form.hide") : t("tools.form.show")}
-          </button>
-          <button
-            className="btn btn-primary tools-header-btn"
-            onClick={() => void handleApplyAutoTools()}
-            disabled={busy || autoToolIds.length === 0}
-          >
-            <IconSave size={14} />
-            {busy ? t("tools.syncing") : t("tools.apply.auto.button", { count: autoToolIds.length })}
-          </button>
+        <div className="tools-header-actions page-header-actions-grid">
+          <div className="tools-actions-row page-header-actions-row">
+            {status && (
+              <span className="tools-header-status" role="status" aria-live="polite">
+                {status}
+              </span>
+            )}
+            <button className="btn btn-ghost tools-header-btn" onClick={() => void loadStatus()} disabled={busy}>
+              <IconRefresh size={14} />
+              {t("tools.refresh")}
+            </button>
+            <button
+              className={`btn tools-header-btn ${showCustomForm ? "btn-ghost" : "btn-primary"}`}
+              onClick={() => setShowCustomForm((prev) => !prev)}
+              disabled={submitting}
+            >
+              {showCustomForm ? <IconClose size={14} /> : <IconPlus size={14} />}
+              {showCustomForm ? t("tools.form.hide") : t("tools.form.show")}
+            </button>
+            <button
+              className="btn btn-primary tools-header-btn"
+              onClick={() => void handleApplyAutoTools()}
+              disabled={busy || autoToolIds.length === 0}
+            >
+              <IconSave size={14} />
+              {busy ? t("tools.syncing") : t("tools.apply.auto.button", { count: autoToolIds.length })}
+            </button>
+          </div>
         </div>
       </header>
 

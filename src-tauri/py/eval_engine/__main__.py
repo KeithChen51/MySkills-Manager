@@ -40,6 +40,7 @@ def _build_parser() -> argparse.ArgumentParser:
     trigger_parser.add_argument("--installed-skills-dir", type=Path)
     trigger_parser.add_argument("--api-key", required=True)
     trigger_parser.add_argument("--model", required=True)
+    trigger_parser.add_argument("--max-workers", type=int, default=10)
     trigger_parser.add_argument("--base-url")
     trigger_parser.add_argument("--provider")
 
@@ -60,6 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     functional_parser.add_argument("--api-key", required=True)
     functional_parser.add_argument("--model", required=True)
+    functional_parser.add_argument("--max-workers", type=int, default=5)
     functional_parser.add_argument("--base-url")
     functional_parser.add_argument("--provider")
 

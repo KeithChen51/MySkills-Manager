@@ -29,7 +29,7 @@
   gap: var(--sp-sm);
   justify-items: end;
   margin-left: auto;
-  width: min(100%, 1140px);
+  width: min(100%, var(--page-header-actions-max-width, 1140px));
 }
 
 .skills-actions-row {
