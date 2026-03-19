@@ -9,6 +9,7 @@ import {
   type InsightTrend,
   type SkillInsightWindow,
 } from "../domain/skillInsights";
+import { formatTaxonomyTagLabel } from "../domain/skillTaxonomyDisplay";
 import { IconEdit, IconMoreHorizontal, IconTrash } from "./icons";
 import { useI18n } from "../i18n/I18nProvider";
 import "./SkillCard.css";
@@ -39,6 +40,7 @@ export default function SkillCard({
   deleteBusy = false,
 }: Props) {
   const { t, locale } = useI18n();
+  const preferChineseTaxonomy = locale.toLowerCase().startsWith("zh");
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -171,7 +173,7 @@ export default function SkillCard({
             <div className="skill-card-tags">
               {chips.map((chip) => (
                 <span key={chip} className="skill-card-tag">
-                  {chip}
+                  {formatTaxonomyTagLabel(chip, preferChineseTaxonomy)}
                 </span>
               ))}
               {(tags?.length ?? 0) > chips.length && (

@@ -18,6 +18,11 @@ import {
   compareSkillNamesByMode,
   type SkillInsightWindow,
 } from "../domain/skillInsights";
+import {
+  formatTaxonomyGroupLabel,
+  formatTaxonomyTagLabel,
+  formatTaxonomyValueLabel,
+} from "../domain/skillTaxonomyDisplay";
 import { formatLogTimestamp } from "../domain/logTimestamp";
 import { useI18n } from "../i18n/I18nProvider";
 import SkillConflictDrawer from "./skills/SkillConflictDrawer";
@@ -38,6 +43,7 @@ type GroupedSkills = {
 
 export default function SkillsPage({ skills, onRefresh }: Props) {
   const { t, locale } = useI18n();
+  const preferChineseTaxonomy = locale.toLowerCase().startsWith("zh");
   const [search, setSearch] = useState("");
   const [taxonomyStandard, setTaxonomyStandard] = useState<"sok" | "anthropic" | "skillsbench-domain" | "skillsbench-difficulty">("sok");
   const [taxonomyGroup, setTaxonomyGroup] = useState("all");
@@ -87,6 +93,10 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
     return skills.filter((s) => {
       if (!q) return true;
       const tags = (s.tags ?? []).join(" ").toLowerCase();
+      const tagsLocalized = (s.tags ?? [])
+        .map((tag) => formatTaxonomyTagLabel(tag, preferChineseTaxonomy))
+        .join(" ")
+        .toLowerCase();
       const notes = (s.my_notes ?? "").toLowerCase();
       const taxonomy = s.taxonomy
         ? [
@@ -101,15 +111,30 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
           .join(" ")
           .toLowerCase()
         : "";
+      const taxonomyLocalized = s.taxonomy
+        ? [
+          formatTaxonomyValueLabel(s.taxonomy.sokRepresentation, preferChineseTaxonomy),
+          formatTaxonomyValueLabel(s.taxonomy.sokScope, preferChineseTaxonomy),
+          formatTaxonomyGroupLabel(s.taxonomy.sokGroup, preferChineseTaxonomy),
+          formatTaxonomyValueLabel(s.taxonomy.anthropicCategory, preferChineseTaxonomy),
+          formatTaxonomyValueLabel(s.taxonomy.skillsbenchDomain, preferChineseTaxonomy),
+          formatTaxonomyValueLabel(s.taxonomy.skillsbenchDifficultyCore, preferChineseTaxonomy),
+          formatTaxonomyValueLabel(s.taxonomy.skillsbenchDifficultyLevel, preferChineseTaxonomy),
+        ]
+          .join(" ")
+          .toLowerCase()
+        : "";
       return (
         s.name.toLowerCase().includes(q) ||
         (s.description ?? "").toLowerCase().includes(q) ||
         tags.includes(q) ||
+        tagsLocalized.includes(q) ||
         notes.includes(q) ||
-        taxonomy.includes(q)
+        taxonomy.includes(q) ||
+        taxonomyLocalized.includes(q)
       );
     });
-  }, [search, skills]);
+  }, [preferChineseTaxonomy, search, skills]);
 
   const insightBySkill = useMemo(() => {
     return new Map(insights.map((item) => [item.skillName, item]));
@@ -127,7 +152,7 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
     const groups = Array.from(bucket.entries())
       .map(([key, groupSkills]): GroupedSkills => ({
         key,
-        label: key,
+        label: key === unclassifiedLabel ? key : formatTaxonomyGroupLabel(key, preferChineseTaxonomy),
         skills: [...groupSkills].sort((a, b) =>
           compareSkillNamesByMode(
             a.name,
@@ -139,14 +164,16 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
         ),
       }))
       .sort((a, b) => {
-        if (a.label === unclassifiedLabel) return 1;
-        if (b.label === unclassifiedLabel) return -1;
-        return a.label.localeCompare(b.label);
+        if (a.key === unclassifiedLabel) return 1;
+        if (b.key === unclassifiedLabel) return -1;
+        return a.label.localeCompare(b.label, locale);
       });
     return groups;
   }, [
     insightBySkill,
     insightWindow,
+    locale,
+    preferChineseTaxonomy,
     searchMatched,
     sortMode,
     unclassifiedLabel,
@@ -165,6 +192,14 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
   const visibleCount = useMemo(() => {
     return filteredGroups.reduce((total, group) => total + group.skills.length, 0);
   }, [filteredGroups]);
+
+  const taxonomyGroupLabelByKey = useMemo(() => {
+    const lookup = new Map<string, string>();
+    for (const group of groupedVisibleSkills) {
+      lookup.set(group.key, group.label);
+    }
+    return lookup;
+  }, [groupedVisibleSkills]);
 
   useEffect(() => {
     if (!availableGroups.includes(taxonomyGroup)) {
@@ -377,7 +412,10 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
                 >
                   {availableGroups.map((group) => (
                     <option key={group} value={group}>
-                      {group === "all" ? t("skills.taxonomy.group.all") : group}
+                      {group === "all"
+                        ? t("skills.taxonomy.group.all")
+                        : (taxonomyGroupLabelByKey.get(group) ??
+                          formatTaxonomyGroupLabel(group, preferChineseTaxonomy))}
                     </option>
                   ))}
                 </select>

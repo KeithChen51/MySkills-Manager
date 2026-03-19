@@ -691,6 +691,55 @@ struct EvalPipelineProgressEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     message_args: Option<serde_json::Value>,
     elapsed_ms: u128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage_total: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage_progress_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_progress_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completed_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failed_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_parallel_arms: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trigger_max_workers: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    functional_max_workers: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remaining_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    review_gate_state: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct EvalPipelineProgressMeta {
+    stage_key: Option<String>,
+    stage_label: Option<String>,
+    stage_index: Option<usize>,
+    stage_total: Option<usize>,
+    stage_progress_percent: Option<f64>,
+    total_progress_percent: Option<f64>,
+    total_count: Option<usize>,
+    completed_count: Option<usize>,
+    active_count: Option<usize>,
+    failed_count: Option<usize>,
+    max_parallel_arms: Option<usize>,
+    trigger_max_workers: Option<usize>,
+    functional_max_workers: Option<usize>,
+    remaining_seconds: Option<u64>,
+    review_gate_state: Option<String>,
 }
 
 #[derive(Clone)]
@@ -778,6 +827,50 @@ fn emit_pipeline_progress(app_handle: &tauri::AppHandle, event: EvalPipelineProg
     let _ = app_handle.emit(EVAL_PROGRESS_EVENT, event);
 }
 
+fn stage_progress_percent(completed_count: usize, active_count: usize, total_count: usize) -> f64 {
+    if total_count == 0 {
+        return 100.0;
+    }
+    let completed = completed_count.min(total_count);
+    let active = active_count.min(total_count.saturating_sub(completed));
+    let weighted = completed as f64 + active as f64 * 0.45;
+    ((weighted / total_count as f64) * 100.0).clamp(0.0, 100.0)
+}
+
+fn cap_running_progress(status: &str, value: f64) -> f64 {
+    let bounded = value.clamp(0.0, 100.0);
+    match status {
+        "running" | "paused" => bounded.min(99.0),
+        _ => bounded,
+    }
+}
+
+fn estimate_remaining_seconds(
+    elapsed_ms: u128,
+    total_progress_percent: f64,
+    estimated_total_seconds: u64,
+) -> u64 {
+    if estimated_total_seconds == 0 {
+        return 0;
+    }
+    let elapsed_seconds = elapsed_ms as f64 / 1000.0;
+    if elapsed_seconds <= 0.0 {
+        return estimated_total_seconds;
+    }
+    let progress_ratio = (total_progress_percent / 100.0).clamp(0.0, 1.0);
+    if progress_ratio <= 0.01 {
+        return estimated_total_seconds;
+    }
+    let throughput_total = elapsed_seconds / progress_ratio;
+    let blended_total = throughput_total * 0.6 + estimated_total_seconds as f64 * 0.4;
+    let predicted_total = blended_total.ceil().max(elapsed_seconds.ceil());
+    if predicted_total <= elapsed_seconds {
+        0
+    } else {
+        (predicted_total - elapsed_seconds).ceil() as u64
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_pipeline_progress(
     app_handle: &tauri::AppHandle,
@@ -791,7 +884,7 @@ fn push_pipeline_progress(
     message: &str,
     elapsed_ms: u128,
 ) {
-    push_pipeline_progress_with_i18n(
+    push_pipeline_progress_with_i18n_and_meta(
         app_handle,
         run_id,
         status,
@@ -801,6 +894,7 @@ fn push_pipeline_progress(
         total_steps,
         step_name,
         message,
+        None,
         None,
         None,
         elapsed_ms,
@@ -822,6 +916,40 @@ fn push_pipeline_progress_with_i18n(
     message_args: Option<serde_json::Value>,
     elapsed_ms: u128,
 ) {
+    push_pipeline_progress_with_i18n_and_meta(
+        app_handle,
+        run_id,
+        status,
+        current_repeat,
+        total_repeats,
+        step_index,
+        total_steps,
+        step_name,
+        message,
+        message_key,
+        message_args,
+        None,
+        elapsed_ms,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_pipeline_progress_with_i18n_and_meta(
+    app_handle: &tauri::AppHandle,
+    run_id: &str,
+    status: &str,
+    current_repeat: usize,
+    total_repeats: usize,
+    step_index: usize,
+    total_steps: usize,
+    step_name: &str,
+    message: &str,
+    message_key: Option<&str>,
+    message_args: Option<serde_json::Value>,
+    meta: Option<EvalPipelineProgressMeta>,
+    elapsed_ms: u128,
+) {
+    let meta = meta.unwrap_or_default();
     emit_pipeline_progress(
         app_handle,
         EvalPipelineProgressEvent {
@@ -836,6 +964,21 @@ fn push_pipeline_progress_with_i18n(
             message_key: message_key.map(|key| key.to_string()),
             message_args,
             elapsed_ms,
+            stage_key: meta.stage_key,
+            stage_label: meta.stage_label,
+            stage_index: meta.stage_index,
+            stage_total: meta.stage_total,
+            stage_progress_percent: meta.stage_progress_percent.map(round4),
+            total_progress_percent: meta.total_progress_percent.map(round4),
+            total_count: meta.total_count,
+            completed_count: meta.completed_count,
+            active_count: meta.active_count,
+            failed_count: meta.failed_count,
+            max_parallel_arms: meta.max_parallel_arms,
+            trigger_max_workers: meta.trigger_max_workers,
+            functional_max_workers: meta.functional_max_workers,
+            remaining_seconds: meta.remaining_seconds,
+            review_gate_state: meta.review_gate_state,
         },
     );
 }
@@ -4358,15 +4501,148 @@ fn run_eval_pipeline_impl(
         ));
     }
 
+    let runtime_plan = estimate_pipeline_plan(
+        &skill_path,
+        &mode,
+        &primary_model,
+        &judge_models,
+        &selected_modules,
+        repeats,
+        trigger_cases,
+        functional_cases,
+        max_cost_usd,
+        max_parallel_arms,
+        trigger_max_workers,
+        functional_max_workers,
+    );
+    let estimated_total_seconds = runtime_plan.estimated_seconds.max(1);
+
+    let has_parallel_stage =
+        run_trigger_complex || run_functional_with_skill || run_functional_without_skill;
+    let mut stage_order: Vec<&str> = vec!["prepare", "trigger_clean"];
+    if has_parallel_stage {
+        stage_order.push("parallel_arms");
+    }
+    stage_order.push("finalize");
+    if mode == "full" {
+        stage_order.push("review_queue");
+    }
+
+    let stage_weight_for = |stage_key: &str| -> f64 {
+        match stage_key {
+            "prepare" => runtime_plan
+                .steps
+                .iter()
+                .filter(|step| step.stage.as_deref() == Some("stage0"))
+                .map(|step| step.estimated_seconds as f64)
+                .sum::<f64>()
+                .max(2.0),
+            "trigger_clean" => runtime_plan
+                .steps
+                .iter()
+                .find(|step| step.key == "trigger-clean")
+                .map(|step| step.estimated_seconds as f64)
+                .unwrap_or(1.0)
+                .max(1.0),
+            "parallel_arms" => runtime_plan
+                .steps
+                .iter()
+                .filter(|step| {
+                    matches!(
+                        step.key.as_str(),
+                        "trigger-complex"
+                            | "functional-with-skill"
+                            | "functional-without-skill"
+                            | "auditability-check"
+                    )
+                })
+                .map(|step| step.estimated_seconds as f64)
+                .sum::<f64>()
+                .max(1.0),
+            "finalize" => (repeats.max(1) as f64 * 1.5).max(2.0),
+            "review_queue" => 2.0,
+            _ => 1.0,
+        }
+    };
+    let total_stage_weight: f64 = stage_order
+        .iter()
+        .map(|key| stage_weight_for(key))
+        .sum::<f64>()
+        .max(1.0);
+
+    let stage_label_for = |stage_key: &str| -> &'static str {
+        match stage_key {
+            "prepare" => "prepare",
+            "trigger_clean" => "trigger_clean",
+            "parallel_arms" => "parallel_arms",
+            "finalize" => "finalize",
+            "review_queue" => "review_queue",
+            _ => "pipeline",
+        }
+    };
+
+    let stage_index_for = |stage_key: &str| -> usize {
+        stage_order
+            .iter()
+            .position(|item| *item == stage_key)
+            .map(|index| index + 1)
+            .unwrap_or(1)
+    };
+
+    let compose_progress_meta =
+        |status: &str,
+         stage_key: &str,
+         total_count: usize,
+         completed_count: usize,
+         active_count: usize,
+         failed_count: usize,
+         review_gate_state: Option<&str>,
+         elapsed_ms: u128| {
+            let stage_progress = stage_progress_percent(completed_count, active_count, total_count);
+            let previous_weight = stage_order
+                .iter()
+                .take_while(|item| **item != stage_key)
+                .fold(0.0, |acc, item| acc + stage_weight_for(item));
+            let current_weight = stage_weight_for(stage_key);
+            let raw_total_progress =
+                ((previous_weight + current_weight * (stage_progress / 100.0)) / total_stage_weight)
+                    * 100.0;
+            let total_progress = if status == "completed" {
+                100.0
+            } else {
+                cap_running_progress(status, raw_total_progress)
+            };
+            EvalPipelineProgressMeta {
+                stage_key: Some(stage_key.to_string()),
+                stage_label: Some(stage_label_for(stage_key).to_string()),
+                stage_index: Some(stage_index_for(stage_key)),
+                stage_total: Some(stage_order.len()),
+                stage_progress_percent: Some(if status == "completed" { 100.0 } else { stage_progress }),
+                total_progress_percent: Some(total_progress),
+                total_count: Some(total_count),
+                completed_count: Some(completed_count.min(total_count)),
+                active_count: Some(active_count.min(total_count)),
+                failed_count: Some(failed_count.min(total_count)),
+                max_parallel_arms: Some(max_parallel_arms),
+                trigger_max_workers: Some(trigger_max_workers),
+                functional_max_workers: Some(functional_max_workers),
+                remaining_seconds: Some(if status == "completed" {
+                    0
+                } else {
+                    estimate_remaining_seconds(elapsed_ms, total_progress, estimated_total_seconds)
+                }),
+                review_gate_state: review_gate_state.map(str::to_string),
+            }
+        };
+
     let evidence_root = eval_pipeline_evidence_dir(&home, &skill_name, &run_id);
     fs::create_dir_all(&evidence_root)
         .map_err(|e| format!("Create eval evidence dir failed: {e}"))?;
-    let quick_checks =
-        run_stage0_quick_checks(&skill_path, &trigger_eval_set_path, &taxonomy_result);
 
     let start = std::time::Instant::now();
     let mut executed_steps = 0usize;
-    push_pipeline_progress_with_i18n(
+    let prepare_total_count = 1usize;
+    push_pipeline_progress_with_i18n_and_meta(
         &app_handle,
         &run_id,
         "running",
@@ -4378,8 +4654,20 @@ fn run_eval_pipeline_impl(
         "Evaluation pipeline started.",
         Some("eval.progress.pipelineStarted"),
         None,
+        Some(compose_progress_meta(
+            "running",
+            "prepare",
+            prepare_total_count,
+            0,
+            1,
+            0,
+            if mode == "full" { Some("required") } else { Some("skipped") },
+            start.elapsed().as_millis(),
+        )),
         start.elapsed().as_millis(),
     );
+    let quick_checks =
+        run_stage0_quick_checks(&skill_path, &trigger_eval_set_path, &taxonomy_result);
     if !quick_checks.all_passed {
         let failed_names = quick_checks
             .checks
@@ -4391,7 +4679,7 @@ fn run_eval_pipeline_impl(
             "Quick checks failed; pipeline blocked. Failed checks: {}",
             failed_names.join(", ")
         );
-        push_pipeline_progress(
+        push_pipeline_progress_with_i18n_and_meta(
             &app_handle,
             &run_id,
             "completed",
@@ -4401,6 +4689,18 @@ fn run_eval_pipeline_impl(
             total_steps,
             "quick_checks",
             &blocked_message,
+            None,
+            None,
+            Some(compose_progress_meta(
+                "completed",
+                "prepare",
+                prepare_total_count,
+                prepare_total_count,
+                0,
+                failed_names.len().max(1),
+                Some("blocked"),
+                start.elapsed().as_millis(),
+            )),
             start.elapsed().as_millis(),
         );
         let trigger_metrics = EvalTriggerMetrics {
@@ -4544,6 +4844,30 @@ fn run_eval_pipeline_impl(
             persist_pipeline_history(&home, &skill_name, &blocked_output)?;
         return Ok(blocked_output);
     }
+    push_pipeline_progress_with_i18n_and_meta(
+        &app_handle,
+        &run_id,
+        "running",
+        0,
+        repeats,
+        0,
+        total_steps,
+        "quick_checks",
+        "Stage0 quick checks passed.",
+        None,
+        None,
+        Some(compose_progress_meta(
+            "running",
+            "prepare",
+            prepare_total_count,
+            prepare_total_count,
+            0,
+            0,
+            if mode == "full" { Some("required") } else { Some("skipped") },
+            start.elapsed().as_millis(),
+        )),
+        start.elapsed().as_millis(),
+    );
     let mut last_trigger_clean: Option<TriggerEvalOutput> = None;
     let mut last_trigger_complex: Option<TriggerEvalOutput> = None;
     let mut last_functional: Option<FunctionalEvalOutput> = None;
@@ -4555,6 +4879,12 @@ fn run_eval_pipeline_impl(
     let mut functional_pass_rates: Vec<f64> = Vec::new();
     let mut without_skill_pass_rates: Vec<f64> = Vec::new();
     let mut value_added_rates: Vec<f64> = Vec::new();
+    let parallel_arms_per_repeat = usize::from(run_trigger_complex)
+        + usize::from(run_functional_with_skill)
+        + usize::from(run_functional_without_skill);
+    let parallel_total_count = repeats.saturating_mul(parallel_arms_per_repeat);
+    let mut parallel_completed_count = 0usize;
+    let mut parallel_failed_count = 0usize;
 
     for repeat_index in 0..repeats {
         let current_repeat = repeat_index + 1;
@@ -4571,7 +4901,7 @@ fn run_eval_pipeline_impl(
             "trigger_clean",
             start.elapsed().as_millis(),
         )?;
-        push_pipeline_progress_with_i18n(
+        push_pipeline_progress_with_i18n_and_meta(
             &app_handle,
             &run_id,
             "running",
@@ -4583,6 +4913,16 @@ fn run_eval_pipeline_impl(
             &format!("Round {current_repeat}/{repeats}: running trigger eval (clean)."),
             None,
             None,
+            Some(compose_progress_meta(
+                "running",
+                "trigger_clean",
+                repeats,
+                repeat_index,
+                1,
+                0,
+                if mode == "full" { Some("required") } else { Some("skipped") },
+                start.elapsed().as_millis(),
+            )),
             start.elapsed().as_millis(),
         );
         let trigger_clean = run_trigger_eval_impl(
@@ -4602,7 +4942,7 @@ fn run_eval_pipeline_impl(
             false,
         )
         .map_err(|err| {
-            push_pipeline_progress(
+            push_pipeline_progress_with_i18n_and_meta(
                 &app_handle,
                 &run_id,
                 status_for_error(&err),
@@ -4612,6 +4952,18 @@ fn run_eval_pipeline_impl(
                 total_steps,
                 "trigger_clean",
                 &format!("Round {current_repeat}/{repeats}: trigger clean failed: {err}"),
+                None,
+                None,
+                Some(compose_progress_meta(
+                    status_for_error(&err),
+                    "trigger_clean",
+                    repeats,
+                    repeat_index,
+                    0,
+                    1,
+                    if mode == "full" { Some("required") } else { Some("skipped") },
+                    start.elapsed().as_millis(),
+                )),
                 start.elapsed().as_millis(),
             );
             err
@@ -4665,19 +5017,6 @@ fn run_eval_pipeline_impl(
                     RepeatArm::TriggerComplex => "trigger_complex",
                     RepeatArm::FunctionalWithSkill => "functional_with_skill",
                     RepeatArm::FunctionalWithoutSkill => "functional_without_skill",
-                }
-            };
-            let arm_start_message = |arm: &RepeatArm| -> String {
-                match arm {
-                    RepeatArm::TriggerComplex => {
-                        format!("Round {current_repeat}/{repeats}: running trigger eval (complex).")
-                    }
-                    RepeatArm::FunctionalWithSkill => format!(
-                        "Round {current_repeat}/{repeats}: running functional eval (with skill)."
-                    ),
-                    RepeatArm::FunctionalWithoutSkill => format!(
-                        "Round {current_repeat}/{repeats}: running functional eval (without skill)."
-                    ),
                 }
             };
             let arm_failure_message = |arm: &RepeatArm, err: &str| -> String {
@@ -4744,18 +5083,6 @@ fn run_eval_pipeline_impl(
                         step_name,
                         start.elapsed().as_millis(),
                     )?;
-                    push_pipeline_progress(
-                        &app_handle,
-                        &run_id,
-                        "running",
-                        current_repeat,
-                        repeats,
-                        item.step_index,
-                        total_steps,
-                        step_name,
-                        &arm_start_message(&item.arm),
-                        start.elapsed().as_millis(),
-                    );
 
                     let item_cloned = item.clone();
                     let run_control = control.clone();
@@ -4817,12 +5144,43 @@ fn run_eval_pipeline_impl(
                     ));
                 }
 
+                let chunk_active = chunk.len();
+                push_pipeline_progress_with_i18n_and_meta(
+                    &app_handle,
+                    &run_id,
+                    "running",
+                    current_repeat,
+                    repeats,
+                    chunk.first().map(|item| item.step_index).unwrap_or(executed_steps),
+                    total_steps,
+                    "parallel_arms",
+                    &format!(
+                        "Round {current_repeat}/{repeats}: running {chunk_active} parallel arm(s)."
+                    ),
+                    None,
+                    None,
+                    Some(compose_progress_meta(
+                        "running",
+                        "parallel_arms",
+                        parallel_total_count.max(1),
+                        parallel_completed_count,
+                        chunk_active,
+                        parallel_failed_count,
+                        Some("required"),
+                        start.elapsed().as_millis(),
+                    )),
+                    start.elapsed().as_millis(),
+                );
+
+                let mut remaining_active = chunk_active;
                 for (item, handle) in handles {
                     let result = handle
                         .join()
                         .map_err(|_| format!("Eval arm '{}' panicked", arm_step_name(&item.arm)))?;
+                    remaining_active = remaining_active.saturating_sub(1);
                     let output = result.map_err(|err| {
-                        push_pipeline_progress(
+                        parallel_failed_count = parallel_failed_count.saturating_add(1);
+                        push_pipeline_progress_with_i18n_and_meta(
                             &app_handle,
                             &run_id,
                             status_for_error(&err),
@@ -4832,11 +5190,52 @@ fn run_eval_pipeline_impl(
                             total_steps,
                             arm_step_name(&item.arm),
                             &arm_failure_message(&item.arm, &err),
+                            None,
+                            None,
+                            Some(compose_progress_meta(
+                                status_for_error(&err),
+                                "parallel_arms",
+                                parallel_total_count.max(1),
+                                parallel_completed_count,
+                                remaining_active,
+                                parallel_failed_count,
+                                Some("required"),
+                                start.elapsed().as_millis(),
+                            )),
                             start.elapsed().as_millis(),
                         );
                         err
                     })?;
                     executed_steps += 1;
+                    parallel_completed_count = parallel_completed_count.saturating_add(1);
+                    push_pipeline_progress_with_i18n_and_meta(
+                        &app_handle,
+                        &run_id,
+                        "running",
+                        current_repeat,
+                        repeats,
+                        item.step_index,
+                        total_steps,
+                        arm_step_name(&item.arm),
+                        &format!(
+                            "Round {current_repeat}/{repeats}: completed parallel arm {}/{}.",
+                            parallel_completed_count,
+                            parallel_total_count.max(1)
+                        ),
+                        None,
+                        None,
+                        Some(compose_progress_meta(
+                            "running",
+                            "parallel_arms",
+                            parallel_total_count.max(1),
+                            parallel_completed_count,
+                            remaining_active,
+                            parallel_failed_count,
+                            Some("required"),
+                            start.elapsed().as_millis(),
+                        )),
+                        start.elapsed().as_millis(),
+                    );
                     match output {
                         ArmOutput::TriggerComplex(trigger_complex) => {
                             if let Some(rows) = trigger_complex.results.clone() {
@@ -4893,7 +5292,19 @@ fn run_eval_pipeline_impl(
             });
         }
 
-        push_pipeline_progress_with_i18n(
+        let (repeat_stage_key, repeat_total_count, repeat_completed_count, repeat_active_count, repeat_failed_count) =
+            if mode == "quick" {
+                ("trigger_clean", repeats, current_repeat, 0usize, 0usize)
+            } else {
+                (
+                    "parallel_arms",
+                    parallel_total_count.max(1),
+                    parallel_completed_count,
+                    0usize,
+                    parallel_failed_count,
+                )
+            };
+        push_pipeline_progress_with_i18n_and_meta(
             &app_handle,
             &run_id,
             "running",
@@ -4908,6 +5319,16 @@ fn run_eval_pipeline_impl(
                 "current": current_repeat,
                 "total": repeats,
             })),
+            Some(compose_progress_meta(
+                "running",
+                repeat_stage_key,
+                repeat_total_count,
+                repeat_completed_count,
+                repeat_active_count,
+                repeat_failed_count,
+                if mode == "full" { Some("required") } else { Some("skipped") },
+                start.elapsed().as_millis(),
+            )),
             start.elapsed().as_millis(),
         );
     }
@@ -5097,8 +5518,58 @@ fn run_eval_pipeline_impl(
         message: gate_message,
     };
 
+    push_pipeline_progress_with_i18n_and_meta(
+        &app_handle,
+        &run_id,
+        "running",
+        repeats,
+        repeats,
+        total_steps,
+        total_steps,
+        "finalize",
+        "Finalizing and writing history.",
+        None,
+        None,
+        Some(compose_progress_meta(
+            "running",
+            "finalize",
+            2,
+            1,
+            1,
+            0,
+            if mode == "full" { Some("required") } else { Some("skipped") },
+            start.elapsed().as_millis(),
+        )),
+        start.elapsed().as_millis(),
+    );
     output.history_path = persist_pipeline_history(&home, &skill_name, &output)?;
-    push_pipeline_progress_with_i18n(
+    if mode == "full" {
+        push_pipeline_progress_with_i18n_and_meta(
+            &app_handle,
+            &run_id,
+            "running",
+            repeats,
+            repeats,
+            total_steps,
+            total_steps,
+            "review_queue",
+            "Evaluation complete. Waiting for review in full mode.",
+            None,
+            None,
+            Some(compose_progress_meta(
+                "running",
+                "review_queue",
+                1,
+                1,
+                0,
+                0,
+                Some("required"),
+                start.elapsed().as_millis(),
+            )),
+            start.elapsed().as_millis(),
+        );
+    }
+    push_pipeline_progress_with_i18n_and_meta(
         &app_handle,
         &run_id,
         "completed",
@@ -5110,6 +5581,16 @@ fn run_eval_pipeline_impl(
         "Evaluation pipeline completed.",
         Some("eval.progress.pipelineCompleted"),
         None,
+        Some(compose_progress_meta(
+            "completed",
+            if mode == "full" { "review_queue" } else { "finalize" },
+            if mode == "full" { 1 } else { 2 },
+            if mode == "full" { 1 } else { 2 },
+            0,
+            0,
+            if mode == "full" { Some("required") } else { Some("skipped") },
+            start.elapsed().as_millis(),
+        )),
         start.elapsed().as_millis(),
     );
     Ok(output)
@@ -7074,6 +7555,21 @@ description: A skill that declares agent shape but misses openai metadata.
             message_key: Some("eval.progress.pipelineStarted".to_string()),
             message_args: Some(serde_json::json!({ "current": 1, "total": 2 })),
             elapsed_ms: 123,
+            stage_key: Some("prepare".to_string()),
+            stage_label: Some("prepare".to_string()),
+            stage_index: Some(1),
+            stage_total: Some(4),
+            stage_progress_percent: Some(35.0),
+            total_progress_percent: Some(12.5),
+            total_count: Some(6),
+            completed_count: Some(2),
+            active_count: Some(1),
+            failed_count: Some(0),
+            max_parallel_arms: Some(2),
+            trigger_max_workers: Some(6),
+            functional_max_workers: Some(3),
+            remaining_seconds: Some(180),
+            review_gate_state: Some("required".to_string()),
         };
         let serialized = serde_json::to_value(event).expect("serialize progress event");
         assert_eq!(
@@ -7107,6 +7603,21 @@ description: A skill that declares agent shape but misses openai metadata.
             message_key: None,
             message_args: None,
             elapsed_ms: 1,
+            stage_key: None,
+            stage_label: None,
+            stage_index: None,
+            stage_total: None,
+            stage_progress_percent: None,
+            total_progress_percent: None,
+            total_count: None,
+            completed_count: None,
+            active_count: None,
+            failed_count: None,
+            max_parallel_arms: None,
+            trigger_max_workers: None,
+            functional_max_workers: None,
+            remaining_seconds: None,
+            review_gate_state: None,
         };
         let serialized = serde_json::to_value(event).expect("serialize progress event");
         assert!(serialized.get("messageKey").is_none());

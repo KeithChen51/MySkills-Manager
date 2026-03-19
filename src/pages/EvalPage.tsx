@@ -23,6 +23,7 @@ import {
   type EvalModuleKey,
   type EvalPipelineEstimate,
   type EvalPipelineOutput,
+  type EvalPipelineProgressEvent,
   type EvalSampleGenerationTimingEntry,
   type EvalStoragePaths,
   type SkillMeta,
@@ -62,20 +63,6 @@ type TriggerBucketKey =
   | "boundary_ambiguous"
   | "adjacent_skill_confusion";
 
-type EvalProgressEvent = {
-  runId: string;
-  status: "running" | "paused" | "completed" | "cancelled" | "error" | string;
-  currentRepeat: number;
-  totalRepeats: number;
-  stepIndex: number;
-  totalSteps: number;
-  stepName: string;
-  message: string;
-  messageKey?: string;
-  messageArgs?: Record<string, string | number | boolean>;
-  elapsedMs: number;
-};
-
 type EvalView = "setup" | "running" | "review" | "result";
 
 type EvalRunSnapshot = {
@@ -98,6 +85,9 @@ const EVAL_PROGRESS_STEP_KEYS: Record<string, MessageKey> = {
   trigger_complex: "eval.progress.step.triggerComplex",
   functional_with_skill: "eval.progress.step.functionalWithSkill",
   functional_without_skill: "eval.progress.step.functionalWithoutSkill",
+  parallel_arms: "eval.progress.step.parallelArms",
+  finalize: "eval.progress.step.finalize",
+  review_queue: "eval.progress.step.reviewQueue",
 };
 
 const USD_TO_CNY_RATE = 7.2;
@@ -193,22 +183,6 @@ function resolveFlowStatus(
   if (activeStep === step) return "active";
   if (done) return "done";
   return "pending";
-}
-
-function resolveRunViewStage(stepName: string | undefined, status: string | undefined): 1 | 2 | 3 {
-  const normalized = (stepName || "").trim().toLowerCase();
-  if (
-    normalized === "pipeline" ||
-    normalized === "taxonomy" ||
-    normalized === "quick_checks" ||
-    normalized.startsWith("quick-")
-  ) {
-    return 1;
-  }
-  if (normalized === "repeat_complete" || status === "completed") {
-    return 3;
-  }
-  return 2;
 }
 
 function defaultSelectedModules(): EvalModuleKey[] {
@@ -405,7 +379,7 @@ export default function EvalPage({ skills }: Props) {
   const [running, setRunning] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
-  const [progressEvent, setProgressEvent] = useState<EvalProgressEvent | null>(null);
+  const [progressEvent, setProgressEvent] = useState<EvalPipelineProgressEvent | null>(null);
   const [progressStartedAtMs, setProgressStartedAtMs] = useState<number | null>(null);
   const [progressElapsedMs, setProgressElapsedMs] = useState(0);
   const [controlBusy, setControlBusy] = useState(false);
@@ -619,12 +593,37 @@ export default function EvalPage({ skills }: Props) {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    void listen<EvalProgressEvent>("eval://pipeline-progress", (event) => {
+    void listen<EvalPipelineProgressEvent>("eval://pipeline-progress", (event) => {
       const payload = event.payload;
       if (!activeRunIdRef.current || payload.runId !== activeRunIdRef.current) {
         return;
       }
-      setProgressEvent(payload);
+      setProgressEvent((previous) =>
+        previous
+          ? {
+              ...previous,
+              ...payload,
+              stageKey: payload.stageKey ?? previous.stageKey,
+              stageLabel: payload.stageLabel ?? previous.stageLabel,
+              stageIndex: payload.stageIndex ?? previous.stageIndex,
+              stageTotal: payload.stageTotal ?? previous.stageTotal,
+              stageProgressPercent:
+                payload.stageProgressPercent ?? previous.stageProgressPercent,
+              totalProgressPercent:
+                payload.totalProgressPercent ?? previous.totalProgressPercent,
+              totalCount: payload.totalCount ?? previous.totalCount,
+              completedCount: payload.completedCount ?? previous.completedCount,
+              activeCount: payload.activeCount ?? previous.activeCount,
+              failedCount: payload.failedCount ?? previous.failedCount,
+              maxParallelArms: payload.maxParallelArms ?? previous.maxParallelArms,
+              triggerMaxWorkers: payload.triggerMaxWorkers ?? previous.triggerMaxWorkers,
+              functionalMaxWorkers:
+                payload.functionalMaxWorkers ?? previous.functionalMaxWorkers,
+              remainingSeconds: payload.remainingSeconds ?? previous.remainingSeconds,
+              reviewGateState: payload.reviewGateState ?? previous.reviewGateState,
+            }
+          : payload,
+      );
       setProgressStartedAtMs(Date.now() - payload.elapsedMs);
       setProgressElapsedMs(payload.elapsedMs);
       if (payload.status === "cancelled") {
@@ -1184,9 +1183,42 @@ export default function EvalPage({ skills }: Props) {
         setStatus("");
       }
     } catch (error: unknown) {
-      setView("setup");
-      setRunSnapshot(null);
-      setStatus(`${t("eval.error.runFailed")}: ${String(error)}`);
+      const errorMessage = `${t("eval.error.runFailed")}: ${String(error)}`;
+      setView("running");
+      setProgressEvent((previous) => {
+        if (!previous) {
+          return {
+            runId,
+            status: "error",
+            currentRepeat: 0,
+            totalRepeats: repeats,
+            stepIndex: 0,
+            totalSteps: 1,
+            stepName: "pipeline",
+            message: errorMessage,
+            elapsedMs: progressElapsedMs,
+            totalProgressPercent: 99,
+            stageProgressPercent: 99,
+            totalCount: 1,
+            completedCount: 0,
+            activeCount: 0,
+            failedCount: 1,
+            remainingSeconds: 0,
+          };
+        }
+        return {
+          ...previous,
+          runId,
+          status: "error",
+          message: errorMessage,
+          activeCount: 0,
+          failedCount: Math.max(1, previous.failedCount ?? 0),
+          remainingSeconds: 0,
+          totalProgressPercent: Math.min(99, Math.max(0, previous.totalProgressPercent ?? 99)),
+          stageProgressPercent: Math.min(99, Math.max(0, previous.stageProgressPercent ?? 99)),
+        };
+      });
+      setStatus(errorMessage);
     } finally {
       setActiveRunId(null);
       setPauseRequested(false);
@@ -1654,6 +1686,50 @@ export default function EvalPage({ skills }: Props) {
     return normalized;
   }
 
+  function renderAnalyzerReason(raw: string): string {
+    const normalized = raw.trim();
+    if (!normalized) return t("eval.common.na");
+    const match = normalized.match(/^([a-z_]+):([a-z0-9_]+)\s+\((\d+)\)$/i);
+    if (!match) return t("eval.analysis.reason.generic");
+    const errorType = match[2];
+    if (errorType === "routing_mismatch") {
+      return t("eval.analysis.reason.routingMismatch");
+    }
+    if (errorType === "assertion_or_quality_failed") {
+      return t("eval.analysis.reason.assertionOrQualityFailed");
+    }
+    if (errorType.includes("network") || errorType.includes("timeout")) {
+      return t("eval.analysis.reason.network");
+    }
+    if (errorType.includes("parse") || errorType.includes("json")) {
+      return t("eval.analysis.reason.parse");
+    }
+    return t("eval.analysis.reason.generic");
+  }
+
+  function renderComparatorHighlight(raw: string): string {
+    const normalized = raw.trim();
+    if (!normalized) return t("eval.common.na");
+    const lower = normalized.toLowerCase();
+    if (
+      lower.includes("improved") &&
+      lower.includes("regressed") &&
+      lower.includes("unchanged")
+    ) {
+      return t("eval.analysis.highlight.distribution");
+    }
+    if (lower.includes("average delta")) {
+      return t("eval.analysis.highlight.averageDelta");
+    }
+    if (lower.includes("with-skill")) {
+      return t("eval.analysis.highlight.withSkill");
+    }
+    if (lower.includes("without-skill") || lower.includes("baseline")) {
+      return t("eval.analysis.highlight.withoutSkill");
+    }
+    return normalized;
+  }
+
   function handleToggleModule(moduleKey: EvalModuleKey) {
     setSelectedModules((prev) => {
       const exists = prev.includes(moduleKey);
@@ -2035,7 +2111,14 @@ export default function EvalPage({ skills }: Props) {
         {comparator?.highlights?.length ? (
           <ul className="eval-advisory-reasons">
             {comparator.highlights.map((item, index) => (
-              <li key={`cmp-${index}`}>{item}</li>
+              <li key={`cmp-${index}`}>{renderComparatorHighlight(item)}</li>
+            ))}
+          </ul>
+        ) : null}
+        {analyzer?.topFailurePatterns?.length ? (
+          <ul className="eval-advisory-reasons">
+            {analyzer.topFailurePatterns.map((item, index) => (
+              <li key={`anlz-reason-${index}`}>{renderAnalyzerReason(item)}</li>
             ))}
           </ul>
         ) : null}
@@ -2055,6 +2138,48 @@ export default function EvalPage({ skills }: Props) {
     const reviewed = Boolean(report.reviewSummary?.reviewed);
     const reviewedVerdict = report.reviewSummary?.finalVerdict || report.finalVerdict || naLabel;
     const failedCaseOptions = report.functional.results?.filter((item) => !item.passed) || [];
+    const advisoryLevelLabel =
+      report.advisory?.level === "high_risk"
+        ? t("eval.advisory.level.highRisk")
+        : report.advisory?.level === "warn"
+          ? t("eval.advisory.level.warn")
+          : report.advisory?.level === "pass"
+            ? t("eval.advisory.level.pass")
+            : naLabel;
+    const riskReasonCount = report.advisory?.reasons?.length ?? 0;
+    const evidenceReady = reviewEvidence.trim().length > 0;
+    const verdictReady =
+      reviewFinalVerdict.trim().length > 0 &&
+      (!reviewOverrideGate || reviewOverrideReason.trim().length > 0);
+    const selectedCaseLabel = reviewCaseId.trim() || t("eval.review.guideNoCaseSelected");
+    const reviewGuideItems = [
+      {
+        key: "risk",
+        done: true,
+        title: t("eval.review.guideRiskTitle"),
+        detail: t("eval.review.guideRiskDetail", {
+          level: advisoryLevelLabel,
+          count: riskReasonCount,
+        }),
+      },
+      {
+        key: "evidence",
+        done: evidenceReady,
+        title: t("eval.review.guideEvidenceTitle"),
+        detail: reviewCaseId.trim()
+          ? t("eval.review.guideEvidenceDetailWithCase", {
+              caseId: selectedCaseLabel,
+              count: failedCaseOptions.length,
+            })
+          : t("eval.review.guideEvidenceDetailNoCase", { count: failedCaseOptions.length }),
+      },
+      {
+        key: "verdict",
+        done: verdictReady,
+        title: t("eval.review.guideVerdictTitle"),
+        detail: t("eval.review.guideVerdictDetail"),
+      },
+    ];
     return (
       <article className="chart-card eval-review-card">
         <div className="eval-advisory-head">
@@ -2063,6 +2188,23 @@ export default function EvalPage({ skills }: Props) {
             {reviewed ? t("eval.review.reviewed") : t("eval.review.pending")}
           </span>
         </div>
+        <section className="eval-review-guide" aria-label={t("eval.review.guideTitle")}>
+          <h4 className="chart-title">{t("eval.review.guideTitle")}</h4>
+          <p className="eval-path-hint">{t("eval.review.guideHint")}</p>
+          <ol className="eval-review-guide-list">
+            {reviewGuideItems.map((item) => (
+              <li key={item.key} className="eval-review-guide-item">
+                <div className="eval-review-guide-copy">
+                  <strong>{item.title}</strong>
+                  <small>{item.detail}</small>
+                </div>
+                <span className={`eval-badge ${item.done ? "eval-badge-pass" : "eval-badge-fail"}`}>
+                  {item.done ? t("eval.review.guideDone") : t("eval.review.guideTodo")}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
         <div className="eval-history-detail-grid">
           <div>
             <span className="eval-history-item-label">{t("eval.review.currentVerdict")}</span>
@@ -2344,22 +2486,37 @@ export default function EvalPage({ skills }: Props) {
   const currentStep = Math.min(progressEvent?.stepIndex ?? 0, totalSteps);
   const isRunningProgress = progressEvent?.status === "running";
   const isCompletedProgress = progressEvent?.status === "completed";
+  const isTerminalProgress =
+    progressEvent?.status === "completed" ||
+    progressEvent?.status === "cancelled" ||
+    progressEvent?.status === "error";
   const runningStepInFlight =
     isRunningProgress && progressEvent?.stepName !== "repeat_complete" && progressEvent?.stepName !== "pipeline";
   const completedSteps = isRunningProgress
     ? runningStepInFlight
       ? Math.max(currentStep - 1, 0)
       : currentStep
-    : currentStep;
+      : currentStep;
   const inFlightFraction = runningStepInFlight ? 0.5 : 0;
   const runningProgressPercentRaw = Math.round(((completedSteps + inFlightFraction) / totalSteps) * 100);
+  const stageProgressPercent = Math.round(
+    Math.max(0, Math.min(100, progressEvent?.stageProgressPercent ?? runningProgressPercentRaw)),
+  );
+  const totalProgressPercentRaw = Math.round(
+    Math.max(0, Math.min(100, progressEvent?.totalProgressPercent ?? runningProgressPercentRaw)),
+  );
   const progressPercent = isCompletedProgress
     ? 100
     : running
-      ? Math.min(99, Math.max(0, runningProgressPercentRaw))
+      ? Math.min(99, Math.max(0, totalProgressPercentRaw))
       : report
         ? 100
         : 0;
+  const stageCompletedCount = Math.max(0, progressEvent?.completedCount ?? 0);
+  const stageActiveCount = Math.max(0, progressEvent?.activeCount ?? (running ? 1 : 0));
+  const stageFailedCount = Math.max(0, progressEvent?.failedCount ?? 0);
+  const stageTotalCount = Math.max(progressEvent?.totalCount ?? 0, stageCompletedCount + stageActiveCount);
+  const remainingSeconds = progressEvent?.remainingSeconds;
   const progressStepLabel = (stepName: string) => {
     const messageKey = EVAL_PROGRESS_STEP_KEYS[stepName];
     if (!messageKey) {
@@ -2484,12 +2641,66 @@ export default function EvalPage({ skills }: Props) {
   const showReviewView = view === "review";
   const showResultView = view === "result";
   const showFixedRunDock = showSetupView;
-  const runStage = resolveRunViewStage(progressEvent?.stepName, progressEvent?.status);
-  const runStage1Status: EvalFlowStatus =
-    runStage <= 1 ? "active" : "done";
-  const runStage2Status: EvalFlowStatus =
-    runStage === 1 ? "pending" : runStage === 2 ? "active" : "done";
-  const runStage3Status: EvalFlowStatus = runStage >= 3 ? "active" : "pending";
+  const runtimeStageDefs = useMemo(
+    () => {
+      const stages = [
+        {
+          key: "prepare",
+          title: t("eval.running.stage.prepare"),
+          desc: t("eval.running.stage.prepareDesc"),
+        },
+        {
+          key: "trigger_clean",
+          title: t("eval.running.stage.triggerClean"),
+          desc: t("eval.running.stage.triggerCleanDesc"),
+        },
+      ];
+      if (runSnapshot?.mode !== "quick") {
+        stages.push({
+          key: "parallel_arms",
+          title: t("eval.running.stage.parallelArms"),
+          desc: t("eval.running.stage.parallelArmsDesc"),
+        });
+      }
+      stages.push({
+        key: "finalize",
+        title: t("eval.running.stage.finalize"),
+        desc: t("eval.running.stage.finalizeDesc"),
+      });
+      if (runSnapshot?.mode === "full") {
+        stages.push({
+          key: "review_queue",
+          title: t("eval.running.stage.reviewQueue"),
+          desc: t("eval.running.stage.reviewQueueDesc"),
+        });
+      }
+      return stages;
+    },
+    [runSnapshot?.mode, t],
+  );
+  const activeRuntimeStageKey =
+    progressEvent?.stageKey?.trim() ||
+    (runtimeStageDefs.length > 0 ? runtimeStageDefs[0].key : "prepare");
+  const activeRuntimeStageIndex = Math.max(
+    0,
+    runtimeStageDefs.findIndex((item) => item.key === activeRuntimeStageKey),
+  );
+  const runtimeStageStatuses: EvalFlowStatus[] = runtimeStageDefs.map((_, index) => {
+    if (isCompletedProgress) {
+      return "done";
+    }
+    if (activeRuntimeStageIndex < 0) {
+      return index === 0 ? "active" : "pending";
+    }
+    if (index < activeRuntimeStageIndex) {
+      return "done";
+    }
+    if (index === activeRuntimeStageIndex) {
+      return isTerminalProgress ? "done" : "active";
+    }
+    return "pending";
+  });
+  const activeRuntimeStage = runtimeStageDefs[activeRuntimeStageIndex] || runtimeStageDefs[0];
   const runSnapshotModeLabel =
     runSnapshot?.mode === "quick" ? t("eval.config.mode.quick") : t("eval.config.mode.full");
   const runSnapshotModulesLabel =
@@ -2506,6 +2717,19 @@ export default function EvalPage({ skills }: Props) {
             )
             .join(" / ")
         : t("eval.common.na");
+  const runParallelArms = progressEvent?.maxParallelArms ?? runSnapshot?.maxParallelArms ?? 0;
+  const runTriggerWorkers = progressEvent?.triggerMaxWorkers ?? runSnapshot?.triggerMaxWorkers ?? 0;
+  const runFunctionalWorkers =
+    progressEvent?.functionalMaxWorkers ?? runSnapshot?.functionalMaxWorkers ?? 0;
+  const stageCountersLabel =
+    stageTotalCount > 0
+      ? t("eval.running.stageCounters", {
+          completed: stageCompletedCount,
+          total: stageTotalCount,
+          active: stageActiveCount,
+          failed: stageFailedCount,
+        })
+      : t("eval.common.na");
 
   useEffect(() => {
     if (stepOverride === null) return;
@@ -3005,6 +3229,10 @@ export default function EvalPage({ skills }: Props) {
               <strong>{`${progressPercent}%`}</strong>
             </div>
             <div>
+              <span className="eval-history-item-label">{t("eval.running.stageProgress")}</span>
+              <strong>{`${stageProgressPercent}%`}</strong>
+            </div>
+            <div>
               <span className="eval-history-item-label">{t("eval.runDock.elapsed", { seconds: elapsedSeconds })}</span>
               <strong>
                 {t("eval.runDock.steps", {
@@ -3013,21 +3241,37 @@ export default function EvalPage({ skills }: Props) {
                 })}
               </strong>
             </div>
+            <div>
+              <span className="eval-history-item-label">{t("eval.running.activeStage")}</span>
+              <strong>{activeRuntimeStage?.title ?? naLabel}</strong>
+            </div>
+            <div>
+              <span className="eval-history-item-label">{t("eval.running.stageCountersLabel")}</span>
+              <strong>{stageCountersLabel}</strong>
+            </div>
+            <div>
+              <span className="eval-history-item-label">{t("eval.running.remaining")}</span>
+              <strong>
+                {typeof remainingSeconds === "number"
+                  ? formatDurationLabel(remainingSeconds)
+                  : t("eval.running.remainingCalculating")}
+              </strong>
+            </div>
             <div className="eval-running-stage-wide">
               <span className="eval-history-item-label">{t("eval.running.dimensions")}</span>
               <strong>{runSnapshotModulesLabel}</strong>
             </div>
             <div>
               <span className="eval-history-item-label">{t("eval.config.maxParallelArms")}</span>
-              <strong>{runSnapshot.maxParallelArms}</strong>
+              <strong>{runParallelArms}</strong>
             </div>
             <div>
               <span className="eval-history-item-label">{t("eval.config.triggerMaxWorkers")}</span>
-              <strong>{runSnapshot.triggerMaxWorkers}</strong>
+              <strong>{runTriggerWorkers}</strong>
             </div>
             <div>
               <span className="eval-history-item-label">{t("eval.config.functionalMaxWorkers")}</span>
-              <strong>{runSnapshot.functionalMaxWorkers}</strong>
+              <strong>{runFunctionalWorkers}</strong>
             </div>
             <div className="eval-running-stage-wide">
               <span className="eval-history-item-label">{t("eval.dataset.trigger")}</span>
@@ -3043,36 +3287,21 @@ export default function EvalPage({ skills }: Props) {
             )}
           </div>
           <section className="eval-flow-guide eval-running-flow" aria-label={t("eval.running.flowAria")}>
-            <div className={`eval-flow-step is-${runStage1Status}`}>
-              <span className="eval-flow-index">1</span>
-              <div>
-                <strong>{t("eval.running.stage.prepare")}</strong>
-                <small>{t("eval.running.stage.prepareDesc")}</small>
-              </div>
-              <span className={`eval-flow-state eval-flow-state-${runStage1Status}`}>
-                {t(`eval.flow.state.${runStage1Status}` as Parameters<typeof t>[0])}
-              </span>
-            </div>
-            <div className={`eval-flow-step is-${runStage2Status}`}>
-              <span className="eval-flow-index">2</span>
-              <div>
-                <strong>{t("eval.running.stage.execute")}</strong>
-                <small>{t("eval.running.stage.executeDesc")}</small>
-              </div>
-              <span className={`eval-flow-state eval-flow-state-${runStage2Status}`}>
-                {t(`eval.flow.state.${runStage2Status}` as Parameters<typeof t>[0])}
-              </span>
-            </div>
-            <div className={`eval-flow-step is-${runStage3Status}`}>
-              <span className="eval-flow-index">3</span>
-              <div>
-                <strong>{t("eval.running.stage.finalize")}</strong>
-                <small>{t("eval.running.stage.finalizeDesc")}</small>
-              </div>
-              <span className={`eval-flow-state eval-flow-state-${runStage3Status}`}>
-                {t(`eval.flow.state.${runStage3Status}` as Parameters<typeof t>[0])}
-              </span>
-            </div>
+            {runtimeStageDefs.map((stage, index) => {
+              const flowStatus = runtimeStageStatuses[index] ?? "pending";
+              return (
+                <div key={stage.key} className={`eval-flow-step is-${flowStatus}`}>
+                  <span className="eval-flow-index">{index + 1}</span>
+                  <div>
+                    <strong>{stage.title}</strong>
+                    <small>{stage.desc}</small>
+                  </div>
+                  <span className={`eval-flow-state eval-flow-state-${flowStatus}`}>
+                    {t(`eval.flow.state.${flowStatus}` as Parameters<typeof t>[0])}
+                  </span>
+                </div>
+              );
+            })}
           </section>
         </article>
       )}

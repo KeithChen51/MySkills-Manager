@@ -1046,6 +1046,35 @@ export type EvalPipelineEstimateRequest = {
 
 export type EvalControlAction = "pause" | "resume" | "cancel";
 
+export type EvalPipelineProgressEvent = {
+  runId: string;
+  status: "running" | "paused" | "completed" | "cancelled" | "error" | string;
+  currentRepeat: number;
+  totalRepeats: number;
+  stepIndex: number;
+  totalSteps: number;
+  stepName: string;
+  message: string;
+  messageKey?: string;
+  messageArgs?: Record<string, string | number | boolean>;
+  elapsedMs: number;
+  stageKey?: string;
+  stageLabel?: string;
+  stageIndex?: number;
+  stageTotal?: number;
+  stageProgressPercent?: number;
+  totalProgressPercent?: number;
+  totalCount?: number;
+  completedCount?: number;
+  activeCount?: number;
+  failedCount?: number;
+  maxParallelArms?: number;
+  triggerMaxWorkers?: number;
+  functionalMaxWorkers?: number;
+  remainingSeconds?: number;
+  reviewGateState?: "required" | "skipped" | "blocked" | string;
+};
+
 function mapTriggerOutput(raw: TriggerEvalOutputRaw): TriggerEvalOutput {
   return {
     status: raw.status,

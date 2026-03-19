@@ -245,6 +245,33 @@ test("runEvalPipeline request supports controlled parallelism knobs", () => {
   );
 });
 
+test("tauri API exposes runtime progress payload contract for stage-level auditability", () => {
+  const source = read("src/api/tauri.ts");
+  assert.ok(
+    source.includes("export type EvalPipelineProgressEvent = {"),
+    "tauri API should export a typed runtime progress payload",
+  );
+  assert.ok(
+    source.includes("stageKey?: string") &&
+      source.includes("stageProgressPercent?: number") &&
+      source.includes("remainingSeconds?: number"),
+    "progress payload should expose stage key, stage progress and ETA fields",
+  );
+  assert.ok(
+    source.includes("activeCount?: number") &&
+      source.includes("completedCount?: number") &&
+      source.includes("failedCount?: number") &&
+      source.includes("totalCount?: number"),
+    "progress payload should expose counters for in-flight/completed/failed/total tasks",
+  );
+  assert.ok(
+    source.includes("maxParallelArms?: number") &&
+      source.includes("triggerMaxWorkers?: number") &&
+      source.includes("functionalMaxWorkers?: number"),
+    "progress payload should expose runtime parallelism snapshot for auditing",
+  );
+});
+
 test("evalEstimatePipeline request forwards controlled parallelism knobs", () => {
   const source = read("src/api/tauri.ts");
   assert.ok(

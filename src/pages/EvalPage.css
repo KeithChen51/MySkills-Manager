@@ -673,6 +673,8 @@
 
 .eval-running-flow .eval-flow-step.is-active {
   animation: eval-running-breathe 1.8s ease-in-out infinite;
+  outline: 2px solid color-mix(in srgb, var(--accent) 62%, transparent);
+  outline-offset: -1px;
   will-change: box-shadow, background, transform;
 }
 
@@ -724,6 +726,42 @@
   display: flex;
   gap: var(--sp-sm);
   justify-content: space-between;
+}
+
+.eval-review-guide {
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-card) 95%);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border-card) 80%);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: var(--sp-xs);
+  padding: var(--sp-sm);
+}
+
+.eval-review-guide-list {
+  display: grid;
+  gap: var(--sp-xs);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.eval-review-guide-item {
+  align-items: flex-start;
+  border: 1px dashed color-mix(in srgb, var(--accent) 25%, var(--border-card) 75%);
+  border-radius: var(--radius-sm);
+  display: flex;
+  gap: var(--sp-sm);
+  justify-content: space-between;
+  padding: var(--sp-xs) var(--sp-sm);
+}
+
+.eval-review-guide-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.eval-review-guide-copy small {
+  color: var(--text-secondary);
 }
 
 .eval-run-dock {
