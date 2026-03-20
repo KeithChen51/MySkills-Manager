@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import {
   evalListHistory,
@@ -14,6 +14,7 @@ import {
 import SkillCard from "../components/SkillCard";
 import SkillEditor from "../components/SkillEditor";
 import { IconRefresh, IconSearch } from "../components/icons";
+import useDialogA11y from "../components/useDialogA11y";
 import {
   compareSkillNamesByMode,
   type SkillInsightWindow,
@@ -41,6 +42,8 @@ type GroupedSkills = {
   skills: SkillMeta[];
 };
 
+const INSIGHT_WINDOWS: SkillInsightWindow[] = [7, 30, 90];
+
 export default function SkillsPage({ skills, onRefresh }: Props) {
   const { t, locale } = useI18n();
   const preferChineseTaxonomy = locale.toLowerCase().startsWith("zh");
@@ -55,12 +58,13 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
   const [insights, setInsights] = useState<SkillInsight[]>([]);
   const [insightsLoading, setInsightsLoading] = useState(false);
   const [insightWindow, setInsightWindow] = useState<7 | 30 | 90>(30);
-  const [sortMode, setSortMode] = useState<"name" | "usage" | "eval">("eval");
+  const [sortMode, setSortMode] = useState<"name" | "usage" | "eval">("name");
   const [detailSkillName, setDetailSkillName] = useState<string | null>(null);
   const [detailLogs, setDetailLogs] = useState<LogEntry[]>([]);
   const [detailEvalHistory, setDetailEvalHistory] = useState<EvalHistoryEntry[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailStatus, setDetailStatus] = useState("");
+  const detailCloseButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const controller = useSkillsPageController({ onRefresh, t });
 
@@ -258,6 +262,12 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
     setDetailLoading(false);
   }
 
+  const { dialogRef: detailDialogRef } = useDialogA11y({
+    open: Boolean(detailSkillName),
+    onClose: handleCloseInsightDetail,
+    initialFocusRef: detailCloseButtonRef,
+  });
+
   async function handleDeleteSkill(skill: SkillMeta) {
     const confirmed = window.confirm(t("skill.delete.confirm", { name: skill.name }));
     if (!confirmed) return;
@@ -312,6 +322,24 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
     }
   }
 
+  const handleInsightWindowKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>, window: SkillInsightWindow) => {
+      const currentIndex = INSIGHT_WINDOWS.indexOf(window);
+      if (currentIndex < 0) return;
+
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        const next = INSIGHT_WINDOWS[(currentIndex + 1) % INSIGHT_WINDOWS.length];
+        setInsightWindow(next);
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        const next = INSIGHT_WINDOWS[(currentIndex - 1 + INSIGHT_WINDOWS.length) % INSIGHT_WINDOWS.length];
+        setInsightWindow(next);
+      }
+    },
+    [],
+  );
+
   return (
     <div className="page animate-fadein skills-page">
       <header className="page-header skills-page-header page-header-grid">
@@ -327,12 +355,16 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
         <div className="skills-header-actions page-header-actions-grid">
           <div className="skills-actions-row skills-actions-row-primary page-header-actions-row">
             <div className="skills-insight-window-switch" role="tablist" aria-label={t("skills.insights.window.label")}>
-              {[7, 30, 90].map((window) => (
+              {INSIGHT_WINDOWS.map((window) => (
                 <button
                   key={`insight-window-${window}`}
                   type="button"
+                  role="tab"
+                  aria-selected={insightWindow === window}
+                  tabIndex={insightWindow === window ? 0 : -1}
                   className={`btn btn-ghost skills-insight-window-btn ${insightWindow === window ? "active" : ""}`}
-                  onClick={() => setInsightWindow(window as SkillInsightWindow)}
+                  onClick={() => setInsightWindow(window)}
+                  onKeyDown={(event) => handleInsightWindowKeyDown(event, window)}
                 >
                   {t("skills.insights.window.option", { days: window })}
                 </button>
@@ -364,6 +396,7 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
               <IconSearch size={16} />
               <input
                 className="search-input"
+                aria-label={t("skills.search")}
                 placeholder={t("skills.search")}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -496,12 +529,17 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
       {detailSkillName && (
         <div
           className="skills-insight-detail-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-label={t("skills.insights.detail.title", { skill: detailSkillName })}
           onClick={handleCloseInsightDetail}
         >
-          <article className="skills-insight-detail-panel" onClick={(event) => event.stopPropagation()}>
+          <article
+            ref={detailDialogRef}
+            className="skills-insight-detail-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("skills.insights.detail.title", { skill: detailSkillName })}
+            tabIndex={-1}
+            onClick={(event) => event.stopPropagation()}
+          >
             <header className="skills-insight-detail-header">
               <div>
                 <h2 className="skills-insight-detail-title">
@@ -511,7 +549,12 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
                   {t("skills.insights.detail.subtitle", { days: insightWindow })}
                 </p>
               </div>
-              <button className="btn btn-ghost" onClick={handleCloseInsightDetail}>
+              <button
+                ref={detailCloseButtonRef}
+                type="button"
+                className="btn btn-ghost"
+                onClick={handleCloseInsightDetail}
+              >
                 {t("skills.insights.detail.close")}
               </button>
             </header>

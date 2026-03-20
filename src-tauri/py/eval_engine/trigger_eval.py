@@ -8,24 +8,17 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import time
-import urllib.error
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-READ_ENCODINGS = ("utf-8", "utf-8-sig", "gb18030")
+try:
+    from .llm_client import LLMClient, read_text_file, extract_json_object, write_json, classify_error
+except ImportError:
+    from llm_client import LLMClient, read_text_file, extract_json_object, write_json, classify_error  # type: ignore
 
 
-def read_text_file(path: Path) -> str:
-    last_error: UnicodeDecodeError | None = None
-    for encoding in READ_ENCODINGS:
-        try:
-            return path.read_text(encoding=encoding)
-        except UnicodeDecodeError as exc:
-            last_error = exc
-    raise ValueError(f"Failed to decode file '{path}'. Please save it as UTF-8.") from last_error
+# read_text_file imported from llm_client
 
 
 def validate_trigger_eval_set(payload: object) -> list[dict[str, Any]]:
@@ -52,18 +45,8 @@ def validate_trigger_eval_set(payload: object) -> list[dict[str, Any]]:
     return validated
 
 
-def _extract_json_object(raw: str) -> dict[str, Any]:
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if len(lines) >= 2:
-            text = "\n".join(lines[1:-1]).strip()
-
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end < start:
-        raise ValueError("Model output does not contain a JSON object")
-    return json.loads(text[start : end + 1])
+# extract_json_object imported from llm_client
+_extract_json_object = extract_json_object
 
 
 def _frontmatter_value(raw: str, key: str) -> str | None:
@@ -122,71 +105,19 @@ def _collect_available_skills(
     return ordered
 
 
-class LLMClient:
-    def __init__(self, api_key: str, model: str, base_url: str | None, provider: str | None):
-        self.api_key = api_key.strip()
-        self.model = model.strip()
-        self.base_url = (base_url or "").strip() or "https://api.openai.com/v1"
-        self.provider = (provider or "openai-compatible").strip().lower()
-        if self.provider != "openai-compatible":
-            raise ValueError(f"Unsupported provider for trigger eval: {self.provider}")
-        if not self.api_key:
-            raise ValueError("API key is required for trigger eval")
-        if not self.model:
-            raise ValueError("Model is required for trigger eval")
+# LLMClient imported from llm_client — wrap convenience method for backward compat
 
-    def chat_json(self, prompt: str) -> dict[str, Any]:
-        endpoint = self.base_url.rstrip("/") + "/chat/completions"
-        payload = {
-            "model": self.model,
-            "temperature": 0.0,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a strict skill router evaluator. "
-                        "Return JSON only with keys: selected_skill, confidence, reason."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
-        }
-        request = urllib.request.Request(
-            endpoint,
-            data=json.dumps(payload).encode("utf-8"),
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
-        )
-        started = time.perf_counter()
-        try:
-            with urllib.request.urlopen(request, timeout=90) as response:
-                raw = response.read().decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as exc:  # pragma: no cover - network path
-            details = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"LLM HTTP {exc.code}: {details}") from exc
-        except urllib.error.URLError as exc:  # pragma: no cover - network path
-            raise RuntimeError(f"LLM request failed: {exc.reason}") from exc
-        latency_ms = int((time.perf_counter() - started) * 1000)
-        parsed = json.loads(raw)
-        choices = parsed.get("choices")
-        if not isinstance(choices, list) or not choices:
-            raise RuntimeError("LLM response missing choices")
-        message = choices[0].get("message", {})
-        content = message.get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise RuntimeError("LLM response content is empty")
-        usage = parsed.get("usage") if isinstance(parsed.get("usage"), dict) else {}
-        return {
-            "content": content,
-            "raw": parsed,
-            "trace_id": str(parsed.get("id") or ""),
-            "latency_ms": latency_ms,
-            "input_tokens": int(usage.get("prompt_tokens") or 0),
-            "output_tokens": int(usage.get("completion_tokens") or 0),
-        }
+
+def _trigger_chat_json(client: LLMClient, prompt: str) -> dict[str, Any]:
+    """Convenience wrapper preserving the old trigger LLMClient.chat_json signature."""
+    return client.chat_json(
+        system_prompt=(
+            "You are a strict skill router evaluator. "
+            "Return JSON only with keys: selected_skill, confidence, reason."
+        ),
+        user_prompt=prompt,
+        temperature=0.0,
+    )
 
 
 def _build_routing_prompt(query: str, candidates: list[dict[str, str]], target_skill_name: str) -> str:
@@ -216,18 +147,12 @@ Return strict JSON only:
 """.strip()
 
 
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+# write_json imported from llm_client
+_write_json = write_json
 
 
-def _error_type(error: Exception) -> str:
-    text = str(error).lower()
-    if "http" in text or "url" in text or "network" in text:
-        return "network"
-    if "json" in text or "parse" in text:
-        return "parse"
-    return "runtime"
+# classify_error imported from llm_client
+_error_type = classify_error
 
 
 def check_trigger(
@@ -273,7 +198,7 @@ def run_single_query(
         _write_json(case_dir / "request.json", request_payload)
 
     try:
-        llm = client.chat_json(prompt)
+        llm = _trigger_chat_json(client, prompt)
         response_payload = llm["raw"]
         if case_dir:
             _write_json(case_dir / "response.json", response_payload)

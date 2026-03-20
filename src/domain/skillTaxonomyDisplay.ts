@@ -57,17 +57,14 @@ const TOKEN_TAXONOMY_ZH: Record<string, string> = {
   hard: "困难",
   agent: "代理",
   hybrid: "混合",
-  scripted: "脚本型",
+  scripted: "脚本",
   resource: "资源",
   markdown: "Markdown",
   only: "纯",
   and: "与",
 };
 
-const TAXONOMY_PREFIX_LABELS: Record<
-  string,
-  { zh: string; en: string }
-> = {
+const TAXONOMY_PREFIX_LABELS: Record<string, { zh: string; en: string }> = {
   "anthropic-category": {
     zh: "Anthropic 分类",
     en: "Anthropic Category",
@@ -204,5 +201,6 @@ export function formatTaxonomyTagLabel(rawTag: string, preferChinese: boolean): 
       : labelMeta.en
     : formatBilingualLabel(taxonomyKey, preferChinese);
   const valueLabel = formatTaxonomyValueLabel(rawValue, preferChinese);
-  return `${prefix}：${valueLabel}`;
+  const separator = preferChinese ? "：" : ": ";
+  return `${prefix}${separator}${valueLabel}`;
 }

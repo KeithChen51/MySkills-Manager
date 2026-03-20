@@ -1,4 +1,6 @@
+import { useRef } from "react";
 import type { SkillConflictDetail } from "../../api/tauri";
+import useDialogA11y from "../../components/useDialogA11y";
 import { IconClose } from "../../components/icons";
 import type { MessageKey } from "../../i18n/messages";
 import { useConflictDiffView } from "./useConflictDiffView";
@@ -45,6 +47,12 @@ export default function SkillConflictDrawer({
   onResolveConflict,
 }: Props) {
   const { baseline, hiddenMatchedCount, conflicts, computingDiff } = useConflictDiffView(conflictDetail);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const { dialogRef } = useDialogA11y({
+    open: Boolean(activeConflictSkill),
+    onClose,
+    initialFocusRef: closeButtonRef,
+  });
 
   if (!activeConflictSkill) {
     return null;
@@ -53,10 +61,12 @@ export default function SkillConflictDrawer({
   return (
     <div className="skills-conflict-overlay" onClick={onClose}>
       <aside
+        ref={dialogRef}
         className="skills-conflict-drawer"
         role="dialog"
         aria-modal="true"
         aria-label={t("skills.conflict.drawer.aria", { skill: activeConflictSkill })}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
         <header className="skills-conflict-header">
@@ -66,6 +76,7 @@ export default function SkillConflictDrawer({
           <div className="skills-conflict-actions">
             <span className="skills-conflict-status">{conflictStatus}</span>
             <button
+              ref={closeButtonRef}
               type="button"
               className="btn btn-ghost"
               onClick={onClose}

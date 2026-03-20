@@ -460,6 +460,15 @@ export type VersionJumpInfo = {
   release_notes_zh: string;
 };
 
+export type ModelGroup = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  isGateway: boolean;
+  models: string[];
+};
+
 export type EvalConfig = {
   apiKey: string;
   provider: string;
@@ -467,7 +476,9 @@ export type EvalConfig = {
   sampleModel: string;
   runModel: string;
   defaultModel?: string;
+  judgeModel?: string;
   costCurrency: CostCurrency;
+  modelGroups?: ModelGroup[];
 };
 
 type TriggerEvalResultItemRaw = {
@@ -827,6 +838,8 @@ export type EvalAnalyzerSummary = {
   topFailurePatterns: string[];
   recommendations: string[];
   generatedAtUnix: number;
+  improvementSuggestions?: string[];
+  descriptionFeedback?: string;
 };
 
 export type EvalReviewDetail = {
@@ -1015,6 +1028,10 @@ export type EvalPipelineRequest = {
   triggerMaxWorkers?: number;
   functionalMaxWorkers?: number;
   runId?: string;
+  judgeModel?: string;
+  judgeApiKey?: string;
+  judgeBaseUrl?: string;
+  generatorModel?: string;
 };
 
 export type EvalSubmitReviewRequest = {
@@ -1073,6 +1090,7 @@ export type EvalPipelineProgressEvent = {
   functionalMaxWorkers?: number;
   remainingSeconds?: number;
   reviewGateState?: "required" | "skipped" | "blocked" | string;
+  caseStatuses?: Array<{ caseId: string; status: string; latencyMs?: number; tokens?: number }>;
 };
 
 function mapTriggerOutput(raw: TriggerEvalOutputRaw): TriggerEvalOutput {
@@ -1697,8 +1715,31 @@ export async function evalSaveConfig(config: EvalConfig): Promise<SetupMutationR
     run_model: config.runModel,
     defaultModel: config.runModel,
     default_model: config.runModel,
+    judgeModel: config.judgeModel ?? "",
+    judge_model: config.judgeModel ?? "",
     costCurrency: config.costCurrency,
     cost_currency: config.costCurrency,
+    modelGroups: config.modelGroups ?? [],
+    model_groups: config.modelGroups ?? [],
+  });
+}
+
+export type ModelConnectionTestResult = {
+  success: boolean;
+  message: string;
+};
+
+export async function evalTestConnection(
+  baseUrl: string,
+  apiKey: string | undefined,
+  model: string,
+): Promise<ModelConnectionTestResult> {
+  return invokeWithError<ModelConnectionTestResult>("eval_test_model_connection", {
+    baseUrl,
+    base_url: baseUrl,
+    apiKey: apiKey || undefined,
+    api_key: apiKey || undefined,
+    model,
   });
 }
 
@@ -1760,6 +1801,14 @@ export async function runEvalPipeline(request: EvalPipelineRequest): Promise<Eva
       selected_modules: request.selectedModules,
       runId: request.runId,
       run_id: request.runId,
+      judgeModel: request.judgeModel,
+      judge_model: request.judgeModel,
+      judgeApiKey: request.judgeApiKey,
+      judge_api_key: request.judgeApiKey,
+      judgeBaseUrl: request.judgeBaseUrl,
+      judge_base_url: request.judgeBaseUrl,
+      generatorModel: request.generatorModel,
+      generator_model: request.generatorModel,
     },
     { reportGlobal: true },
   );
@@ -1807,5 +1856,29 @@ export async function evalSaveDataset(
     kind: request.kind,
     skillName: request.skillName,
     skill_name: request.skillName,
+  });
+}
+
+export type EvalScorecard = {
+  dimensions: Array<{ key: string; label: string; score: number; weight: number }>;
+  overallScore: number;
+  overallRating: number;
+  radarData: number[];
+  confidenceWarning?: string;
+};
+
+export async function evalRunAnalyzer(request: {
+  resultPath: string;
+  outputPath?: string;
+  model?: string;
+  apiKey?: string;
+  baseUrl?: string;
+}): Promise<EvalAnalyzerSummary> {
+  return invokeWithError<EvalAnalyzerSummary>("eval_run_analyzer", {
+    result_path: request.resultPath,
+    output_path: request.outputPath,
+    model: request.model,
+    api_key: request.apiKey,
+    base_url: request.baseUrl,
   });
 }

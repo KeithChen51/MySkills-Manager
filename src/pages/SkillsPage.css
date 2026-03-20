@@ -77,7 +77,7 @@
 }
 
 .skills-insight-window-btn {
-  min-height: 36px;
+  min-height: 44px;
   padding: 0 10px;
 }
 
@@ -87,11 +87,11 @@
 }
 
 .skills-refresh-btn {
-  min-height: 42px;
+  min-height: 44px;
 }
 
 .skills-overview-btn {
-  min-height: 42px;
+  min-height: 44px;
 }
 
 .search-box {
@@ -102,7 +102,7 @@
   color: var(--text-muted);
   display: flex;
   gap: var(--sp-sm);
-  min-height: 42px;
+  min-height: 44px;
   padding: 0 var(--sp-md);
   transition:
     border-color var(--transition),
@@ -139,7 +139,7 @@
 .skills-grid {
   display: grid;
   gap: var(--sp-md);
-  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(clamp(260px, 40vw, 360px), 1fr));
 }
 
 .skills-group-list {

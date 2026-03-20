@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { toIsoEnd, toIsoStart } from "../src/domain/logDateRange";
+import { toIsoEnd, toIsoStart } from "../src/domain/logDateRange.ts";
 
 test("toIsoStart returns undefined for empty value", () => {
   assert.equal(toIsoStart(""), undefined);
@@ -18,3 +18,4 @@ test("toIsoEnd returns undefined for empty value", () => {
 test("toIsoEnd appends end-of-day suffix", () => {
   assert.equal(toIsoEnd("2026-02-01"), "2026-02-01T15:59:59Z");
 });
+

@@ -45,13 +45,13 @@
 }
 
 .tools-header-btn {
-  min-height: 42px;
+  min-height: 44px;
 }
 
 .tools-grid {
   display: grid;
   gap: var(--sp-lg);
-  grid-template-columns: repeat(auto-fill, minmax(520px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(clamp(280px, 42vw, 380px), 1fr));
 }
 
 .tools-sections {
@@ -224,7 +224,7 @@
   cursor: pointer;
   display: inline-flex;
   flex-shrink: 0;
-  height: 40px;
+  height: 44px;
   justify-content: flex-start;
   padding: 4px;
   transition: background var(--transition), border-color var(--transition);
@@ -320,9 +320,9 @@
   cursor: pointer;
   display: inline-flex;
   flex-shrink: 0;
-  height: 40px;
+  height: 44px;
   justify-content: center;
-  width: 40px;
+  width: 44px;
 }
 
 .tool-path-picker:hover:not(:disabled) {
@@ -366,7 +366,7 @@
 }
 
 .tool-card-action-btn {
-  min-height: 40px;
+  min-height: 44px;
 }
 
 .tool-card-health-actions {
@@ -394,7 +394,7 @@
 }
 
 .tools-form-hide-btn {
-  min-height: 40px;
+  min-height: 44px;
 }
 
 .tools-form-grid {

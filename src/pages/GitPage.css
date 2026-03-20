@@ -59,7 +59,7 @@
 }
 
 .git-add-drawer-overlay {
-  background: color-mix(in srgb, var(--surface-base) 50%, #0b1224);
+  background: color-mix(in srgb, var(--surface-base) 50%, var(--overlay-scrim));
   border: 0;
   cursor: pointer;
   inset: 0;
@@ -83,7 +83,7 @@
 .git-add-drawer-panel {
   animation: git-drawer-enter 180ms ease-out;
   border-radius: var(--radius-lg) 0 0 var(--radius-lg);
-  box-shadow: -20px 0 36px rgba(15, 23, 42, 0.24);
+  box-shadow: var(--shadow-drawer);
   display: grid;
   gap: var(--sp-sm);
   grid-template-rows: auto 1fr;
@@ -115,7 +115,7 @@
 }
 
 .git-guide-overlay {
-  background: color-mix(in srgb, var(--surface-base) 55%, #0b1224);
+  background: color-mix(in srgb, var(--surface-base) 55%, var(--overlay-scrim));
   border: 0;
   cursor: pointer;
   inset: 0;
@@ -164,7 +164,7 @@
 }
 
 .git-guide-error {
-  color: color-mix(in srgb, var(--danger, #c2410c) 78%, var(--text-secondary));
+  color: color-mix(in srgb, var(--danger) 78%, var(--text-secondary));
   font-size: var(--text-sm);
   margin: 0;
 }
@@ -226,7 +226,7 @@
 }
 
 .git-guide-code {
-  background: color-mix(in srgb, var(--surface-soft) 85%, #0f172a 10%);
+  background: color-mix(in srgb, var(--surface-soft) 85%, var(--bg-primary) 10%);
   border: 1px solid var(--stroke-default);
   border-radius: var(--radius-md);
   margin: 0;
@@ -268,7 +268,11 @@
 }
 
 .git-repo-card {
-  background: linear-gradient(180deg, rgba(124, 146, 255, 0.07), rgba(124, 146, 255, 0.01));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent) 12%, transparent),
+    color-mix(in srgb, var(--accent) 2%, transparent)
+  );
   border: 1px solid var(--border-card);
   border-radius: var(--radius-md);
   display: grid;
@@ -319,7 +323,7 @@
 }
 
 .git-repo-card-error {
-  color: color-mix(in srgb, var(--danger, #c2410c) 75%, var(--text-secondary));
+  color: color-mix(in srgb, var(--danger) 75%, var(--text-secondary));
 }
 
 .git-repo-card-actions {
@@ -512,7 +516,7 @@
 }
 
 .git-ignore-overlay {
-  background: color-mix(in srgb, var(--surface-base) 55%, #0b1224);
+  background: color-mix(in srgb, var(--surface-base) 55%, var(--overlay-scrim));
   border: 0;
   cursor: pointer;
   inset: 0;
@@ -580,17 +584,17 @@
   align-items: center;
   display: flex;
   gap: 6px;
-  min-height: 26px;
+  min-height: var(--control-height);
 }
 
 .git-ignore-expand,
 .git-ignore-expand-placeholder {
   align-items: center;
   display: inline-flex;
-  flex: 0 0 18px;
-  height: 18px;
+  flex: 0 0 var(--control-height);
+  height: var(--control-height);
   justify-content: center;
-  width: 18px;
+  width: var(--control-height);
 }
 
 .git-ignore-expand {
@@ -803,15 +807,15 @@
 }
 
 .git-recent-tag.is-pushed {
-  background: color-mix(in srgb, #16a34a 16%, transparent);
-  border-color: color-mix(in srgb, #16a34a 34%, var(--stroke-soft));
-  color: color-mix(in srgb, #0f5132 70%, var(--text-secondary));
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  border-color: color-mix(in srgb, var(--success) 34%, var(--stroke-soft));
+  color: color-mix(in srgb, var(--success) 72%, var(--text-secondary));
 }
 
 .git-recent-tag.is-pending {
-  background: color-mix(in srgb, #f59e0b 12%, transparent);
-  border-color: color-mix(in srgb, #f59e0b 34%, var(--stroke-soft));
-  color: color-mix(in srgb, #92400e 65%, var(--text-secondary));
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 34%, var(--stroke-soft));
+  color: color-mix(in srgb, var(--warning) 65%, var(--text-secondary));
 }
 
 .git-recent-summary {
@@ -827,7 +831,7 @@
 }
 
 .git-graph-overlay {
-  background: color-mix(in srgb, var(--surface-base) 55%, #0b1224);
+  background: color-mix(in srgb, var(--surface-base) 55%, var(--overlay-scrim));
   border: 0;
   cursor: pointer;
   inset: 0;
@@ -904,7 +908,7 @@
 }
 
 .git-graph-edge.is-merge {
-  stroke: color-mix(in srgb, #0ea5e9 72%, var(--stroke-default));
+  stroke: color-mix(in srgb, var(--accent) 72%, var(--stroke-default));
 }
 
 .git-graph-node {
@@ -912,13 +916,13 @@
 }
 
 .git-graph-node.is-pushed {
-  fill: color-mix(in srgb, #22c55e 84%, #ffffff 16%);
-  stroke: color-mix(in srgb, #15803d 84%, #000000 16%);
+  fill: color-mix(in srgb, var(--success) 84%, var(--bg-card) 16%);
+  stroke: color-mix(in srgb, var(--success) 84%, var(--text-primary) 16%);
 }
 
 .git-graph-node.is-pending {
-  fill: color-mix(in srgb, #f59e0b 84%, #ffffff 16%);
-  stroke: color-mix(in srgb, #b45309 84%, #000000 16%);
+  fill: color-mix(in srgb, var(--warning) 84%, var(--bg-card) 16%);
+  stroke: color-mix(in srgb, var(--warning) 84%, var(--text-primary) 16%);
 }
 
 .git-graph-content {
@@ -953,8 +957,8 @@
 }
 
 .git-graph-merge {
-  background: color-mix(in srgb, #0ea5e9 14%, transparent);
-  border-color: color-mix(in srgb, #0ea5e9 30%, var(--stroke-soft));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--stroke-soft));
 }
 
 .git-graph-summary {
@@ -1016,10 +1020,10 @@
 }
 
 .git-ignore-dirty-tag {
-  background: color-mix(in srgb, #f59e0b 14%, transparent);
-  border: 1px solid color-mix(in srgb, #f59e0b 38%, var(--stroke-soft));
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 38%, var(--stroke-soft));
   border-radius: var(--radius-pill);
-  color: color-mix(in srgb, #92400e 70%, var(--text-secondary));
+  color: color-mix(in srgb, var(--warning) 70%, var(--text-secondary));
   font-size: 11px;
   font-weight: 700;
   padding: 2px 8px;

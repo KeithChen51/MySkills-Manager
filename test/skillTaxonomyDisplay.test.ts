@@ -7,7 +7,7 @@ import {
   formatTaxonomyGroupLabel,
   formatTaxonomyTagLabel,
   formatTaxonomyValueLabel,
-} from "../src/domain/skillTaxonomyDisplay";
+} from "../src/domain/skillTaxonomyDisplay.ts";
 
 function readSource(relPath: string): string {
   return fs.readFileSync(path.resolve(process.cwd(), relPath), "utf8");

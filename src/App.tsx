@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   APP_ERROR_EVENT,
@@ -24,7 +24,7 @@ import LogsPage from "./pages/LogsPage";
 import SkillsPage from "./pages/SkillsPage";
 import SettingsPage from "./pages/SettingsPage";
 import ToolsPage from "./pages/ToolsPage";
-import EvalPage from "./pages/EvalPage";
+import EvalPage from "./pages/eval";
 import { useAppUpdater } from "./updater/useAppUpdater";
 import "./App.css";
 
@@ -183,8 +183,6 @@ export default function App() {
         return <LogsPage skills={skills} />;
       case "tools":
         return <ToolsPage />;
-      case "eval":
-        return <EvalPage skills={skills} />;
       case "git":
         return <GitPage />;
       case "settings":
@@ -253,7 +251,10 @@ export default function App() {
               onDismiss={updater.dismissSilentReady}
             />
           )}
-          {renderPage()}
+          <div style={{ display: view === "eval" ? "flex" : "none", flex: 1, minHeight: 0 }}>
+            <EvalPage skills={skills} />
+          </div>
+          {view !== "eval" && renderPage()}
         </div>
         <div className="app-error-toast-wrap">
           {globalErrors.map((item) => (

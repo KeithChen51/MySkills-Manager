@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatLastSyncTime } from "../src/domain/lastSyncTime";
+import { formatLastSyncTime } from "../src/domain/lastSyncTime.ts";
 
 test("formatLastSyncTime returns fallback when value is missing", () => {
   const result = formatLastSyncTime(undefined, "en-US", "Never");
@@ -28,3 +28,4 @@ test("formatLastSyncTime formats ISO timestamp with locale", () => {
 
   assert.equal(result, expected);
 });
+

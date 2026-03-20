@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildSkillDiff } from "../src/domain/skillConflictDiff";
+import { buildSkillDiff } from "../src/domain/skillConflictDiff.ts";
 
 test("buildSkillDiff reports no changes for identical content", () => {
   const content = "---\nname: sample\n---\n\nbody\n";
@@ -24,3 +24,4 @@ test("buildSkillDiff identifies added and removed lines", () => {
   assert.ok(diff.lines.some((line) => line.kind === "added" && line.text === "line-B"));
   assert.ok(diff.lines.some((line) => line.kind === "added" && line.text === "line-d"));
 });
+

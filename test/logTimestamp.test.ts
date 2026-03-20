@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatLogTimestamp } from "../src/domain/logTimestamp";
+import { formatLogTimestamp } from "../src/domain/logTimestamp.ts";
 
 test("formatLogTimestamp keeps raw value when timestamp is invalid", () => {
   assert.equal(formatLogTimestamp("not-a-ts", "zh-CN"), "not-a-ts");
@@ -22,3 +22,4 @@ test("formatLogTimestamp renders in Beijing timezone by default", () => {
 
   assert.equal(formatLogTimestamp(iso, "zh-CN"), expected);
 });
+

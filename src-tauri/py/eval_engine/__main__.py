@@ -13,12 +13,13 @@ import sys
 from pathlib import Path
 
 try:
-    from . import classify, functional_eval, sample_gen, trigger_eval
+    from . import classify, functional_eval, sample_gen, trigger_eval, analyzer
 except ImportError:
     import classify  # type: ignore
     import functional_eval  # type: ignore
     import sample_gen  # type: ignore
     import trigger_eval  # type: ignore
+    import analyzer  # type: ignore
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -43,6 +44,9 @@ def _build_parser() -> argparse.ArgumentParser:
     trigger_parser.add_argument("--max-workers", type=int, default=10)
     trigger_parser.add_argument("--base-url")
     trigger_parser.add_argument("--provider")
+    trigger_parser.add_argument("--judge-model", help="Independent judge model for complex env routing")
+    trigger_parser.add_argument("--judge-api-key", help="API key for judge model (defaults to --api-key)")
+    trigger_parser.add_argument("--judge-base-url", help="Base URL for judge model (defaults to --base-url)")
 
     functional_parser = subparsers.add_parser("functional", help="Run functional correctness evaluation")
     functional_parser.add_argument("--skill-name", required=True, help="Name of the skill to test")
@@ -64,6 +68,9 @@ def _build_parser() -> argparse.ArgumentParser:
     functional_parser.add_argument("--max-workers", type=int, default=5)
     functional_parser.add_argument("--base-url")
     functional_parser.add_argument("--provider")
+    functional_parser.add_argument("--judge-model", help="Independent judge model for Layer2 scoring")
+    functional_parser.add_argument("--judge-api-key", help="API key for judge model (defaults to --api-key)")
+    functional_parser.add_argument("--judge-base-url", help="Base URL for judge model (defaults to --base-url)")
 
     samples_parser = subparsers.add_parser("generate-samples", help="Generate trigger/functional sample datasets")
     samples_parser.add_argument("--skill-name", required=True, help="Name of the skill to generate cases for")
@@ -76,6 +83,7 @@ def _build_parser() -> argparse.ArgumentParser:
     samples_parser.add_argument("--provider", default="openai-compatible")
     samples_parser.add_argument("--base-url")
     samples_parser.add_argument("--request-timeout-secs", type=int, default=180)
+    samples_parser.add_argument("--generator-model", help="Independent generator model (defaults to --model)")
 
     classify_parser = subparsers.add_parser("classify", help="Classify skill taxonomy labels")
     classify_parser.add_argument("--skill-name", required=True, help="Name of the skill to classify")
@@ -85,6 +93,14 @@ def _build_parser() -> argparse.ArgumentParser:
     classify_parser.add_argument("--model", required=True)
     classify_parser.add_argument("--provider")
     classify_parser.add_argument("--base-url")
+
+    analyze_parser = subparsers.add_parser("analyze", help="Run automated analysis on evaluation results")
+    analyze_parser.add_argument("--result-path", required=True, type=Path, help="Path to evaluation result JSON")
+    analyze_parser.add_argument("--output-path", required=True, type=Path, help="Path to write analysis output")
+    analyze_parser.add_argument("--api-key", help="API key for LLM-based analysis (optional, heuristic fallback)")
+    analyze_parser.add_argument("--model", help="Model for LLM-based analysis")
+    analyze_parser.add_argument("--base-url", help="Base URL for LLM API")
+    analyze_parser.add_argument("--provider", help="LLM provider")
 
     return parser
 
@@ -108,6 +124,17 @@ def main() -> None:
             result = sample_gen.run(args)
         elif args.command == "classify":
             result = classify.run(args)
+            _write_json(args.output_path, result)
+        elif args.command == "analyze":
+            result_text = args.result_path.read_text(encoding="utf-8")
+            result_json = json.loads(result_text)
+            result = analyzer.run(
+                result_json=result_json,
+                api_key=getattr(args, "api_key", None),
+                model=getattr(args, "model", None),
+                base_url=getattr(args, "base_url", None),
+                provider=getattr(args, "provider", None),
+            )
             _write_json(args.output_path, result)
         else:
             raise ValueError(f"Unsupported command: {args.command}")

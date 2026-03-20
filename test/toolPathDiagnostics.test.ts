@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ToolStatus } from "../src/api/tauri";
-import { buildToolPathDiagnostics } from "../src/domain/toolPathDiagnostics";
+import { buildToolPathDiagnostics } from "../src/domain/toolPathDiagnostics.ts";
 
 function makeToolStatus(partial: Partial<ToolStatus> = {}): ToolStatus {
   return {
@@ -55,3 +55,4 @@ test("buildToolPathDiagnostics detects non-writable rules path", () => {
   assert.equal(diagnostics.rulesPathHealthy, false);
   assert.equal(diagnostics.rulesPathLabel, "Rules Path Read-only");
 });
+

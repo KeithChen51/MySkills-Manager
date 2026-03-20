@@ -42,7 +42,7 @@ test("Eval running progress prefers backend stage progress payload and keeps run
 test("Eval run failure keeps running workspace visible instead of jumping back to setup step 3", () => {
   const source = read("src/pages/EvalPage.tsx");
   const handleRunEvalMatch = source.match(
-    /async function handleRunEval\(\)\s+\{([\s\S]*?)\n\s+}\n\n\s+async function handleSubmitReview/,
+    /async function handleRunEval\(\)\s+\{([\s\S]*?)\r?\n\s+}\r?\n\r?\n\s+async function handleSubmitReview/,
   );
   assert.ok(handleRunEvalMatch, "handleRunEval block should exist");
   const handleRunEvalBlock = handleRunEvalMatch[1];

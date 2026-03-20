@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import socket
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
+
+try:
+    from .llm_client import LLMClient, extract_json_object
+except ImportError:
+    from llm_client import LLMClient, extract_json_object  # type: ignore
 
 TRIGGER_BUCKETS = (
     "positive_trigger",
@@ -35,18 +37,7 @@ def _normalize_trigger_bucket(value: Any, should_trigger: bool) -> str:
     return "positive_trigger" if should_trigger else "negative_trigger"
 
 
-def _extract_json_object(raw: str) -> dict[str, Any]:
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if len(lines) >= 2:
-            text = "\n".join(lines[1:-1]).strip()
-
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end < start:
-        raise ValueError("Model output does not contain a JSON object")
-    return json.loads(text[start : end + 1])
+_extract_json_object = extract_json_object
 
 
 def _request_openai_compatible(
@@ -56,54 +47,17 @@ def _request_openai_compatible(
     prompt: str,
     request_timeout_secs: int,
 ) -> str:
-    endpoint = (base_url or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
-    timeout_secs = max(30, int(request_timeout_secs))
-    payload = {
-        "model": model,
-        "temperature": 0.4,
-        "messages": [
-            {
-                "role": "system",
-                "content": "You generate strict JSON test data. Output JSON only.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-    }
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        endpoint,
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
+    """Backward-compatible wrapper using unified LLMClient."""
+    client = LLMClient(
+        api_key=api_key, model=model, base_url=base_url,
+        timeout_secs=max(30, int(request_timeout_secs)),
     )
-
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_secs) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-    except TimeoutError as exc:  # pragma: no cover - network path
-        raise RuntimeError(f"LLM request timed out after {timeout_secs}s: {exc}") from exc
-    except socket.timeout as exc:  # pragma: no cover - network path
-        raise RuntimeError(f"LLM request timed out after {timeout_secs}s: {exc}") from exc
-    except urllib.error.HTTPError as exc:  # pragma: no cover - network path
-        details = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"LLM HTTP {exc.code}: {details}") from exc
-    except urllib.error.URLError as exc:  # pragma: no cover - network path
-        if isinstance(exc.reason, TimeoutError) or isinstance(exc.reason, socket.timeout):
-            raise RuntimeError(f"LLM request timed out after {timeout_secs}s: {exc.reason}") from exc
-        raise RuntimeError(f"LLM request failed: {exc.reason}") from exc
-
-    parsed = json.loads(raw)
-    choices = parsed.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise RuntimeError("LLM response missing choices")
-    message = choices[0].get("message", {})
-    content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("LLM response content is empty")
-    return content
+    messages = [
+        {"role": "system", "content": "You generate strict JSON test data. Output JSON only."},
+        {"role": "user", "content": prompt},
+    ]
+    response = client.chat_completion(messages, temperature=0.4)
+    return str(response["content"])
 
 
 def _validate_trigger_cases(cases: Any, total_count: int) -> list[dict[str, Any]]:
@@ -192,41 +146,131 @@ def _validate_functional_cases(cases: Any, total_count: int) -> list[dict[str, A
     return out[:total_count]
 
 
-def _build_prompt(
+def _build_trigger_prompt(
     skill_name: str,
     skill_content: str,
     trigger_count: int,
-    functional_count: int,
     attempt: int,
 ) -> str:
     extra = ""
     if attempt > 0:
         extra = (
             "\nImportant: previous output was invalid. Ensure strict schema compliance, "
-            "balanced positive/negative trigger labels, and enough cases."
+            "balanced positive/negative trigger labels, and enough cases per bucket."
         )
 
     return f"""
-Generate evaluation datasets for skill `{skill_name}`.
+Generate TRIGGER evaluation dataset for skill `{skill_name}`.
 
 Skill content:
 ---
 {skill_content}
 ---
 
-Output JSON object with exactly these top-level keys:
+Output JSON object with exactly ONE top-level key:
 - trigger: array of objects with fields query (string), should_trigger (boolean), test_bucket (string)
-- functional: array of objects with fields id (string), prompt (string), assertions (string array)
 
 Requirements:
 - trigger length >= {trigger_count}
 - trigger must include explicit buckets: {", ".join(TRIGGER_BUCKETS)}
 - each trigger bucket must have at least {TRIGGER_BUCKET_MIN} cases
+- Do not include explanations, markdown, or extra keys.
+{extra}
+""".strip()
+
+
+def _build_functional_prompt(
+    skill_name: str,
+    skill_content: str,
+    functional_count: int,
+    attempt: int,
+) -> str:
+    extra = ""
+    if attempt > 0:
+        extra = (
+            "\nImportant: previous output was invalid. Ensure strict schema compliance "
+            "and enough valid cases."
+        )
+
+    return f"""
+Generate FUNCTIONAL evaluation dataset for skill `{skill_name}`.
+
+Skill content:
+---
+{skill_content}
+---
+
+Output JSON object with exactly ONE top-level key:
+- functional: array of objects with fields id (string), prompt (string), assertions (string array)
+
+Requirements:
 - functional length >= {functional_count}, each assertion list non-empty
 - IDs must be readable and mostly unique
 - Do not include explanations, markdown, or extra keys.
 {extra}
 """.strip()
+
+
+def _generate_trigger(
+    args: argparse.Namespace,
+    skill_excerpt: str,
+    trigger_count: int,
+    request_timeout_secs: int,
+) -> list[dict[str, Any]]:
+    """Generate trigger cases with 2-attempt retry."""
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            prompt = _build_trigger_prompt(
+                skill_name=args.skill_name,
+                skill_content=skill_excerpt,
+                trigger_count=trigger_count,
+                attempt=attempt,
+            )
+            response_text = _request_openai_compatible(
+                api_key=args.api_key.strip(),
+                model=args.model.strip(),
+                base_url=(args.base_url or "").strip() or None,
+                prompt=prompt,
+                request_timeout_secs=request_timeout_secs,
+            )
+            payload = _extract_json_object(response_text)
+            return _validate_trigger_cases(payload.get("trigger"), trigger_count)
+        except Exception as exc:
+            last_error = exc
+            continue
+    raise last_error or ValueError("trigger generation failed")
+
+
+def _generate_functional(
+    args: argparse.Namespace,
+    skill_excerpt: str,
+    functional_count: int,
+    request_timeout_secs: int,
+) -> list[dict[str, Any]]:
+    """Generate functional cases with 2-attempt retry."""
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            prompt = _build_functional_prompt(
+                skill_name=args.skill_name,
+                skill_content=skill_excerpt,
+                functional_count=functional_count,
+                attempt=attempt,
+            )
+            response_text = _request_openai_compatible(
+                api_key=args.api_key.strip(),
+                model=args.model.strip(),
+                base_url=(args.base_url or "").strip() or None,
+                prompt=prompt,
+                request_timeout_secs=request_timeout_secs,
+            )
+            payload = _extract_json_object(response_text)
+            return _validate_functional_cases(payload.get("functional"), functional_count)
+        except Exception as exc:
+            last_error = exc
+            continue
+    raise last_error or ValueError("functional generation failed")
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -248,47 +292,30 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     request_timeout_secs = max(30, int(getattr(args, "request_timeout_secs", 180)))
     skill_excerpt = skill_content[:12000]
 
-    last_error: Exception | None = None
-    for attempt in range(2):
-        try:
-            prompt = _build_prompt(
-                skill_name=args.skill_name,
-                skill_content=skill_excerpt,
-                trigger_count=trigger_count,
-                functional_count=functional_count,
-                attempt=attempt,
-            )
-            response_text = _request_openai_compatible(
-                api_key=args.api_key.strip(),
-                model=args.model.strip(),
-                base_url=(args.base_url or "").strip() or None,
-                prompt=prompt,
-                request_timeout_secs=request_timeout_secs,
-            )
-            payload = _extract_json_object(response_text)
-            trigger = _validate_trigger_cases(payload.get("trigger"), trigger_count)
-            functional = _validate_functional_cases(payload.get("functional"), functional_count)
+    try:
+        # Phase 1: generate trigger cases (separate API call)
+        trigger = _generate_trigger(args, skill_excerpt, trigger_count, request_timeout_secs)
 
-            args.output_dir.mkdir(parents=True, exist_ok=True)
-            trigger_path = args.output_dir / "trigger.json"
-            functional_path = args.output_dir / "functional.json"
-            trigger_path.write_text(json.dumps(trigger, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            functional_path.write_text(
-                json.dumps(functional, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            return {
-                "status": "success",
-                "trigger_count": len(trigger),
-                "functional_count": len(functional),
-                "trigger_path": str(trigger_path),
-                "functional_path": str(functional_path),
-            }
-        except Exception as exc:  # pragma: no cover - retry wrapper
-            last_error = exc
-            continue
+        # Phase 2: generate functional cases (separate API call)
+        functional = _generate_functional(args, skill_excerpt, functional_count, request_timeout_secs)
 
-    return {
-        "status": "error",
-        "message": f"Failed to generate valid sample datasets: {last_error}",
-    }
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        trigger_path = args.output_dir / "trigger.json"
+        functional_path = args.output_dir / "functional.json"
+        trigger_path.write_text(json.dumps(trigger, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        functional_path.write_text(
+            json.dumps(functional, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return {
+            "status": "success",
+            "trigger_count": len(trigger),
+            "functional_count": len(functional),
+            "trigger_path": str(trigger_path),
+            "functional_path": str(functional_path),
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": f"Failed to generate valid sample datasets: {exc}",
+        }
