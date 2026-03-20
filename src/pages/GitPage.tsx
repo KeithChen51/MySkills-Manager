@@ -27,6 +27,7 @@ import {
   type GitStatus,
 } from "../api/tauri";
 import { useI18n } from "../i18n/I18nProvider";
+import GitFloatingModal from "./git/components/GitFloatingModal";
 import "./GitPage.css";
 
 function inferRepositoryName(url: string): string {
@@ -1548,8 +1549,7 @@ export default function GitPage() {
         </article>
       )}
 
-      {guideOpen && (
-        <>
+      <GitFloatingModal open={guideOpen}>
           <button
             type="button"
             className="git-guide-overlay"
@@ -1604,11 +1604,9 @@ export default function GitPage() {
               </div>
             </article>
           </aside>
-        </>
-      )}
+      </GitFloatingModal>
 
-      {graphOpen && (
-        <>
+      <GitFloatingModal open={graphOpen}>
           <button
             type="button"
             className="git-graph-overlay"
@@ -1743,11 +1741,9 @@ export default function GitPage() {
               </div>
             </article>
           </aside>
-        </>
-      )}
+      </GitFloatingModal>
 
-      {ignoreSelectorOpen && (
-        <>
+      <GitFloatingModal open={ignoreSelectorOpen}>
           <button
             type="button"
             className="git-ignore-overlay"
@@ -1814,8 +1810,7 @@ export default function GitPage() {
               </div>
             </article>
           </aside>
-        </>
-      )}
+      </GitFloatingModal>
     </div>
   );
 }

@@ -87,6 +87,7 @@
   --text-md: 1rem;
   --text-lg: 1.125rem;
   --text-xl: clamp(1.35rem, 1.08rem + 0.84vw, 1.5rem);
+  --type-display: clamp(1.48rem, 1.1rem + 1.12vw, 1.78rem);
 
   /* Spacing scale */
   --sp-2xs: 2px;
@@ -97,6 +98,7 @@
   --sp-xl: 24px;
   --sp-2xl: 32px;
   --sp-3xl: 40px;
+  --card-rhythm-gap: clamp(14px, 1.2vw, 20px);
 
   /* Radius */
   --radius-sm: 8px;
@@ -131,6 +133,8 @@
   --editor-meta-textarea-min-height: 88px;
   --editor-pane-min-height: 320px;
   --rules-editor-min-height: 400px;
+  --chart-height-tall: clamp(300px, 36vw, 380px);
+  --chart-height-medium: clamp(272px, 32vw, 344px);
 
   /* Motion */
   --transition-fast: 0.15s ease;

@@ -7,9 +7,9 @@
 }
 
 .dashboard-chart--tall {
-  height: 320px;
+  height: var(--chart-height-tall);
 }
 
 .dashboard-chart--medium {
-  height: 300px;
+  height: var(--chart-height-medium);
 }

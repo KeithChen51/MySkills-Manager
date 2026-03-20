@@ -31,6 +31,7 @@ import {
 import KpiCard from "../components/KpiCard";
 import { useI18n } from "../i18n/I18nProvider";
 import type { MessageKey } from "../i18n/messages";
+import EvalFloatingModal from "./eval/components/EvalFloatingModal";
 import { useTheme } from "../theme/ThemeProvider";
 import "./EvalPage.css";
 
@@ -3366,7 +3367,9 @@ export default function EvalPage({ skills }: Props) {
         </article>
       )}
 
-      {showSamples && (triggerDraftRows.length > 0 || functionalDraftRows.length > 0) && (
+      <EvalFloatingModal
+        open={showSamples && (triggerDraftRows.length > 0 || functionalDraftRows.length > 0)}
+      >
         <div
           className="eval-samples-modal-backdrop"
           role="dialog"
@@ -3614,9 +3617,9 @@ export default function EvalPage({ skills }: Props) {
             </div>
           </article>
         </div>
-      )}
+      </EvalFloatingModal>
 
-      {showHistory && selectedSkill && (
+      <EvalFloatingModal open={showHistory && Boolean(selectedSkill)}>
         <div
           className="eval-history-modal-backdrop"
           role="dialog"
@@ -3791,7 +3794,7 @@ export default function EvalPage({ skills }: Props) {
             </div>
           </article>
         </div>
-      )}
+      </EvalFloatingModal>
 
       {showReviewView && report?.mode === "full" && (
         <>
