@@ -193,9 +193,9 @@
 }
 
 .eval-flow-state-active {
-  background: color-mix(in srgb, var(--accent) 26%, transparent);
-  color: var(--accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 36%, transparent);
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .eval-flow-state-done {
@@ -629,9 +629,8 @@
 }
 
 .btn.eval-action-btn {
-  font-size: var(--text-xs);
-  min-height: 40px;
-  padding: 0 var(--sp-sm);
+  min-height: var(--control-height);
+  padding: 0 var(--sp-md);
 }
 
 .eval-action-btn-run {
@@ -1585,20 +1584,20 @@
 /* Active state */
 .eval-milestone-active .eval-milestone-circle {
   animation: eval-milestone-pulse 1.8s ease-in-out infinite;
-  background: var(--primary);
-  border-color: var(--primary);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 20%, transparent);
+  background: #3b82f6;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.25);
   color: #fff;
 }
 
 .eval-milestone-active .eval-milestone-label {
-  color: var(--primary);
+  color: #3b82f6;
   font-weight: 600;
 }
 
 @keyframes eval-milestone-pulse {
-  0%, 100% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 25%, transparent); }
-  50% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--primary) 10%, transparent); }
+  0%, 100% { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.3); }
+  50% { box-shadow: 0 0 0 8px rgba(59, 130, 246, 0.12); }
 }
 
 .eval-milestone-stats {
@@ -1753,16 +1752,17 @@
 }
 
 .eval-sc-star {
-  background: var(--border-card);
+  background: color-mix(in srgb, var(--border-card) 60%, transparent);
   clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
   display: inline-block;
-  height: 22px;
-  transition: background 0.2s ease;
-  width: 22px;
+  height: 24px;
+  transition: background 0.25s ease, filter 0.25s ease;
+  width: 24px;
 }
 
 .eval-sc-star-filled {
-  background: #f5a623;
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  filter: drop-shadow(0 1px 2px rgba(245, 166, 35, 0.35));
 }
 
 .eval-sc-score {

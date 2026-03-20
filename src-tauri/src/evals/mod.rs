@@ -3636,29 +3636,29 @@ fn build_analyzer_summary(
     for (name, _) in ranked.iter().take(3) {
         if name.contains("network") {
             recommendations.push(
-                "Add retry/backoff and timeout observability to reduce network-induced flakiness."
+                "增加重试/退避和超时可观测性，降低网络抖动导致的失败。"
                     .to_string(),
             );
         } else if name.contains("parse") || name.contains("json") {
             recommendations.push(
-                "Harden structured-output parsing and add stricter output-format assertions."
+                "强化结构化解析与输出格式断言，减少解析类失败。"
                     .to_string(),
             );
         } else if name.contains("routing_mismatch") {
             recommendations.push(
-                "Expand trigger boundary and adjacent-skill confusion cases for disambiguation."
+                "补充触发边界与相邻技能混淆样例，提升判别能力。"
                     .to_string(),
             );
         } else {
             recommendations.push(
-                "Promote representative failed cases into the next-round regression dataset."
+                "将代表性失败样例纳入下一轮回归数据集。"
                     .to_string(),
             );
         }
     }
     if recommendations.is_empty() {
         recommendations
-            .push("No dominant failure pattern detected; keep monitoring variance.".to_string());
+            .push("暂无主导失败模式，建议持续观察评测波动。".to_string());
     }
     recommendations.dedup();
 

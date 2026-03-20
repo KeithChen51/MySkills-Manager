@@ -1,4 +1,4 @@
-﻿/**
+/**
  * EvalScorecard 鈥?Five-dimensional radar chart + ratings for v6.0.
  *
  * Displays:
@@ -92,9 +92,6 @@ function scoreClass(score: number): string {
   return "eval-sc-bad";
 }
 
-function renderStars(rating: number): string[] {
-  return Array.from({ length: 5 }, (_, i) => (i < rating ? "★" : "☆"));
-}
 
 function readScorecardChartTokens(): ScorecardChartTokens {
   const fallback: ScorecardChartTokens = {
@@ -179,14 +176,12 @@ export default function EvalScorecard({ report }: { report: EvalPipelineOutput }
       {/* Header: Overall Rating */}
       <div className="eval-sc-header">
         <div className="eval-sc-stars">
-          {renderStars(scorecard.overallRating).map((star, i) => (
+          {Array.from({ length: 5 }, (_, i) => (
             <span
               key={i}
               className={`eval-sc-star ${i < scorecard.overallRating ? "eval-sc-star-filled" : ""}`}
               aria-hidden="true"
-            >
-              {star}
-            </span>
+            />
           ))}
         </div>
         <span className="eval-sc-score">

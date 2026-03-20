@@ -245,27 +245,31 @@ export default function ToolCard({
         </div>
       </footer>
 
-      {healthNeedsFix && (
-        <div className="tool-card-health-actions">
-          <button
-            type="button"
-            className="btn btn-ghost tool-card-action-btn"
-            onClick={onManualSync}
-            disabled={busy || syncingCurrentTool}
-          >
-            {t("tools.routerHealth.reapply")}
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost tool-card-action-btn"
-            onClick={() => setPathsOpen(true)}
-            disabled={busy || savingCurrentTool}
-          >
-            {t("tools.routerHealth.openPath")}
-          </button>
-          <span className="tool-card-health-reason">{routerHealth.reason}</span>
-        </div>
-      )}
+      <div className={`tool-card-health-actions ${healthNeedsFix ? "" : "is-placeholder"}`.trim()} aria-hidden={!healthNeedsFix}>
+        {healthNeedsFix ? (
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost tool-card-action-btn"
+              onClick={onManualSync}
+              disabled={busy || syncingCurrentTool}
+            >
+              {t("tools.routerHealth.reapply")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost tool-card-action-btn"
+              onClick={() => setPathsOpen(true)}
+              disabled={busy || savingCurrentTool}
+            >
+              {t("tools.routerHealth.openPath")}
+            </button>
+            <span className="tool-card-health-reason">{routerHealth.reason}</span>
+          </>
+        ) : (
+          <span className="tool-card-health-placeholder" />
+        )}
+      </div>
 
       <div className="tool-card-actions">
         {installed && (

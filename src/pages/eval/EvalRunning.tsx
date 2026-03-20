@@ -65,9 +65,11 @@ export default function EvalRunning() {
     return () => clearInterval(timer);
   }, []);
 
-  // Track completed stage stats
+  // Track completed stage stats — accumulate per-stage data while active,
+  // then snapshot on stage transition.
   const [stageStats, setStageStats] = useState<Record<string, StageStats>>({});
   const prevStageKeyRef = useRef<string | null>(null);
+  const runningStatsRef = useRef<Record<string, StageStats>>({});
 
   const mode = state.runSnapshot?.mode ?? state.evalMode;
   const stages = useMemo(() => {
@@ -80,24 +82,31 @@ export default function EvalRunning() {
   const currentStageIdx = stages.findIndex((s) => s.key === currentStageKey);
   const isCompleted = p?.status === "completed";
 
+  // Keep running totals updated for the current stage
+  useEffect(() => {
+    if (currentStageKey && p) {
+      runningStatsRef.current[currentStageKey] = {
+        completed: p.completedCount ?? 0,
+        failed: p.failedCount ?? 0,
+        total: p.totalCount ?? 0,
+      };
+    }
+  }, [currentStageKey, p]);
+
   // Capture stats only after render when stage transitions.
   useEffect(() => {
     const prevStage = prevStageKeyRef.current;
-    if (prevStage && prevStage !== currentStageKey && p) {
-      setStageStats((existing) => {
-        if (existing[prevStage]) return existing;
-        return {
-          ...existing,
-          [prevStage]: {
-            completed: p.completedCount ?? 0,
-            failed: p.failedCount ?? 0,
-            total: p.totalCount ?? 0,
-          },
-        };
-      });
+    if (prevStage && prevStage !== currentStageKey) {
+      const lastKnown = runningStatsRef.current[prevStage];
+      if (lastKnown) {
+        setStageStats((existing) => {
+          if (existing[prevStage]) return existing;
+          return { ...existing, [prevStage]: lastKnown };
+        });
+      }
     }
     prevStageKeyRef.current = currentStageKey;
-  }, [currentStageKey, p]);
+  }, [currentStageKey]);
 
   const totalPercent = p?.totalProgressPercent ?? 0;
   const stagePercent = p?.stageProgressPercent ?? 0;

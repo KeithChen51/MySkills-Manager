@@ -31,31 +31,21 @@ function ModelSelect({
 }) {
   const allModels = modelGroupOptions.flatMap((g) => g.models);
   return (
-    <div style={{ display: "flex", gap: "var(--sp-xs)" }}>
-      <select
-        className="filter-select"
-        value={allModels.includes(value) ? value : ""}
-        onChange={(e) => onChange(e.target.value)}
-        style={{ flex: 1 }}
-      >
-        <option value="">{placeholder ?? t("eval.config.selectModel" as MessageKey)}</option>
-        {modelGroupOptions.map((group) => (
-          <optgroup key={group.groupName} label={group.groupName}>
-            {group.models.map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
-      <input
-        className="field-input"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={t("eval.config.model.placeholder" as MessageKey)}
-        style={{ flex: 1, maxWidth: 240 }}
-        title={t("eval.config.model.customHint" as MessageKey)}
-      />
-    </div>
+    <select
+      className="filter-select"
+      value={allModels.includes(value) ? value : ""}
+      onChange={(e) => onChange(e.target.value)}
+      style={{ width: "100%" }}
+    >
+      <option value="">{placeholder ?? t("eval.config.selectModel" as MessageKey)}</option>
+      {modelGroupOptions.map((group) => (
+        <optgroup key={group.groupName} label={group.groupName}>
+          {group.models.map((m) => (
+            <option key={m} value={m}>{m}</option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
   );
 }
 
@@ -106,7 +96,7 @@ export default function EvalSetup({ skills }: Props) {
     setGenerating(true);
     setGenResult(null);
     setGenElapsed(0);
-    setGenStage(t("eval.samples.stage.generating" as MessageKey));
+    setGenStage(t("eval.samples.stage.generatingTrigger" as MessageKey));
     const startMs = Date.now();
     const timer = setInterval(() => {
       setGenElapsed(Math.round((Date.now() - startMs) / 1000));
@@ -307,25 +297,29 @@ export default function EvalSetup({ skills }: Props) {
               <>
                 <div className="field eval-field-wide">
                   <label className="field-label">{t("eval.config.generationModel" as MessageKey)}</label>
-                  <ModelSelect
-                    value={state.sampleModel}
-                    onChange={(v) => dispatch({ type: "SET_SAMPLE_MODEL", payload: v })}
-                    modelGroupOptions={modelGroupOptions}
-                    t={t}
-                  />
-                </div>
-                <div className="eval-dataset-actions eval-field-wide">
-                  <button
-                    className="btn btn-primary eval-action-btn"
-                    disabled={generating || !state.selectedSkill || !state.sampleModel.trim()}
-                    onClick={() => void handleGenerate()}
-                  >
-                    {generating
-                      ? `⏳ ${t("eval.samples.generating" as MessageKey)}...`
-                      : needsFunctional
-                        ? t("eval.samples.generate" as MessageKey, { trigger: 72, functional: 36 })
-                        : t("eval.samples.generate" as MessageKey, { trigger: 72, functional: 0 })}
-                  </button>
+                  <div style={{ display: "flex", gap: "var(--sp-xs)", alignItems: "center" }}>
+                    <ModelSelect
+                      value={state.sampleModel}
+                      onChange={(v) => dispatch({ type: "SET_SAMPLE_MODEL", payload: v })}
+                      modelGroupOptions={modelGroupOptions}
+                      t={t}
+                    />
+                    <button
+                      className="btn btn-primary eval-action-btn"
+                      disabled={generating || !state.selectedSkill || !state.sampleModel.trim()}
+                      onClick={() => void handleGenerate()}
+                      style={{ whiteSpace: "nowrap" }}
+                    >
+                      {generating
+                        ? `⏳ ${t("eval.samples.generating" as MessageKey)}`
+                        : t("eval.samples.generateButton" as MessageKey)}
+                    </button>
+                  </div>
+                  <p className="eval-path-hint" style={{ marginTop: "var(--sp-2xs)" }}>
+                    {needsFunctional
+                      ? t("eval.samples.generateHint" as MessageKey, { trigger: 72, functional: 36 })
+                      : t("eval.samples.generateHint" as MessageKey, { trigger: 72, functional: 0 })}
+                  </p>
                 </div>
 
                 {/* Progress feedback */}
@@ -452,13 +446,13 @@ export default function EvalSetup({ skills }: Props) {
               <ModelSelect
                 value={state.model}
                 onChange={(v) => dispatch({ type: "SET_MODEL", payload: v })}
+                placeholder={t("eval.config.runModelHint" as MessageKey)}
                 modelGroupOptions={modelGroupOptions}
                 t={t}
               />
             </div>
 
             {/* v6.0: Three-Role Model Config */}
-            <p className="eval-config-group-title">{t("eval.config.judgeModel" as MessageKey)}</p>
             <div className="field">
               <label className="field-label">{t("eval.config.judgeModel" as MessageKey)}</label>
               <ModelSelect
