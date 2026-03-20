@@ -92,6 +92,11 @@ function scoreClass(score: number): string {
   return "eval-sc-bad";
 }
 
+function renderStars(rating: number, max = 5): string {
+  const safeRating = Math.max(0, Math.min(max, rating));
+  return `${"★".repeat(safeRating)}${"☆".repeat(max - safeRating)}`;
+}
+
 
 function readScorecardChartTokens(): ScorecardChartTokens {
   const fallback: ScorecardChartTokens = {
@@ -175,7 +180,7 @@ export default function EvalScorecard({ report }: { report: EvalPipelineOutput }
     <div className="eval-sc">
       {/* Header: Overall Rating */}
       <div className="eval-sc-header">
-        <div className="eval-sc-stars">
+        <div className="eval-sc-stars" role="img" aria-label={renderStars(scorecard.overallRating)}>
           {Array.from({ length: 5 }, (_, i) => (
             <span
               key={i}
