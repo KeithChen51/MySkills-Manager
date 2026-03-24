@@ -63,8 +63,17 @@
   flex: 1;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .skill-tools-pane.is-active {
   display: flex;
+  min-height: 0;
+}
+
+.skill-tools-pane.is-active > .page {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
 }
