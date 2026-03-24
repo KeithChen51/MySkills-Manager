@@ -192,10 +192,10 @@
 }
 
 .sidebar-beta-badge {
-  background: color-mix(in srgb, var(--prism-orange) 16%, transparent);
-  border: 1px solid color-mix(in srgb, var(--prism-orange) 48%, transparent);
+  background: var(--highlight-bg);
+  border: 1px solid var(--highlight-border);
   border-radius: var(--radius-pill);
-  color: color-mix(in srgb, var(--prism-orange) 68%, var(--text-primary));
+  color: color-mix(in srgb, var(--highlight) 78%, var(--text-primary));
   display: inline-flex;
   font-size: 10px;
   font-weight: 800;

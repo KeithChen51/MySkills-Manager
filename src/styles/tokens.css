@@ -29,6 +29,20 @@
   --danger-bg: rgba(212, 109, 130, 0.14);
   --focus-ring: 0 0 0 3px rgba(99, 179, 237, 0.26);
 
+  /* Brand functional tokens (Logo palette → UI roles) */
+  --secondary: #b794f4;
+  --secondary-hover: #a67df0;
+  --secondary-bg: rgba(183, 148, 244, 0.14);
+  --secondary-border: rgba(183, 148, 244, 0.32);
+  --highlight: #f6ad55;
+  --highlight-hover: #ed9d3f;
+  --highlight-bg: rgba(246, 173, 85, 0.14);
+  --highlight-border: rgba(246, 173, 85, 0.36);
+  --info: #7f9cf5;
+  --info-bg: rgba(127, 156, 245, 0.12);
+  --info-border: rgba(127, 156, 245, 0.28);
+  --text-disabled: #a0aec0;
+
   /* Decorative tones from brand palette */
   --prism-orange: #f6ad55;
   --prism-yellow: #f2c27f;
@@ -79,9 +93,9 @@
   --color-text-secondary: var(--text-secondary);
 
   /* Typography */
-  --font-body: "Avenir Next", "PingFang SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
-  --font-heading: "SF Pro Display", "Avenir Next", "PingFang SC", "Microsoft YaHei UI", sans-serif;
-  --font-mono: "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
+  --font-body: "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-heading: "SF Pro Display", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "JetBrains Mono", "SF Mono", "Consolas", monospace;
   --text-xs: 0.8125rem;
   --text-sm: 0.875rem;
   --text-md: 1rem;
@@ -194,6 +208,19 @@
   --danger: #ef8ca1;
   --danger-bg: rgba(239, 140, 161, 0.24);
   --focus-ring: 0 0 0 3px rgba(127, 194, 241, 0.32);
+
+  --secondary: #cfb2ff;
+  --secondary-hover: #d9c4ff;
+  --secondary-bg: rgba(207, 178, 255, 0.20);
+  --secondary-border: rgba(207, 178, 255, 0.36);
+  --highlight: #fbd38d;
+  --highlight-hover: #fcc468;
+  --highlight-bg: rgba(251, 211, 141, 0.20);
+  --highlight-border: rgba(251, 211, 141, 0.36);
+  --info: #a3bffa;
+  --info-bg: rgba(163, 191, 250, 0.16);
+  --info-border: rgba(163, 191, 250, 0.32);
+  --text-disabled: #5a6e8a;
 
   --prism-orange: #f6c083;
   --prism-yellow: #f1d296;
