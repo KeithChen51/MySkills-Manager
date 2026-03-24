@@ -85,3 +85,13 @@ npm run pack:gitee
 Then `latest.json` URLs become:
 
 - `https://gitee.com/your-org/your-repo/releases/download/v<version>/<installer>`
+
+## UI/UX Remediation Handoff (2026-03-20)
+
+- Verification report:
+  - `docs/reports/2026-03-20-ui-ux-remediation-verification.md`
+- Baseline expectation before release:
+  - `npm run lint` must pass
+  - `node --test test/*.test.ts` must pass
+- This handoff should be reviewed together with the remediation plan:
+  - `docs/plans/2026-03-20-ui-ux-audit-remediation-checklist.md`

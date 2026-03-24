@@ -1,14 +1,25 @@
 .sidebar-nav {
   background:
+    radial-gradient(
+      74% 46% at 8% -18%,
+      color-mix(in srgb, var(--sidebar-glow-1) 92%, transparent),
+      transparent 82%
+    ),
+    radial-gradient(
+      88% 64% at 108% 104%,
+      color-mix(in srgb, var(--sidebar-glow-2) 86%, transparent),
+      transparent 84%
+    ),
     linear-gradient(
       165deg,
-      var(--sidebar-glow-1) 0%,
-      var(--sidebar-glow-2) 34%,
-      var(--sidebar-glow-3) 72%,
+      color-mix(in srgb, var(--sidebar-glow-1) 88%, transparent) 0%,
+      color-mix(in srgb, var(--sidebar-glow-2) 64%, transparent) 36%,
+      color-mix(in srgb, var(--sidebar-glow-3) 58%, transparent) 72%,
       transparent 100%
     ),
     var(--bg-sidebar);
   border-right: 1px solid var(--border-card);
+  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--bg-card) 35%, transparent);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -23,17 +34,33 @@
 .sidebar-nav::before {
   background: linear-gradient(
     180deg,
-    var(--prism-blue) 0%,
-    var(--prism-aqua) 45%,
-    var(--prism-purple) 100%
+    color-mix(in srgb, var(--prism-blue) 84%, transparent) 0%,
+    color-mix(in srgb, var(--prism-aqua) 76%, transparent) 45%,
+    color-mix(in srgb, var(--prism-purple) 74%, transparent) 100%
   );
   content: "";
   left: 0;
-  opacity: 0.5;
+  opacity: 0.42;
   position: absolute;
   top: 0;
-  width: 2px;
+  width: 1px;
   height: 100%;
+}
+
+.sidebar-nav::after {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--prism-blue) 20%, transparent) 0%,
+    transparent 100%
+  );
+  content: "";
+  height: 100%;
+  left: 0;
+  opacity: 0.32;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  width: 40px;
 }
 
 .sidebar-top,
@@ -52,7 +79,7 @@
   align-items: center;
   display: flex;
   gap: var(--sp-md);
-  margin-bottom: var(--sp-sm);
+  margin-bottom: var(--sp-md);
   padding: 0 var(--sp-sm);
 }
 
@@ -64,18 +91,18 @@
 
 .sidebar-brand-text {
   color: var(--text-primary);
-  font-family: var(--font-body);
-  font-size: 1.18rem;
-  font-weight: 700;
-  letter-spacing: 0.01em;
+  font-family: var(--font-heading);
+  font-size: 1.14rem;
+  font-weight: 600;
+  letter-spacing: 0.015em;
   line-height: 1;
 }
 
 .sidebar-brand-subtitle {
   color: var(--text-muted);
-  font-size: 0.74rem;
+  font-size: 0.69rem;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   line-height: 1.2;
   text-transform: uppercase;
 }
@@ -87,7 +114,12 @@
 
 .sidebar-logo {
   align-items: center;
-  background: var(--bg-input);
+  background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--bg-input) 70%, var(--bg-card)) 0%,
+      var(--bg-input) 100%
+    ),
+    var(--bg-input);
   border: 1px solid var(--border-input);
   border-radius: var(--radius-md);
   box-shadow: var(--sidebar-logo-shadow);
@@ -124,18 +156,18 @@
     color var(--transition),
     border-color var(--transition),
     background var(--transition),
-    transform var(--transition-fast);
+    box-shadow var(--transition-fast);
   width: 100%;
 }
 
 .sidebar-item:hover {
-  background: var(--bg-card-hover);
-  border-color: var(--border-input);
+  background: color-mix(in srgb, var(--bg-card-hover) 88%, transparent);
+  border-color: color-mix(in srgb, var(--card-hover-border) 68%, var(--border-card));
   color: var(--text-primary);
 }
 
 .sidebar-item.active {
-  background: var(--accent-light);
+  background: color-mix(in srgb, var(--accent-light) 72%, transparent);
   border-color: var(--accent-outline);
   box-shadow: inset 0 0 0 1px var(--accent-outline-soft);
   color: var(--text-primary);
@@ -146,10 +178,10 @@
 }
 
 .sidebar-label {
-  font-family: var(--font-body);
-  font-size: var(--text-lg);
+  font-family: var(--font-heading);
+  font-size: 1rem;
   font-weight: 600;
-  line-height: 1.2;
+  line-height: 1.25;
 }
 
 .sidebar-label-wrap {
@@ -160,10 +192,10 @@
 }
 
 .sidebar-beta-badge {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 58%, transparent);
+  background: color-mix(in srgb, var(--prism-orange) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--prism-orange) 48%, transparent);
   border-radius: var(--radius-pill);
-  color: var(--accent);
+  color: color-mix(in srgb, var(--prism-orange) 68%, var(--text-primary));
   display: inline-flex;
   font-size: 10px;
   font-weight: 800;
@@ -179,6 +211,8 @@
 
 .sidebar-bottom {
   margin-top: var(--sp-lg);
+  padding-top: var(--sp-sm);
+  border-top: 1px solid color-mix(in srgb, var(--border-card) 84%, transparent);
 }
 
 @media (max-width: 1100px) {

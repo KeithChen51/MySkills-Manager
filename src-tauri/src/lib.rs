@@ -115,6 +115,7 @@ pub fn run() {
             evals::eval_generate_feedback_drafts,
             evals::eval_read_evidence_case,
             evals::eval_save_config,
+            evals::eval_test_model_connection,
             evals::eval_control,
             evals::run_trigger_eval,
             evals::run_functional_eval,

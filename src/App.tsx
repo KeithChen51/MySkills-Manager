@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   APP_ERROR_EVENT,
@@ -20,10 +20,8 @@ import VersionJumpNotification from "./components/VersionJumpNotification";
 import { useI18n } from "./i18n/I18nProvider";
 import DashboardPage from "./pages/DashboardPage";
 import GitPage from "./pages/GitPage";
-import LogsPage from "./pages/LogsPage";
-import SkillsPage from "./pages/SkillsPage";
+import SkillToolsPage from "./pages/SkillToolsPage";
 import SettingsPage from "./pages/SettingsPage";
-import ToolsPage from "./pages/ToolsPage";
 import EvalPage from "./pages/EvalPage";
 import { useAppUpdater } from "./updater/useAppUpdater";
 import "./App.css";
@@ -176,15 +174,9 @@ export default function App() {
   function renderPage() {
     switch (view) {
       case "skills":
-        return <SkillsPage skills={skills} onRefresh={loadSkills} />;
+        return <SkillToolsPage skills={skills} onRefresh={loadSkills} />;
       case "dashboard":
         return <DashboardPage skills={skills} />;
-      case "logs":
-        return <LogsPage skills={skills} />;
-      case "tools":
-        return <ToolsPage />;
-      case "eval":
-        return <EvalPage skills={skills} />;
       case "git":
         return <GitPage />;
       case "settings":
@@ -253,7 +245,10 @@ export default function App() {
               onDismiss={updater.dismissSilentReady}
             />
           )}
-          {renderPage()}
+          <div style={{ display: view === "eval" ? "flex" : "none", flex: 1, minHeight: 0 }}>
+            <EvalPage skills={skills} />
+          </div>
+          {view !== "eval" && renderPage()}
         </div>
         <div className="app-error-toast-wrap">
           {globalErrors.map((item) => (

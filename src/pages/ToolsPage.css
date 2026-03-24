@@ -45,13 +45,14 @@
 }
 
 .tools-header-btn {
-  min-height: 42px;
+  min-height: 44px;
 }
 
 .tools-grid {
   display: grid;
   gap: var(--sp-lg);
-  grid-template-columns: repeat(auto-fill, minmax(520px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(clamp(300px, 38vw, 420px), 1fr));
+  align-items: stretch;
 }
 
 .tools-sections {
@@ -77,8 +78,10 @@
   border: 1px solid var(--border-card);
   border-radius: 18px;
   box-shadow: var(--shadow-card);
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: var(--sp-sm);
+  height: 100%;
   padding: var(--sp-md);
   transition:
     border-color var(--transition),
@@ -98,13 +101,13 @@
 
 .tool-card-header {
   align-items: flex-start;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
   gap: var(--sp-md);
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .tool-card-identity {
-  align-items: center;
+  align-items: flex-start;
   display: flex;
   gap: var(--sp-md);
   min-width: 0;
@@ -152,10 +155,11 @@
 }
 
 .tool-card-title-row {
-  align-items: center;
+  align-items: flex-start;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  row-gap: 8px;
 }
 
 .tool-card-title {
@@ -172,21 +176,23 @@
 
 .tool-card-toggle-wrap {
   align-items: center;
-  display: flex;
+  display: grid;
+  gap: var(--sp-xs);
+  grid-template-columns: minmax(0, 1fr) auto;
   flex-shrink: 0;
-  gap: 6px;
 }
 
 .tool-card-toggles {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  justify-content: flex-end;
+  display: grid;
+  gap: var(--sp-xs);
+  min-width: 168px;
 }
 
 .tool-switch-label {
   color: var(--text-secondary);
   font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
   text-align: right;
 }
 
@@ -224,7 +230,7 @@
   cursor: pointer;
   display: inline-flex;
   flex-shrink: 0;
-  height: 40px;
+  height: 44px;
   justify-content: flex-start;
   padding: 4px;
   transition: background var(--transition), border-color var(--transition);
@@ -320,9 +326,9 @@
   cursor: pointer;
   display: inline-flex;
   flex-shrink: 0;
-  height: 40px;
+  height: 44px;
   justify-content: center;
-  width: 40px;
+  width: 44px;
 }
 
 .tool-path-picker:hover:not(:disabled) {
@@ -337,48 +343,140 @@
 }
 
 .tool-card-footer {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
+  border-top: 1px solid var(--border-card);
+  display: grid;
   gap: var(--sp-sm);
-  justify-content: space-between;
+  padding-top: var(--sp-sm);
 }
 
 .tool-card-meta {
   color: var(--text-secondary);
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   font-size: var(--text-sm);
-  gap: var(--sp-sm);
+  gap: 2px var(--sp-md);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.tool-card-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tool-card-flags {
+  align-content: flex-start;
   display: flex;
   flex-wrap: wrap;
   gap: var(--sp-xs);
+  min-height: 64px;
 }
 
 .tool-card-actions {
+  align-items: stretch;
   display: flex;
   flex-wrap: wrap;
   gap: var(--sp-sm);
   justify-content: flex-end;
+  margin-top: auto;
 }
 
 .tool-card-action-btn {
-  min-height: 40px;
+  flex: 1 1 140px;
+  height: 44px;
+  min-width: 0;
+}
+
+.tool-card-sync-feedback {
+  font-size: var(--text-sm);
+  margin: 0;
+}
+
+.tool-card-sync-feedback.neutral {
+  color: var(--text-secondary);
+}
+
+.tool-card-sync-feedback.ok {
+  color: var(--success);
+}
+
+.tool-card-sync-feedback.warn {
+  color: var(--warning);
+}
+
+.tool-card-sync-action {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+}
+
+.tool-card-btn-spinner {
+  animation: tool-card-spin 0.8s linear infinite;
+  border: 2px solid color-mix(in srgb, var(--text-primary) 26%, transparent);
+  border-right-color: var(--text-primary);
+  border-radius: 999px;
+  display: inline-block;
+  flex-shrink: 0;
+  height: 13px;
+  width: 13px;
+}
+
+.tool-card-info-icon {
+  align-items: center;
+  background: color-mix(in srgb, var(--bg-input) 88%, transparent);
+  border: 1px solid var(--border-input);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  cursor: help;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  height: 20px;
+  justify-content: center;
+  line-height: 1;
+  width: 20px;
+}
+
+.tool-card-info-icon:focus-visible {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+  outline: none;
 }
 
 .tool-card-health-actions {
   align-items: center;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: var(--sp-xs);
+  min-height: 44px;
+  min-width: 0;
+}
+
+.tool-card-health-actions.is-placeholder {
+  pointer-events: none;
+  visibility: hidden;
 }
 
 .tool-card-health-reason {
   color: var(--text-muted);
   font-size: var(--text-xs);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-card-health-placeholder {
+  display: block;
+  height: 1px;
+  width: 1px;
+}
+
+@keyframes tool-card-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .tools-form-card {
@@ -394,7 +492,7 @@
 }
 
 .tools-form-hide-btn {
-  min-height: 40px;
+  min-height: 44px;
 }
 
 .tools-form-grid {
@@ -461,11 +559,21 @@
 
   .tool-card-header {
     align-items: stretch;
-    flex-direction: column;
+    grid-template-columns: 1fr;
+  }
+
+  .tool-card-toggles {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .tool-card-toggle-wrap {
+    grid-template-columns: auto auto;
+    justify-content: space-between;
   }
 
   .tool-switch {
-    align-self: flex-end;
+    justify-self: end;
   }
 
   .tool-path-row {
@@ -479,5 +587,30 @@
 
   .tool-card-actions {
     justify-content: flex-start;
+  }
+
+  .tool-card-action-btn {
+    flex-basis: 100%;
+  }
+
+  .tool-card-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .tool-card-flags {
+    min-height: 0;
+  }
+
+  .tool-card-health-actions {
+    flex-wrap: wrap;
+    min-height: 0;
+  }
+
+  .tool-card-health-actions.is-placeholder {
+    display: none;
+  }
+
+  .tool-card-health-reason {
+    white-space: normal;
   }
 }

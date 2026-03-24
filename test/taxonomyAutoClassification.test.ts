@@ -8,7 +8,7 @@ function read(pathFromRoot: string) {
 }
 
 test("eval backend ensures taxonomy before pipeline execution and keeps non-blocking semantics", () => {
-  const source = read("src-tauri/src/evals.rs");
+  const source = read("src-tauri/src/evals/mod.rs");
   assert.ok(
     source.includes("ensure_skill_taxonomy("),
     "eval backend should ensure taxonomy before running pipeline",

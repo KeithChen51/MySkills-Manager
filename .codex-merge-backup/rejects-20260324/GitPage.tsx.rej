@@ -1,0 +1,11 @@
+diff a/src/pages/GitPage.tsx b/src/pages/GitPage.tsx	(rejected hunks)
+@@ -1548,8 +1549,7 @@ export default function GitPage() {
+         </article>
+       )}
+ 
+-      {guideOpen && (
+-        <>
++      <GitFloatingModal open={guideOpen}>
+           <button
+             type="button"
+             className="git-guide-overlay"

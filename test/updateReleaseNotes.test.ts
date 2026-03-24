@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   parseUpdaterReleaseNotes,
   resolveUpdaterDownloadUrl,
-} from "../src/updater/releaseNotes";
+} from "../src/updater/releaseNotes.ts";
 
 test("parseUpdaterReleaseNotes parses json structured notes", () => {
   const parsed = parseUpdaterReleaseNotes(

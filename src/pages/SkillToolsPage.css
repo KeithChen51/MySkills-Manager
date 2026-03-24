@@ -1,0 +1,70 @@
+.skill-tools-shell {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.skill-tools-tabs {
+  align-items: center;
+  background: color-mix(in srgb, var(--bg-card) 84%, var(--bg-input) 16%);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  width: fit-content;
+}
+
+.skill-tools-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius-md) - 3px);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: var(--font-heading);
+  font-size: var(--typo-body-size);
+  font-weight: 600;
+  line-height: 1;
+  min-height: 38px;
+  min-width: 132px;
+  padding: 0 16px;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.skill-tools-tab:hover {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--border-card) 72%, var(--card-hover-border));
+}
+
+.skill-tools-tab.active {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--bg-card) 80%, var(--accent-light)) 0%,
+      var(--bg-card) 100%
+    ),
+    var(--bg-card);
+  border-color: var(--card-hover-border);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--bg-card) 60%, transparent);
+  color: var(--text-primary);
+}
+
+.skill-tools-pane {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.skill-tools-pane.is-active {
+  display: flex;
+}

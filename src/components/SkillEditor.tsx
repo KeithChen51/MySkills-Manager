@@ -17,6 +17,7 @@ import {
 } from "../domain/skillDocument";
 import { tagsFromInput, tagsToInput } from "../domain/tagInput";
 import { useI18n } from "../i18n/I18nProvider";
+import useDialogA11y from "./useDialogA11y";
 import { IconClose, IconSave } from "./icons";
 import "./SkillEditor.css";
 
@@ -52,6 +53,12 @@ export default function SkillEditor({ skill, onClose, onSaved }: Props) {
   const [selectedFile, setSelectedFile] = useState("SKILL.md");
   const [monacoReady, setMonacoReady] = useState(false);
   const monacoConfiguredRef = useRef(false);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const { dialogRef } = useDialogA11y<HTMLDivElement>({
+    open: true,
+    onClose,
+    initialFocusRef: closeButtonRef,
+  });
 
   useEffect(() => {
     if (monacoConfiguredRef.current) {
@@ -151,10 +158,12 @@ export default function SkillEditor({ skill, onClose, onSaved }: Props) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
+        ref={dialogRef}
         className="modal-window"
         role="dialog"
         aria-modal="true"
         aria-label={skill.name}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -177,6 +186,7 @@ export default function SkillEditor({ skill, onClose, onSaved }: Props) {
               {saving ? t("editor.saving") : t("editor.save")}
             </button>
             <button
+              ref={closeButtonRef}
               type="button"
               className="modal-close-btn"
               onClick={onClose}

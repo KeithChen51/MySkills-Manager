@@ -1,0 +1,73 @@
+diff a/src/pages/GitPage.css b/src/pages/GitPage.css	(rejected hunks)
+@@ -164,7 +164,7 @@
+ }
+ 
+ .git-guide-error {
+-  color: color-mix(in srgb, var(--danger, #c2410c) 78%, var(--text-secondary));
++  color: color-mix(in srgb, var(--danger) 78%, var(--text-secondary));
+   font-size: var(--text-sm);
+   margin: 0;
+ }
+@@ -319,7 +323,7 @@
+ }
+ 
+ .git-repo-card-error {
+-  color: color-mix(in srgb, var(--danger, #c2410c) 75%, var(--text-secondary));
++  color: color-mix(in srgb, var(--danger) 75%, var(--text-secondary));
+ }
+ 
+ .git-repo-card-actions {
+@@ -803,15 +807,15 @@
+ }
+ 
+ .git-recent-tag.is-pushed {
+-  background: color-mix(in srgb, #16a34a 16%, transparent);
+-  border-color: color-mix(in srgb, #16a34a 34%, var(--stroke-soft));
+-  color: color-mix(in srgb, #0f5132 70%, var(--text-secondary));
++  background: color-mix(in srgb, var(--success) 16%, transparent);
++  border-color: color-mix(in srgb, var(--success) 34%, var(--stroke-soft));
++  color: color-mix(in srgb, var(--success) 72%, var(--text-secondary));
+ }
+ 
+ .git-recent-tag.is-pending {
+-  background: color-mix(in srgb, #f59e0b 12%, transparent);
+-  border-color: color-mix(in srgb, #f59e0b 34%, var(--stroke-soft));
+-  color: color-mix(in srgb, #92400e 65%, var(--text-secondary));
++  background: color-mix(in srgb, var(--warning) 12%, transparent);
++  border-color: color-mix(in srgb, var(--warning) 34%, var(--stroke-soft));
++  color: color-mix(in srgb, var(--warning) 65%, var(--text-secondary));
+ }
+ 
+ .git-recent-summary {
+@@ -912,13 +916,13 @@
+ }
+ 
+ .git-graph-node.is-pushed {
+-  fill: color-mix(in srgb, #22c55e 84%, #ffffff 16%);
+-  stroke: color-mix(in srgb, #15803d 84%, #000000 16%);
++  fill: color-mix(in srgb, var(--success) 84%, var(--bg-card) 16%);
++  stroke: color-mix(in srgb, var(--success) 84%, var(--text-primary) 16%);
+ }
+ 
+ .git-graph-node.is-pending {
+-  fill: color-mix(in srgb, #f59e0b 84%, #ffffff 16%);
+-  stroke: color-mix(in srgb, #b45309 84%, #000000 16%);
++  fill: color-mix(in srgb, var(--warning) 84%, var(--bg-card) 16%);
++  stroke: color-mix(in srgb, var(--warning) 84%, var(--text-primary) 16%);
+ }
+ 
+ .git-graph-content {
+@@ -1016,10 +1020,10 @@
+ }
+ 
+ .git-ignore-dirty-tag {
+-  background: color-mix(in srgb, #f59e0b 14%, transparent);
+-  border: 1px solid color-mix(in srgb, #f59e0b 38%, var(--stroke-soft));
++  background: color-mix(in srgb, var(--warning) 14%, transparent);
++  border: 1px solid color-mix(in srgb, var(--warning) 38%, var(--stroke-soft));
+   border-radius: var(--radius-pill);
+-  color: color-mix(in srgb, #92400e 70%, var(--text-secondary));
++  color: color-mix(in srgb, var(--warning) 70%, var(--text-secondary));
+   font-size: 11px;
+   font-weight: 700;
+   padding: 2px 8px;

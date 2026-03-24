@@ -1,0 +1,28 @@
+diff a/src/pages/EvalPage.css b/src/pages/EvalPage.css	(rejected hunks)
+@@ -1066,6 +1092,26 @@
+   grid-template-columns: minmax(0, 1fr) auto;
+ }
+ 
++.eval-history-item-toggle {
++  appearance: none;
++  background: transparent;
++  border: 0;
++  color: inherit;
++  cursor: pointer;
++  display: block;
++  font: inherit;
++  margin: 0;
++  padding: 0;
++  text-align: left;
++  width: 100%;
++}
++
++.eval-history-item-toggle:focus-visible {
++  border-radius: var(--radius-sm);
++  box-shadow: var(--focus-ring);
++  outline: none;
++}
++
+ .eval-history-item-grid {
+   display: grid;
+   gap: var(--sp-sm) var(--sp-md);

@@ -9,6 +9,7 @@ import {
   type InsightTrend,
   type SkillInsightWindow,
 } from "../domain/skillInsights";
+import { formatLogTimestamp } from "../domain/logTimestamp";
 import { formatTaxonomyTagLabel } from "../domain/skillTaxonomyDisplay";
 import { IconEdit, IconMoreHorizontal, IconTrash } from "./icons";
 import { useI18n } from "../i18n/I18nProvider";
@@ -82,7 +83,7 @@ export default function SkillCard({
   const evalPassRate = insight?.eval.latestPassRate ?? null;
   const evalTrendDirection = insight ? evalTrend(insight.eval) : "na";
   const lastUsedText = insight?.usage.lastUsedAt
-    ? new Date(insight.usage.lastUsedAt).toLocaleString(locale)
+    ? formatLogTimestamp(insight.usage.lastUsedAt, locale)
     : t("skills.insights.usage.lastUsed.empty");
   const evalStatusText = insight?.eval.latestStatus ?? t("skills.insights.eval.status.none");
 

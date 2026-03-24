@@ -7,39 +7,26 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import time
-import urllib.error
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from statistics import mean
 from typing import Any
 
-READ_ENCODINGS = ("utf-8", "utf-8-sig", "gb18030")
+try:
+    from .llm_client import LLMClient as _BaseLLMClient, read_text_file, extract_json_object, write_json, classify_error
+except ImportError:
+    from llm_client import LLMClient as _BaseLLMClient, read_text_file, extract_json_object, write_json, classify_error  # type: ignore
 
 
-def read_text_file(path: Path) -> str:
-    last_error: UnicodeDecodeError | None = None
-    for encoding in READ_ENCODINGS:
-        try:
-            return path.read_text(encoding=encoding)
-        except UnicodeDecodeError as exc:
-            last_error = exc
-    raise ValueError(f"Failed to decode file '{path}'. Please save it as UTF-8.") from last_error
+# read_text_file imported from llm_client
+
+# Aliases for internal use
+_extract_json_object = extract_json_object
+_write_json = write_json
+_error_type = classify_error
 
 
-def _extract_json_object(raw: str) -> dict[str, Any]:
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if len(lines) >= 2:
-            text = "\n".join(lines[1:-1]).strip()
-
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end < start:
-        raise ValueError("Judge output does not contain a JSON object")
-    return json.loads(text[start : end + 1])
+# _request_openai_compatible_chat replaced by _BaseLLMClient.chat_completion
 
 
 def _request_openai_compatible_chat(
@@ -49,50 +36,9 @@ def _request_openai_compatible_chat(
     messages: list[dict[str, str]],
     temperature: float = 0.0,
 ) -> dict[str, Any]:
-    endpoint = (base_url or "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
-    payload = {
-        "model": model,
-        "temperature": temperature,
-        "messages": messages,
-    }
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        endpoint,
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-    )
-    started = time.perf_counter()
-    try:
-        with urllib.request.urlopen(request, timeout=90) as response:
-            raw_text = response.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:  # pragma: no cover - network path
-        details = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"LLM HTTP {exc.code}: {details}") from exc
-    except urllib.error.URLError as exc:  # pragma: no cover - network path
-        raise RuntimeError(f"LLM request failed: {exc.reason}") from exc
-    latency_ms = int((time.perf_counter() - started) * 1000)
-
-    parsed = json.loads(raw_text)
-    choices = parsed.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise RuntimeError("LLM response missing choices")
-    message = choices[0].get("message", {})
-    content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("LLM response content is empty")
-    usage = parsed.get("usage") if isinstance(parsed.get("usage"), dict) else {}
-    return {
-        "content": content,
-        "raw": parsed,
-        "trace_id": str(parsed.get("id") or ""),
-        "latency_ms": latency_ms,
-        "input_tokens": int(usage.get("prompt_tokens") or 0),
-        "output_tokens": int(usage.get("completion_tokens") or 0),
-    }
+    """Backward-compatible wrapper using unified LLMClient."""
+    client = _BaseLLMClient(api_key=api_key, model=model, base_url=base_url)
+    return client.chat_completion(messages, temperature=temperature)
 
 
 def _slug(value: str, fallback: str) -> str:
@@ -100,9 +46,7 @@ def _slug(value: str, fallback: str) -> str:
     return normalized or fallback
 
 
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+# _write_json alias defined above from llm_client
 
 
 def _tokenize(text: str) -> set[str]:
@@ -339,17 +283,16 @@ def _judge_quality_llm(
 
 
 class LLMClient:
+    """Functional eval execution client, wrapping the unified LLMClient."""
+
     def __init__(self, api_key: str, model: str, provider: str | None, base_url: str | None):
-        self.api_key = api_key.strip()
-        self.model = model.strip()
-        self.provider = (provider or "openai-compatible").strip().lower()
-        self.base_url = base_url.strip() if isinstance(base_url, str) and base_url.strip() else None
-        if self.provider != "openai-compatible":
-            raise ValueError(f"Unsupported provider for functional eval: {self.provider}")
-        if not self.api_key:
-            raise ValueError("API key is required for functional eval")
-        if not self.model:
-            raise ValueError("Model is required for functional eval")
+        self._client = _BaseLLMClient(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            provider=provider,
+        )
+        self.model = self._client.model
 
     def run_skill(
         self,
@@ -367,13 +310,7 @@ class LLMClient:
         else:
             system_prompt = "You are an execution assistant. Complete the task directly."
         messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
-        response = _request_openai_compatible_chat(
-            api_key=self.api_key,
-            model=self.model,
-            base_url=self.base_url,
-            messages=messages,
-            temperature=0.0,
-        )
+        response = self._client.chat_completion(messages, temperature=0.0)
         output_text = str(response["content"])
 
         raw_response_path: str | None = None
@@ -479,13 +416,7 @@ def _aggregate_quality(per_model: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _error_type(error: Exception) -> str:
-    text = str(error).lower()
-    if "http" in text or "url" in text or "network" in text:
-        return "network"
-    if "json" in text or "parse" in text:
-        return "parse"
-    return "runtime"
+# _error_type alias defined above from llm_client
 
 
 def run_single_case(

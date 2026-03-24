@@ -8,7 +8,7 @@ import {
   toDownloading,
   toReady,
   withProgress,
-} from "../src/updater/stateMachine";
+} from "../src/updater/stateMachine.ts";
 
 test("toAvailable creates available action with reset progress", () => {
   const action = toAvailable("0.2.0");
@@ -52,3 +52,4 @@ test("cancelToAvailableOrHidden preserves discovered version if present", () => 
   const hidden = cancelToAvailableOrHidden(INITIAL_UPDATE_ACTION);
   assert.deepEqual(hidden, INITIAL_UPDATE_ACTION);
 });
+

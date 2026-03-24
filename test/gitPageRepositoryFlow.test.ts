@@ -17,6 +17,11 @@ test("GitPage supports repository add flow and selected repository actions", () 
   const source = readGitPageSource();
 
   assert.ok(source.includes("gitListRepositories("), "GitPage should load managed repositories");
+  assert.ok(
+    source.includes('from "./git/components/GitFloatingModal"'),
+    "GitPage should delegate modal shell rendering to git scoped components",
+  );
+  assert.ok(source.includes("<GitFloatingModal"), "GitPage should use GitFloatingModal wrappers");
   assert.ok(source.includes("gitAddRepository("), "GitPage should add repositories from URL");
   assert.ok(source.includes("gitSyncSourcePath("), "GitPage should load local sync source path");
   assert.ok(source.includes("viewMode"), "GitPage should support overview/detail view mode");

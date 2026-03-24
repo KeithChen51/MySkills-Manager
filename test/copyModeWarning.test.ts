@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { copyModeToolsRequiringResync } from "../src/domain/copyModeWarning";
+import { copyModeToolsRequiringResync } from "../src/domain/copyModeWarning.ts";
 
 test("copyModeToolsRequiringResync returns installed copy-mode tools", () => {
   const result = copyModeToolsRequiringResync([
@@ -14,3 +14,4 @@ test("copyModeToolsRequiringResync returns installed copy-mode tools", () => {
 
   assert.deepEqual(result, ["Codex", "Trae"]);
 });
+

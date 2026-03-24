@@ -1,8 +1,10 @@
+const BEIJING_TIME_ZONE = "Asia/Shanghai";
+
 export function formatLastSyncTime(
   value: string | undefined,
   locale: string,
   neverLabel: string,
-  timeZone?: string,
+  timeZone = BEIJING_TIME_ZONE,
 ): string {
   if (!value) {
     return neverLabel;
@@ -20,7 +22,7 @@ export function formatLastSyncTime(
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-    ...(timeZone ? { timeZone } : {}),
+    timeZone,
   });
 
   return formatter.format(parsed);

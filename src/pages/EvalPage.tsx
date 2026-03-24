@@ -1,7 +1,17 @@
 ﻿import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import ReactECharts from "echarts-for-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  Component,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+  type ReactNode,
+} from "react";
 
 import {
   evalGenerateSamples,
@@ -31,6 +41,7 @@ import {
 import KpiCard from "../components/KpiCard";
 import { useI18n } from "../i18n/I18nProvider";
 import type { MessageKey } from "../i18n/messages";
+import EvalFloatingModal from "./eval/components/EvalFloatingModal";
 import { useTheme } from "../theme/ThemeProvider";
 import "./EvalPage.css";
 
@@ -39,6 +50,28 @@ type EvalMode = "quick" | "full";
 type EvalControlAction = "pause" | "resume" | "cancel";
 type EvalDraftKind = "trigger" | "functional";
 type EvalFlowStatus = "active" | "done" | "pending";
+type HistoryRefreshMode = "replace" | "append";
+type HistoryReviewTone = "pass" | "pending" | "warn";
+type ResultFilter = "all" | "fail" | "pass";
+type TriggerPanelKey = "clean" | "complex";
+
+type ResultPanelState = {
+  chartExpanded: boolean;
+  tableExpanded: boolean;
+  filter: ResultFilter;
+  page: number;
+  pageSize: 20 | 50 | 100;
+};
+
+type ChartErrorBoundaryProps = {
+  resetKey: string;
+  fallback: ReactNode;
+  children: ReactNode;
+};
+
+type ChartErrorBoundaryState = {
+  hasError: boolean;
+};
 
 type TriggerDraftRow = {
   query: string;
@@ -78,6 +111,31 @@ type EvalRunSnapshot = {
   functionalSetPath: string;
 };
 
+class EvalChartErrorBoundary extends Component<ChartErrorBoundaryProps, ChartErrorBoundaryState> {
+  state: ChartErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): ChartErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidUpdate(prevProps: ChartErrorBoundaryProps) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  componentDidCatch() {
+    // keep fallback-only behavior
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
+}
+
 const EVAL_PROGRESS_STEP_KEYS: Record<string, MessageKey> = {
   pipeline: "eval.progress.step.pipeline",
   quick_checks: "eval.progress.step.quickChecks",
@@ -91,6 +149,7 @@ const EVAL_PROGRESS_STEP_KEYS: Record<string, MessageKey> = {
 };
 
 const USD_TO_CNY_RATE = 7.2;
+const BEIJING_TIME_ZONE = "Asia/Shanghai";
 const TRIGGER_BUCKET_MIN_SAMPLES = 12;
 const FUNCTIONAL_MIN_SAMPLES = 24;
 const MIN_MAX_PARALLEL_ARMS = 1;
@@ -210,6 +269,74 @@ function formatDurationLabel(totalSeconds: number): string {
     return `${seconds}s`;
   }
   return `${minutes}m ${seconds}s`;
+}
+
+function formatBeijingDateTime(value: Date, locale: string): string {
+  return new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    timeZone: BEIJING_TIME_ZONE,
+  }).format(value);
+}
+
+function formatBeijingDateTimeYmdHm(value: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: BEIJING_TIME_ZONE,
+  }).formatToParts(value);
+  const map = parts.reduce<Record<string, string>>((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${map.year ?? "0000"}-${map.month ?? "00"}-${map.day ?? "00"} ${map.hour ?? "00"}:${map.minute ?? "00"}`;
+}
+
+function truncatePreview(value: string, maxLength: number): string {
+  const normalized = value.trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength)}...`;
+}
+
+function clampPage(page: number, totalPages: number): number {
+  return Math.min(Math.max(page, 1), Math.max(totalPages, 1));
+}
+
+function formatPercent(value: number, digits = 2): string {
+  if (!Number.isFinite(value)) {
+    return "--";
+  }
+  return `${(value * 100).toFixed(digits)}%`;
+}
+
+function formatPercentValue(value: number, digits = 2): string {
+  if (!Number.isFinite(value)) {
+    return "--";
+  }
+  return (value * 100).toFixed(digits);
+}
+
+function formatSignedNumber(value: number, digits = 2): string {
+  const rounded = Number(value.toFixed(digits));
+  const abs = Math.abs(rounded).toFixed(digits);
+  if (rounded > 0) {
+    return `+${abs}`;
+  }
+  if (rounded < 0) {
+    return `-${abs}`;
+  }
+  return abs;
 }
 
 function formatInteger(value: number): string {
@@ -360,7 +487,7 @@ function serializeFunctionalDraftRows(rows: FunctionalDraftRow[]): string {
 }
 
 export default function EvalPage({ skills }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { resolvedTheme } = useTheme();
   const chartThemeName =
     resolvedTheme === "dark" ? "myskills-soft-dark" : "myskills-soft-light";
@@ -390,7 +517,11 @@ export default function EvalPage({ skills }: Props) {
   const [report, setReport] = useState<EvalPipelineOutput | null>(null);
   const [skillsRootDir, setSkillsRootDir] = useState<string | undefined>(undefined);
   const [storagePaths, setStoragePaths] = useState<EvalStoragePaths | null>(null);
-  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyRefreshing, setHistoryRefreshing] = useState(false);
+  const [historyRefreshError, setHistoryRefreshError] = useState("");
+  const [historyHasMore, setHistoryHasMore] = useState(false);
+  const [historyFetchLimit, setHistoryFetchLimit] = useState(20);
+  const [historyLoadingPath, setHistoryLoadingPath] = useState<string | null>(null);
   const [historyEntries, setHistoryEntries] = useState<EvalHistoryEntry[]>([]);
   const [showSamples, setShowSamples] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -421,6 +552,34 @@ export default function EvalPage({ skills }: Props) {
   const [reviewEvidenceLoading, setReviewEvidenceLoading] = useState(false);
   const runDockRef = useRef<HTMLElement | null>(null);
   const [runDockOffsetPx, setRunDockOffsetPx] = useState(280);
+  const [triggerPanels, setTriggerPanels] = useState<Record<TriggerPanelKey, ResultPanelState>>({
+    clean: {
+      chartExpanded: true,
+      tableExpanded: false,
+      filter: "all",
+      page: 1,
+      pageSize: 50,
+    },
+    complex: {
+      chartExpanded: false,
+      tableExpanded: false,
+      filter: "all",
+      page: 1,
+      pageSize: 50,
+    },
+  });
+  const [functionalPanel, setFunctionalPanel] = useState<ResultPanelState>({
+    chartExpanded: true,
+    tableExpanded: false,
+    filter: "all",
+    page: 1,
+    pageSize: 50,
+  });
+  const [copyToast, setCopyToast] = useState<string | null>(null);
+  const copyToastTimerRef = useRef<number | null>(null);
+  const cleanTableAnchorRef = useRef<HTMLDivElement | null>(null);
+  const complexTableAnchorRef = useRef<HTMLDivElement | null>(null);
+  const functionalTableAnchorRef = useRef<HTMLDivElement | null>(null);
 
   const selectedSkillMeta = useMemo(
     () => skills.find((item) => item.name === selectedSkill),
@@ -486,6 +645,22 @@ export default function EvalPage({ skills }: Props) {
         dimension: t("eval.dimension.pipeline"),
         description: t("eval.kpi.help.executedSteps"),
       },
+      overallPassRate: {
+        dimension: t("eval.dimension.functionalCore"),
+        description: t("eval.kpi.help.overallPassRate"),
+      },
+      passRateDelta: {
+        dimension: t("eval.dimension.valueAdded"),
+        description: t("eval.kpi.help.passRateDelta"),
+      },
+      failedSamples: {
+        dimension: t("eval.dimension.coverage"),
+        description: t("eval.kpi.help.failedSamples"),
+      },
+      evalDuration: {
+        dimension: t("eval.dimension.efficiency"),
+        description: t("eval.kpi.help.evalDuration"),
+      },
     }),
     [t],
   );
@@ -534,6 +709,11 @@ export default function EvalPage({ skills }: Props) {
     if (!selectedSkill) {
       setStoragePaths(null);
       setHistoryEntries([]);
+      setHistoryHasMore(false);
+      setHistoryFetchLimit(20);
+      setHistoryRefreshError("");
+      setHistoryRefreshing(false);
+      setHistoryLoadingPath(null);
       setSampleTimingHistory([]);
       setRunSnapshot(null);
       setView("setup");
@@ -545,7 +725,7 @@ export default function EvalPage({ skills }: Props) {
       setHistoryDetailLoadingPath(null);
       return;
     }
-    void refreshHistory(selectedSkill);
+    void refreshHistory(selectedSkill, "replace", 20);
     void refreshSampleTimingHistory(selectedSkill);
   }, [refreshSampleTimingHistory, selectedSkill]);
 
@@ -590,6 +770,89 @@ export default function EvalPage({ skills }: Props) {
     setReviewCaseId(firstFailedCase);
     setReviewEvidence("");
   }, [report]);
+
+  useEffect(() => {
+    if (view !== "result") {
+      return;
+    }
+    setTriggerPanels((prev) => ({
+      clean: {
+        ...prev.clean,
+        chartExpanded: true,
+        tableExpanded: false,
+        filter: "all",
+        page: 1,
+      },
+      complex: {
+        ...prev.complex,
+        chartExpanded: false,
+        tableExpanded: false,
+        filter: "all",
+        page: 1,
+      },
+    }));
+    setFunctionalPanel((prev) => ({
+      ...prev,
+      chartExpanded: true,
+      tableExpanded: false,
+      filter: "all",
+      page: 1,
+    }));
+  }, [report?.historyPath, view]);
+
+  useEffect(() => {
+    return () => {
+      if (copyToastTimerRef.current !== null) {
+        window.clearTimeout(copyToastTimerRef.current);
+      }
+    };
+  }, []);
+
+  const updateTriggerPanel = useCallback(
+    (key: TriggerPanelKey, updater: (current: ResultPanelState) => ResultPanelState) => {
+      setTriggerPanels((prev) => ({
+        ...prev,
+        [key]: updater(prev[key]),
+      }));
+    },
+    [],
+  );
+
+  const updateFunctionalPanel = useCallback((updater: (current: ResultPanelState) => ResultPanelState) => {
+    setFunctionalPanel((prev) => updater(prev));
+  }, []);
+
+  const scrollTableAnchor = useCallback((anchor: RefObject<HTMLDivElement | null>) => {
+    window.requestAnimationFrame(() => {
+      anchor.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, []);
+
+  const pushCopyToast = useCallback((message: string) => {
+    if (copyToastTimerRef.current !== null) {
+      window.clearTimeout(copyToastTimerRef.current);
+    }
+    setCopyToast(message);
+    copyToastTimerRef.current = window.setTimeout(() => {
+      setCopyToast(null);
+      copyToastTimerRef.current = null;
+    }, 1200);
+  }, []);
+
+  const handleCopyPath = useCallback(
+    async (value: string | null | undefined) => {
+      if (!value?.trim()) {
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(value);
+        pushCopyToast(t("eval.table.copyPathSuccess"));
+      } catch {
+        pushCopyToast(t("eval.table.copyPathFailed"));
+      }
+    },
+    [pushCopyToast, t],
+  );
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -825,30 +1088,63 @@ export default function EvalPage({ skills }: Props) {
     }
   }
 
-  async function refreshHistory(skillName: string) {
-    if (!skillName.trim()) {
+  async function refreshHistory(
+    skillName: string,
+    mode: HistoryRefreshMode = "replace",
+    limit = 20,
+    previousCount = 0,
+  ) {
+    const normalized = skillName.trim();
+    if (!normalized) {
       setHistoryEntries([]);
+      setHistoryHasMore(false);
+      setHistoryFetchLimit(20);
       return;
     }
-    setHistoryLoading(true);
+
+    setHistoryRefreshing(true);
+    setHistoryRefreshError("");
+    if (mode === "replace") {
+      setExpandedHistoryPath(null);
+      setHistoryDetails({});
+      setHistoryDetailErrors({});
+      setHistoryDetailLoadingPath(null);
+    }
+
     try {
       const [paths, items] = await Promise.all([
-        evalGetStoragePaths(skillName),
-        evalListHistory(skillName, 30),
+        evalGetStoragePaths(normalized),
+        evalListHistory(normalized, limit),
       ]);
+      const sortedItems = [...items].sort((a, b) => b.savedAtUnix - a.savedAtUnix);
       setStoragePaths(paths);
       setTriggerSetPath((current) => current.trim() || paths.latestTriggerPath || "");
       setFunctionalSetPath((current) => current.trim() || paths.latestFunctionalPath || "");
-      setHistoryEntries(items);
-    } catch {
-      setHistoryEntries([]);
+      setHistoryEntries(sortedItems);
+      setHistoryFetchLimit(limit);
+      const reachedEnd = sortedItems.length < limit || (mode === "append" && sortedItems.length <= previousCount);
+      setHistoryHasMore(!reachedEnd);
+    } catch (error: unknown) {
+      if (mode === "replace") {
+        setHistoryEntries([]);
+        setHistoryHasMore(false);
+      }
+      setHistoryRefreshError(String(error));
     } finally {
-      setHistoryLoading(false);
+      setHistoryRefreshing(false);
     }
   }
 
+  async function handleLoadMoreHistory() {
+    if (!selectedSkill.trim() || historyRefreshing || !historyHasMore) {
+      return;
+    }
+    const nextLimit = historyFetchLimit + 20;
+    await refreshHistory(selectedSkill, "append", nextLimit, historyEntries.length);
+  }
+
   async function handleLoadHistory(path: string) {
-    setHistoryLoading(true);
+    setHistoryLoadingPath(path);
     try {
       const loaded = await evalLoadHistory(path);
       setReport(loaded);
@@ -872,13 +1168,33 @@ export default function EvalPage({ skills }: Props) {
         triggerSetPath: triggerSetPath.trim(),
         functionalSetPath: functionalSetPath.trim(),
       });
-      setView(loaded.mode === "full" ? "review" : "result");
+      setView("result");
       setStatus(t("eval.history.loaded", { path }));
       setShowHistory(false);
     } catch (error: unknown) {
       setStatus(`${t("eval.error.runFailed")}: ${String(error)}`);
     } finally {
-      setHistoryLoading(false);
+      setHistoryLoadingPath((current) => (current === path ? null : current));
+    }
+  }
+
+  async function loadHistoryDetail(path: string, force = false) {
+    if (!force && (historyDetails[path] || historyDetailLoadingPath === path)) {
+      return;
+    }
+    setHistoryDetailErrors((prev) => {
+      const next = { ...prev };
+      delete next[path];
+      return next;
+    });
+    setHistoryDetailLoadingPath(path);
+    try {
+      const loaded = await evalLoadHistory(path);
+      setHistoryDetails((prev) => ({ ...prev, [path]: loaded }));
+    } catch (error: unknown) {
+      setHistoryDetailErrors((prev) => ({ ...prev, [path]: String(error) }));
+    } finally {
+      setHistoryDetailLoadingPath((current) => (current === path ? null : current));
     }
   }
 
@@ -888,23 +1204,11 @@ export default function EvalPage({ skills }: Props) {
       return;
     }
     setExpandedHistoryPath(path);
-    if (historyDetails[path] || historyDetailLoadingPath === path) {
-      return;
-    }
-    setHistoryDetailLoadingPath(path);
-    setHistoryDetailErrors((prev) => {
-      const next = { ...prev };
-      delete next[path];
-      return next;
-    });
-    try {
-      const loaded = await evalLoadHistory(path);
-      setHistoryDetails((prev) => ({ ...prev, [path]: loaded }));
-    } catch (error: unknown) {
-      setHistoryDetailErrors((prev) => ({ ...prev, [path]: String(error) }));
-    } finally {
-      setHistoryDetailLoadingPath((current) => (current === path ? null : current));
-    }
+    await loadHistoryDetail(path);
+  }
+
+  async function handleRetryHistoryDetail(path: string) {
+    await loadHistoryDetail(path, true);
   }
 
   async function handleGenerateSamples() {
@@ -1000,7 +1304,7 @@ export default function EvalPage({ skills }: Props) {
         setFunctionalSetPath(saved.path);
       }
       if (selectedSkill) {
-        await refreshHistory(selectedSkill);
+        await refreshHistory(selectedSkill, "replace", 20);
       }
       setStatus(t("eval.samples.saved", { type: kind, path: saved.path }));
     } catch (error: unknown) {
@@ -1172,7 +1476,7 @@ export default function EvalPage({ skills }: Props) {
       runSucceeded = true;
       setReport(pipeline);
       if (selectedSkill) {
-        await refreshHistory(selectedSkill);
+        await refreshHistory(selectedSkill, "replace", 20);
       }
       setView(pipeline.mode === "full" ? "review" : "result");
       if (pipeline.historyPath) {
@@ -1251,7 +1555,7 @@ export default function EvalPage({ skills }: Props) {
       const reloaded = await evalLoadHistory(report.historyPath);
       setReport(reloaded);
       if (selectedSkill.trim()) {
-        await refreshHistory(selectedSkill);
+        await refreshHistory(selectedSkill, "replace", 20);
       }
       setStatus(t("eval.review.saved"));
     } catch (error: unknown) {
@@ -1312,40 +1616,101 @@ export default function EvalPage({ skills }: Props) {
 
   function renderSummaryKpis() {
     if (!report) return null;
-    const functionalSummary = report.functional?.summary;
-    const functionalPassRate =
-      report.mode === "quick"
-        ? "--"
-        : functionalSummary
-          ? `${Math.round(functionalSummary.passRate * 100)}%`
-          : "--";
+
+    const sortedHistory = [...historyEntries].sort((a, b) => b.savedAtUnix - a.savedAtUnix);
+    let previousEntry: EvalHistoryEntry | null = null;
+    if (sortedHistory.length > 0) {
+      if (report.historyPath) {
+        const currentIndex = sortedHistory.findIndex((item) => item.path === report.historyPath);
+        if (currentIndex >= 0) {
+          previousEntry = sortedHistory[currentIndex + 1] ?? null;
+        } else {
+          previousEntry = sortedHistory[0] ?? null;
+        }
+      } else {
+        previousEntry = sortedHistory[0] ?? null;
+      }
+    }
+
+    const previousPassRate = previousEntry?.passRate ?? null;
+    const passRateDelta = previousPassRate === null
+      ? null
+      : (report.summary.passRate - previousPassRate) * 100;
+    const passRateDeltaDisplay = passRateDelta === null
+      ? "--"
+      : t("eval.kpi.passRateDelta.pp", { value: formatSignedNumber(passRateDelta, 2) });
+    const passRateDeltaTone = passRateDelta === null
+      ? "neutral"
+      : passRateDelta > 0
+        ? "positive"
+        : passRateDelta < 0
+          ? "negative"
+          : "neutral";
+    const previousSavedAtLabel = previousEntry
+      ? formatBeijingDateTimeYmdHm(new Date(previousEntry.savedAtUnix * 1000))
+      : null;
+    const passRateDeltaDimension = previousSavedAtLabel
+      ? t("eval.kpi.passRateDelta.baselineAt", { time: previousSavedAtLabel })
+      : t("eval.kpi.passRateDelta.noBaseline");
+    const quicklineToneClass =
+      passRateDeltaTone === "positive"
+        ? "is-positive"
+        : passRateDeltaTone === "negative"
+          ? "is-negative"
+          : "is-neutral";
+
+    const quicklineMain = previousSavedAtLabel
+      ? t("eval.results.quickline.withBaseline", {
+        passRate: formatPercent(report.summary.passRate, 2),
+        delta: passRateDeltaDisplay,
+        failed: formatInteger(report.summary.totalFailed),
+        duration: formatDurationLabel(report.runMeta.elapsedMs / 1000),
+      })
+      : t("eval.results.quickline.noBaseline", {
+        passRate: formatPercent(report.summary.passRate, 2),
+        failed: formatInteger(report.summary.totalFailed),
+        duration: formatDurationLabel(report.runMeta.elapsedMs / 1000),
+      });
+
     return (
-      <div className="kpi-row">
-        <KpiCard
-          label={t("eval.kpi.triggerPassRate")}
-          value={`${Math.round(report.dimensionScores.triggerAccuracy * 100)}%`}
-          dimension={kpiHelp.triggerPassRate.dimension}
-          description={kpiHelp.triggerPassRate.description}
-        />
-        <KpiCard
-          label={t("eval.kpi.functionalPassRate")}
-          value={functionalPassRate}
-          dimension={kpiHelp.functionalPassRate.dimension}
-          description={kpiHelp.functionalPassRate.description}
-        />
-        <KpiCard
-          label={t("eval.kpi.totalCases")}
-          value={report.summary.totalCases}
-          dimension={kpiHelp.totalCases.dimension}
-          description={kpiHelp.totalCases.description}
-        />
-        <KpiCard
-          label={t("eval.kpi.totalPassed")}
-          value={report.summary.totalPassed}
-          dimension={kpiHelp.totalPassed.dimension}
-          description={kpiHelp.totalPassed.description}
-        />
-      </div>
+      <>
+        <article className={`chart-card eval-result-quickline ${quicklineToneClass}`}>
+          <span className="eval-result-quickline-label">{t("eval.results.quickline.label")}</span>
+          <strong className="eval-result-quickline-main">{quicklineMain}</strong>
+          <small className="eval-result-quickline-sub">
+            {previousSavedAtLabel
+              ? t("eval.results.quickline.baselineAt", { time: previousSavedAtLabel })
+              : t("eval.results.quickline.noBaselineHint")}
+          </small>
+        </article>
+        <div className="kpi-row">
+          <KpiCard
+            label={t("eval.kpi.overallPassRate")}
+            value={formatPercent(report.summary.passRate, 2)}
+            dimension={kpiHelp.overallPassRate.dimension}
+            description={kpiHelp.overallPassRate.description}
+          />
+          <KpiCard
+            label={t("eval.kpi.passRateDelta")}
+            value={passRateDeltaDisplay}
+            dimension={passRateDeltaDimension}
+            description={kpiHelp.passRateDelta.description}
+            valueTone={passRateDeltaTone}
+          />
+          <KpiCard
+            label={t("eval.kpi.failedSamples")}
+            value={formatInteger(report.summary.totalFailed)}
+            dimension={kpiHelp.failedSamples.dimension}
+            description={kpiHelp.failedSamples.description}
+          />
+          <KpiCard
+            label={t("eval.kpi.evalDuration")}
+            value={formatDurationLabel(report.runMeta.elapsedMs / 1000)}
+            dimension={kpiHelp.evalDuration.dimension}
+            description={kpiHelp.evalDuration.description}
+          />
+        </div>
+      </>
     );
   }
 
@@ -1353,28 +1718,37 @@ export default function EvalPage({ skills }: Props) {
     if (!report) return null;
     const overallStats = report.repeatStats?.overallPassRate;
     const overallStatsLabel = overallStats
-      ? `${Math.round(overallStats.mean * 100)}% +/- ${Math.round(overallStats.stdDev * 100)}%`
+      ? `${formatPercent(overallStats.mean, 2)} +/- ${formatPercent(overallStats.stdDev, 2)}`
       : "--";
     const valueAddedLabel = report.deltaVsNoSkill
-      ? `${Math.round(report.deltaVsNoSkill.functionalPassRateDelta * 100)}%`
+      ? t("eval.kpi.passRateDelta.pp", {
+        value: formatSignedNumber(report.deltaVsNoSkill.functionalPassRateDelta * 100, 2),
+      })
       : "--";
+    const valueAddedTone = report.deltaVsNoSkill
+      ? report.deltaVsNoSkill.functionalPassRateDelta > 0
+        ? "positive"
+        : report.deltaVsNoSkill.functionalPassRateDelta < 0
+          ? "negative"
+          : "neutral"
+      : "neutral";
     return (
       <div className="kpi-row">
         <KpiCard
           label={t("eval.kpi.precision")}
-          value={`${Math.round(report.triggerMetrics.precision * 100)}%`}
+          value={formatPercent(report.triggerMetrics.precision, 2)}
           dimension={kpiHelp.precision.dimension}
           description={kpiHelp.precision.description}
         />
         <KpiCard
           label={t("eval.kpi.recall")}
-          value={`${Math.round(report.triggerMetrics.recall * 100)}%`}
+          value={formatPercent(report.triggerMetrics.recall, 2)}
           dimension={kpiHelp.recall.dimension}
           description={kpiHelp.recall.description}
         />
         <KpiCard
           label={t("eval.kpi.fpr")}
-          value={`${Math.round(report.triggerMetrics.fpr * 100)}%`}
+          value={formatPercent(report.triggerMetrics.fpr, 2)}
           dimension={kpiHelp.fpr.dimension}
           description={kpiHelp.fpr.description}
         />
@@ -1400,6 +1774,7 @@ export default function EvalPage({ skills }: Props) {
           value={valueAddedLabel}
           dimension={kpiHelp.valueAdded.dimension}
           description={kpiHelp.valueAdded.description}
+          valueTone={valueAddedTone}
         />
         <KpiCard
           label={t("eval.kpi.executedSteps")}
@@ -1956,7 +2331,7 @@ export default function EvalPage({ skills }: Props) {
               <strong>{resolveResultLabel(item.status)}</strong>
               {typeof item.score === "number" && (
                 <span>
-                  {t("eval.modules.score")}: {Math.round(item.score * 100)}%
+                  {t("eval.modules.score")}: {formatPercent(item.score, 2)}
                 </span>
               )}
               {item.message && <small>{item.message}</small>}
@@ -2222,7 +2597,7 @@ export default function EvalPage({ skills }: Props) {
             <span className="eval-history-item-label">{t("eval.review.decidedAt")}</span>
             <strong>
               {typeof report.overrideAt === "number"
-                ? new Date(report.overrideAt * 1000).toLocaleString()
+                ? formatBeijingDateTime(new Date(report.overrideAt * 1000), locale)
                 : naLabel}
             </strong>
           </div>
@@ -2317,81 +2692,316 @@ export default function EvalPage({ skills }: Props) {
     );
   }
 
-  function renderTriggerChart(triggerReport: EvalPipelineOutput["triggerClean"] | undefined, title: string) {
+  function renderTriggerChart(
+    triggerReport: EvalPipelineOutput["triggerClean"] | undefined,
+    title: string,
+    panelKey: TriggerPanelKey,
+  ) {
     const results = triggerReport?.results;
     if (!results || results.length === 0) return null;
 
+    const panel = triggerPanels[panelKey];
+    const anchorRef = panelKey === "clean" ? cleanTableAnchorRef : complexTableAnchorRef;
+    const filtered = results.filter((item) => {
+      if (panel.filter === "fail") return !item.pass;
+      if (panel.filter === "pass") return item.pass;
+      return true;
+    });
+    const total = results.length;
+    const failed = results.filter((item) => !item.pass).length;
+    const passRateRatio = total > 0 ? (total - failed) / total : 0;
+    const passRateValue = formatPercentValue(passRateRatio, 2);
+    const totalPages = Math.max(1, Math.ceil(filtered.length / panel.pageSize));
+    const safePage = clampPage(panel.page, totalPages);
+    const startIndex = (safePage - 1) * panel.pageSize;
+    const pageRows = filtered.slice(startIndex, startIndex + panel.pageSize);
+
     return (
-      <article className="chart-card">
-        <h3 className="chart-title">{title}</h3>
-        <ReactECharts
-          className="eval-chart"
-          theme={chartThemeName}
-          option={{
-            tooltip: { trigger: "axis" },
-            xAxis: {
-              type: "category",
-              data: results.map((_, i) => `Q${i + 1}`),
-              axisLabel: { rotate: 0 },
-            },
-            yAxis: { type: "value", max: 1, axisLabel: { formatter: "{value}" } },
-            series: [
-              {
-                name: t("eval.trigger.expected"),
-                type: "bar",
-                data: results.map((item) => (item.shouldTrigger ? 1 : 0)),
-                itemStyle: { color: "var(--chart-2)" },
-                barMaxWidth: 20,
-              },
-              {
-                name: t("eval.trigger.actual"),
-                type: "bar",
-                data: results.map((item) => (item.triggered ? 1 : 0)),
-                itemStyle: { color: "var(--chart-1)" },
-                barMaxWidth: 20,
-              },
-            ],
-            legend: { data: [t("eval.trigger.expected"), t("eval.trigger.actual")] },
-            grid: { left: 50, right: 20, top: 40, bottom: 30 },
-          }}
-        />
-        <div className="eval-results-table-wrap">
-          <table className="eval-results-table">
-            <thead>
-              <tr>
-                <th>{t("eval.table.query")}</th>
-                <th>{t("eval.table.expected")}</th>
-                <th>{t("eval.table.actual")}</th>
-                <th>{t("eval.table.capturedBy")}</th>
-                <th>{t("eval.table.evidence")}</th>
-                <th>{t("eval.table.result")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {results.map((item, index) => (
-                <tr key={`${item.query}-${index}`} className={item.pass ? "" : "eval-row-fail"}>
-                  <td className="eval-query-cell">{item.query}</td>
-                  <td>{item.shouldTrigger ? t("eval.option.yes") : t("eval.option.no")}</td>
-                  <td>{item.triggered ? t("eval.option.yes") : t("eval.option.no")}</td>
-                  <td>{item.triggeredSkillName ?? naLabel}</td>
-                  <td className="eval-evidence-cell">
-                    <span>
-                      {(typeof item.latencyMs === "number" ? `${item.latencyMs}ms` : naLabel)} /{" "}
-                      {formatTokenPair(item.inputTokens, item.outputTokens)} {t("eval.table.tokenPairSuffix")}
+      <article className="chart-card eval-result-card">
+        <div className="eval-result-card-head">
+          <h3 className="chart-title">{title}</h3>
+          <div className="eval-result-card-head-actions">
+            <strong className="eval-result-card-summary">
+              {t("eval.chart.summaryPassRate", { value: passRateValue })}
+            </strong>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() =>
+                updateTriggerPanel(panelKey, (current) => ({
+                  ...current,
+                  chartExpanded: !current.chartExpanded,
+                }))
+              }
+            >
+              {panel.chartExpanded ? t("eval.chart.collapse") : t("eval.chart.expand")}
+            </button>
+          </div>
+        </div>
+
+        <div className={`eval-chart-shell ${panel.chartExpanded ? "is-open" : ""}`}>
+          <div className="eval-chart-shell-inner">
+            {panel.chartExpanded && (
+              <EvalChartErrorBoundary
+                resetKey={`${panelKey}-${chartThemeName}-${results.length}`}
+                fallback={<p className="eval-path-hint">{t("eval.chart.failedFallback")}</p>}
+              >
+                <ReactECharts
+                  className="eval-chart"
+                  theme={chartThemeName}
+                  option={{
+                    animationDuration: 120,
+                    animationDurationUpdate: 120,
+                    tooltip: {
+                      trigger: "axis",
+                      formatter: (payload: unknown) => {
+                        const entries = Array.isArray(payload) ? payload : [payload];
+                        const first = entries[0] as { dataIndex?: number } | undefined;
+                        const index = Number(first?.dataIndex ?? 0);
+                        const item = results[index];
+                        const qLabel = `Q${index + 1}`;
+                        if (!item) return qLabel;
+                        return [
+                          qLabel,
+                          truncatePreview(item.query, 90),
+                          `${t("eval.trigger.expected")}: ${
+                            item.shouldTrigger ? t("eval.option.yes") : t("eval.option.no")
+                          }`,
+                          `${t("eval.trigger.actual")}: ${
+                            item.triggered ? t("eval.option.yes") : t("eval.option.no")
+                          }`,
+                        ].join("<br/>");
+                      },
+                    },
+                    xAxis: {
+                      type: "category",
+                      data: results.map((_, index) => `Q${index + 1}`),
+                      axisLabel: { rotate: 0 },
+                    },
+                    yAxis: {
+                      type: "value",
+                      min: 0,
+                      max: 100,
+                      axisLabel: { formatter: "{value}%" },
+                    },
+                    series: [
+                      {
+                        name: t("eval.trigger.expected"),
+                        type: "bar",
+                        data: results.map((item) => (item.shouldTrigger ? 100 : 0)),
+                        itemStyle: { color: "var(--text-secondary)" },
+                        barMaxWidth: 24,
+                      },
+                      {
+                        name: t("eval.trigger.actual"),
+                        type: "bar",
+                        data: results.map((item) => (item.triggered ? 100 : 0)),
+                        itemStyle: { color: "var(--accent)" },
+                        barMaxWidth: 24,
+                      },
+                    ],
+                    legend: {
+                      data: [t("eval.trigger.expected"), t("eval.trigger.actual")],
+                      top: 0,
+                      right: 0,
+                    },
+                    grid: { left: 56, right: 24, top: 46, bottom: 34 },
+                  }}
+                />
+              </EvalChartErrorBoundary>
+            )}
+          </div>
+        </div>
+
+        <div ref={anchorRef} />
+        <button
+          type="button"
+          className="eval-results-summary-row"
+          onClick={() =>
+            updateTriggerPanel(panelKey, (current) => ({
+              ...current,
+              tableExpanded: !current.tableExpanded,
+            }))
+          }
+        >
+          <span>{t("eval.table.summary.total", { value: total })}</span>
+          <span className="eval-results-summary-fail">{t("eval.table.summary.failed", { value: failed })}</span>
+          <span>{t("eval.table.summary.passRate", { value: passRateValue })}</span>
+          <span className={`eval-results-summary-arrow ${panel.tableExpanded ? "is-open" : ""}`}>▾</span>
+        </button>
+
+        <div className={`eval-results-table-shell ${panel.tableExpanded ? "is-open" : ""}`}>
+          <div className="eval-results-table-shell-inner">
+            <div className="eval-results-table-topbar">
+              <div className="eval-result-filter-pills">
+                {(["all", "fail", "pass"] as ResultFilter[]).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`eval-result-filter-pill ${panel.filter === key ? "is-active" : ""}`}
+                    onClick={() =>
+                      updateTriggerPanel(panelKey, (current) => ({
+                        ...current,
+                        filter: key,
+                        page: 1,
+                      }))
+                    }
+                  >
+                    {t(`eval.table.filter.${key}` as Parameters<typeof t>[0])}
+                  </button>
+                ))}
+              </div>
+              <div className="eval-result-pagination">
+                <span className="eval-result-page-range">
+                  {t("eval.table.pageRange", {
+                    start: filtered.length === 0 ? 0 : startIndex + 1,
+                    end: filtered.length === 0 ? 0 : Math.min(startIndex + panel.pageSize, filtered.length),
+                    total: filtered.length,
+                  })}
+                </span>
+                <label className="eval-result-page-size">
+                  <span>{t("eval.table.pageSize")}</span>
+                  <select
+                    className="filter-select"
+                    value={panel.pageSize}
+                    onChange={(event) =>
+                      updateTriggerPanel(panelKey, (current) => ({
+                        ...current,
+                        page: 1,
+                        pageSize: Number(event.target.value) as 20 | 50 | 100,
+                      }))
+                    }
+                  >
+                    <option value={20}>20</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                </label>
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  onClick={() => {
+                    updateTriggerPanel(panelKey, (current) => ({ ...current, page: clampPage(current.page - 1, totalPages) }));
+                    scrollTableAnchor(anchorRef);
+                  }}
+                  disabled={safePage <= 1 || filtered.length === 0}
+                >
+                  {t("eval.table.prev")}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  onClick={() => {
+                    updateTriggerPanel(panelKey, (current) => ({ ...current, page: clampPage(current.page + 1, totalPages) }));
+                    scrollTableAnchor(anchorRef);
+                  }}
+                  disabled={safePage >= totalPages || filtered.length === 0}
+                >
+                  {t("eval.table.next")}
+                </button>
+              </div>
+            </div>
+
+            {filtered.length === 0 ? (
+              <div className="eval-results-empty-state">
+                <p className="eval-path-hint">{t("eval.table.emptyFiltered")}</p>
+                {panel.filter !== "all" && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() =>
+                      updateTriggerPanel(panelKey, (current) => ({
+                        ...current,
+                        filter: "all",
+                        page: 1,
+                      }))
+                    }
+                  >
+                    {t("eval.table.clearFilter")}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="eval-results-table-wrap">
+                  <table className="eval-results-table">
+                    <thead>
+                      <tr>
+                        <th>{t("eval.table.query")}</th>
+                        <th>{t("eval.table.expected")}</th>
+                        <th>{t("eval.table.actual")}</th>
+                        <th>{t("eval.table.capturedBy")}</th>
+                        <th>{t("eval.table.evidence")}</th>
+                        <th>{t("eval.table.result")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pageRows.map((item, index) => (
+                        <tr key={`${item.query}-${index}`} className={item.pass ? "" : "eval-row-fail"}>
+                          <td className="eval-query-cell eval-query-cell-two-line" title={item.query}>{item.query}</td>
+                          <td>{item.shouldTrigger ? t("eval.option.yes") : t("eval.option.no")}</td>
+                          <td>{item.triggered ? t("eval.option.yes") : t("eval.option.no")}</td>
+                          <td>{item.triggeredSkillName ?? naLabel}</td>
+                          <td className="eval-evidence-cell">
+                            <span>
+                              {(typeof item.latencyMs === "number" ? `${item.latencyMs}ms` : naLabel)} /{" "}
+                              {formatTokenPair(item.inputTokens, item.outputTokens)} {t("eval.table.tokenPairSuffix")}
+                            </span>
+                            <button
+                              type="button"
+                              className="eval-evidence-path-btn"
+                              title={item.rawResponsePath ?? undefined}
+                              onClick={() => void handleCopyPath(item.rawResponsePath)}
+                            >
+                              {item.rawResponsePath ? compactPath(item.rawResponsePath) : naLabel}
+                            </button>
+                          </td>
+                          <td>
+                            <span className={`eval-badge ${item.pass ? "eval-badge-pass" : "eval-badge-fail"}`}>
+                              {item.pass ? t("eval.result.pass") : t("eval.result.fail")}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="eval-results-table-bottombar">
+                  <div className="eval-result-pagination">
+                    <span className="eval-result-page-range">
+                      {t("eval.table.pageRange", {
+                        start: filtered.length === 0 ? 0 : startIndex + 1,
+                        end: filtered.length === 0 ? 0 : Math.min(startIndex + panel.pageSize, filtered.length),
+                        total: filtered.length,
+                      })}
                     </span>
-                    <small title={item.rawResponsePath ?? undefined}>
-                      {item.rawResponsePath ? compactPath(item.rawResponsePath) : naLabel}
-                    </small>
-                  </td>
-                  <td>
-                    <span className={`eval-badge ${item.pass ? "eval-badge-pass" : "eval-badge-fail"}`}>
-                      {item.pass ? t("eval.result.pass") : t("eval.result.fail")}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    <button
+                      className="btn btn-ghost"
+                      type="button"
+                      onClick={() => {
+                        updateTriggerPanel(panelKey, (current) => ({ ...current, page: clampPage(current.page - 1, totalPages) }));
+                        scrollTableAnchor(anchorRef);
+                      }}
+                      disabled={safePage <= 1}
+                    >
+                      {t("eval.table.prev")}
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      type="button"
+                      onClick={() => {
+                        updateTriggerPanel(panelKey, (current) => ({ ...current, page: clampPage(current.page + 1, totalPages) }));
+                        scrollTableAnchor(anchorRef);
+                      }}
+                      disabled={safePage >= totalPages}
+                    >
+                      {t("eval.table.next")}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </article>
     );
@@ -2402,78 +3012,302 @@ export default function EvalPage({ skills }: Props) {
     const results = report?.functional?.results;
     if (!results || results.length === 0) return null;
 
+    const panel = functionalPanel;
+    const filtered = results.filter((item) => {
+      if (panel.filter === "fail") return !item.passed;
+      if (panel.filter === "pass") return item.passed;
+      return true;
+    });
+    const total = results.length;
+    const failed = results.filter((item) => !item.passed).length;
+    const passRateRatio = total > 0 ? (total - failed) / total : 0;
+    const passRateValue = formatPercentValue(passRateRatio, 2);
+    const totalPages = Math.max(1, Math.ceil(filtered.length / panel.pageSize));
+    const safePage = clampPage(panel.page, totalPages);
+    const startIndex = (safePage - 1) * panel.pageSize;
+    const pageRows = filtered.slice(startIndex, startIndex + panel.pageSize);
+
     return (
-      <article className="chart-card">
-        <h3 className="chart-title">{t("eval.functional.title")}</h3>
-        <ReactECharts
-          className="eval-chart"
-          theme={chartThemeName}
-          option={{
-            tooltip: { trigger: "axis" },
-            xAxis: { type: "category", data: results.map((item) => item.caseId) },
-            yAxis: {
-              type: "value",
-              max: 1,
-              axisLabel: { formatter: (v: number) => `${Math.round(v * 100)}%` },
-            },
-            series: [
-              {
-                name: t("eval.functional.passRate"),
-                type: "bar",
-                data: results.map((item) => item.passRate),
-                itemStyle: {
-                  color: (params: { dataIndex: number }) =>
-                    results[params.dataIndex].passed ? "var(--success)" : "var(--danger)",
-                },
-                barMaxWidth: 32,
-              },
-            ],
-            grid: { left: 60, right: 20, top: 30, bottom: 30 },
-          }}
-        />
-        <div className="eval-results-table-wrap">
-          <table className="eval-results-table">
-            <thead>
-              <tr>
-                <th>{t("eval.table.caseId")}</th>
-                <th>{t("eval.table.passRate")}</th>
-                <th>{t("eval.table.qualityScore")}</th>
-                <th>{t("eval.table.judgeRationale")}</th>
-                <th>{t("eval.table.judgeSuggestions")}</th>
-                <th>{t("eval.table.evidence")}</th>
-                <th>{t("eval.table.result")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {results.map((item) => (
-                <tr key={item.caseId} className={item.passed ? "" : "eval-row-fail"}>
-                  <td>{item.caseId}</td>
-                  <td>{Math.round(item.passRate * 100)}%</td>
-                  <td>{typeof item.qualityScore === "number" ? `${Math.round(item.qualityScore * 100)}%` : naLabel}</td>
-                  <td className="eval-query-cell">{item.judgeRationale || naLabel}</td>
-                  <td className="eval-query-cell">
-                    {item.judgeSuggestions && item.judgeSuggestions.length > 0
-                      ? item.judgeSuggestions.join("; ")
-                      : naLabel}
-                  </td>
-                  <td className="eval-evidence-cell">
-                    <span>
-                      {(typeof item.latencyMs === "number" ? `${item.latencyMs}ms` : naLabel)} /{" "}
-                      {formatTokenPair(item.inputTokens, item.outputTokens)} {t("eval.table.tokenPairSuffix")}
+      <article className="chart-card eval-result-card">
+        <div className="eval-result-card-head">
+          <h3 className="chart-title">{t("eval.functional.title")}</h3>
+          <div className="eval-result-card-head-actions">
+            <strong className="eval-result-card-summary">
+              {t("eval.chart.summaryPassRate", { value: passRateValue })}
+            </strong>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() =>
+                updateFunctionalPanel((current) => ({
+                  ...current,
+                  chartExpanded: !current.chartExpanded,
+                }))
+              }
+            >
+              {panel.chartExpanded ? t("eval.chart.collapse") : t("eval.chart.expand")}
+            </button>
+          </div>
+        </div>
+
+        <div className={`eval-chart-shell ${panel.chartExpanded ? "is-open" : ""}`}>
+          <div className="eval-chart-shell-inner">
+            {panel.chartExpanded && (
+              <EvalChartErrorBoundary
+                resetKey={`functional-${chartThemeName}-${results.length}`}
+                fallback={<p className="eval-path-hint">{t("eval.chart.failedFallback")}</p>}
+              >
+                <ReactECharts
+                  className="eval-chart"
+                  theme={chartThemeName}
+                  option={{
+                    animationDuration: 120,
+                    animationDurationUpdate: 120,
+                    tooltip: {
+                      trigger: "axis",
+                      formatter: (payload: unknown) => {
+                        const entries = Array.isArray(payload) ? payload : [payload];
+                        const first = entries[0] as { dataIndex?: number } | undefined;
+                        const index = Number(first?.dataIndex ?? 0);
+                        const item = results[index];
+                        if (!item) return t("eval.functional.passRate");
+                        return `${item.caseId}<br/>${t("eval.functional.passRate")}: ${formatPercent(
+                          item.passRate,
+                          2,
+                        )}`;
+                      },
+                    },
+                    xAxis: {
+                      type: "category",
+                      data: results.map((item) => item.caseId),
+                      axisLabel: {
+                        formatter: (value: string) => truncatePreview(String(value), 12),
+                        hideOverlap: true,
+                      },
+                    },
+                    yAxis: {
+                      type: "value",
+                      min: 0,
+                      max: 100,
+                      axisLabel: { formatter: "{value}%" },
+                    },
+                    series: [
+                      {
+                        name: t("eval.functional.passRate"),
+                        type: "bar",
+                        data: results.map((item) => Number(formatPercentValue(item.passRate, 2))),
+                        itemStyle: {
+                          color: (params: { dataIndex: number }) =>
+                            results[params.dataIndex].passed ? "var(--success)" : "var(--danger)",
+                        },
+                        barMaxWidth: 24,
+                      },
+                    ],
+                    grid: { left: 56, right: 24, top: 46, bottom: 34 },
+                  }}
+                />
+              </EvalChartErrorBoundary>
+            )}
+          </div>
+        </div>
+
+        <div ref={functionalTableAnchorRef} />
+        <button
+          type="button"
+          className="eval-results-summary-row"
+          onClick={() =>
+            updateFunctionalPanel((current) => ({
+              ...current,
+              tableExpanded: !current.tableExpanded,
+            }))
+          }
+        >
+          <span>{t("eval.table.summary.total", { value: total })}</span>
+          <span className="eval-results-summary-fail">{t("eval.table.summary.failed", { value: failed })}</span>
+          <span>{t("eval.table.summary.passRate", { value: passRateValue })}</span>
+          <span className={`eval-results-summary-arrow ${panel.tableExpanded ? "is-open" : ""}`}>▾</span>
+        </button>
+
+        <div className={`eval-results-table-shell ${panel.tableExpanded ? "is-open" : ""}`}>
+          <div className="eval-results-table-shell-inner">
+            <div className="eval-results-table-topbar">
+              <div className="eval-result-filter-pills">
+                {(["all", "fail", "pass"] as ResultFilter[]).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`eval-result-filter-pill ${panel.filter === key ? "is-active" : ""}`}
+                    onClick={() =>
+                      updateFunctionalPanel((current) => ({
+                        ...current,
+                        filter: key,
+                        page: 1,
+                      }))
+                    }
+                  >
+                    {t(`eval.table.filter.${key}` as Parameters<typeof t>[0])}
+                  </button>
+                ))}
+              </div>
+              <div className="eval-result-pagination">
+                <span className="eval-result-page-range">
+                  {t("eval.table.pageRange", {
+                    start: filtered.length === 0 ? 0 : startIndex + 1,
+                    end: filtered.length === 0 ? 0 : Math.min(startIndex + panel.pageSize, filtered.length),
+                    total: filtered.length,
+                  })}
+                </span>
+                <label className="eval-result-page-size">
+                  <span>{t("eval.table.pageSize")}</span>
+                  <select
+                    className="filter-select"
+                    value={panel.pageSize}
+                    onChange={(event) =>
+                      updateFunctionalPanel((current) => ({
+                        ...current,
+                        page: 1,
+                        pageSize: Number(event.target.value) as 20 | 50 | 100,
+                      }))
+                    }
+                  >
+                    <option value={20}>20</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                </label>
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  onClick={() => {
+                    updateFunctionalPanel((current) => ({ ...current, page: clampPage(current.page - 1, totalPages) }));
+                    scrollTableAnchor(functionalTableAnchorRef);
+                  }}
+                  disabled={safePage <= 1 || filtered.length === 0}
+                >
+                  {t("eval.table.prev")}
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  onClick={() => {
+                    updateFunctionalPanel((current) => ({ ...current, page: clampPage(current.page + 1, totalPages) }));
+                    scrollTableAnchor(functionalTableAnchorRef);
+                  }}
+                  disabled={safePage >= totalPages || filtered.length === 0}
+                >
+                  {t("eval.table.next")}
+                </button>
+              </div>
+            </div>
+
+            {filtered.length === 0 ? (
+              <div className="eval-results-empty-state">
+                <p className="eval-path-hint">{t("eval.table.emptyFiltered")}</p>
+                {panel.filter !== "all" && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() =>
+                      updateFunctionalPanel((current) => ({
+                        ...current,
+                        filter: "all",
+                        page: 1,
+                      }))
+                    }
+                  >
+                    {t("eval.table.clearFilter")}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="eval-results-table-wrap">
+                  <table className="eval-results-table">
+                    <thead>
+                      <tr>
+                        <th>{t("eval.table.caseId")}</th>
+                        <th>{t("eval.table.passRate")}</th>
+                        <th>{t("eval.table.qualityScore")}</th>
+                        <th>{t("eval.table.judgeRationale")}</th>
+                        <th>{t("eval.table.judgeSuggestions")}</th>
+                        <th>{t("eval.table.evidence")}</th>
+                        <th>{t("eval.table.result")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pageRows.map((item) => (
+                        <tr key={item.caseId} className={item.passed ? "" : "eval-row-fail"}>
+                          <td title={item.caseId}>{truncatePreview(item.caseId, 32)}</td>
+                          <td>{formatPercent(item.passRate, 2)}</td>
+                          <td>{typeof item.qualityScore === "number" ? formatPercent(item.qualityScore, 2) : naLabel}</td>
+                          <td className="eval-query-cell eval-query-cell-two-line" title={item.judgeRationale || naLabel}>
+                            {item.judgeRationale || naLabel}
+                          </td>
+                          <td className="eval-query-cell eval-query-cell-two-line" title={item.judgeSuggestions?.join("; ") || naLabel}>
+                            {item.judgeSuggestions && item.judgeSuggestions.length > 0
+                              ? item.judgeSuggestions.join("; ")
+                              : naLabel}
+                          </td>
+                          <td className="eval-evidence-cell">
+                            <span>
+                              {(typeof item.latencyMs === "number" ? `${item.latencyMs}ms` : naLabel)} /{" "}
+                              {formatTokenPair(item.inputTokens, item.outputTokens)} {t("eval.table.tokenPairSuffix")}
+                            </span>
+                            <button
+                              type="button"
+                              className="eval-evidence-path-btn"
+                              title={item.rawResponsePath ?? undefined}
+                              onClick={() => void handleCopyPath(item.rawResponsePath)}
+                            >
+                              {item.rawResponsePath ? compactPath(item.rawResponsePath) : naLabel}
+                            </button>
+                          </td>
+                          <td>
+                            <span className={`eval-badge ${item.passed ? "eval-badge-pass" : "eval-badge-fail"}`}>
+                              {item.passed ? t("eval.result.pass") : t("eval.result.fail")}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="eval-results-table-bottombar">
+                  <div className="eval-result-pagination">
+                    <span className="eval-result-page-range">
+                      {t("eval.table.pageRange", {
+                        start: filtered.length === 0 ? 0 : startIndex + 1,
+                        end: filtered.length === 0 ? 0 : Math.min(startIndex + panel.pageSize, filtered.length),
+                        total: filtered.length,
+                      })}
                     </span>
-                    <small title={item.rawResponsePath ?? undefined}>
-                      {item.rawResponsePath ? compactPath(item.rawResponsePath) : naLabel}
-                    </small>
-                  </td>
-                  <td>
-                    <span className={`eval-badge ${item.passed ? "eval-badge-pass" : "eval-badge-fail"}`}>
-                      {item.passed ? t("eval.result.pass") : t("eval.result.fail")}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    <button
+                      className="btn btn-ghost"
+                      type="button"
+                      onClick={() => {
+                        updateFunctionalPanel((current) => ({ ...current, page: clampPage(current.page - 1, totalPages) }));
+                        scrollTableAnchor(functionalTableAnchorRef);
+                      }}
+                      disabled={safePage <= 1}
+                    >
+                      {t("eval.table.prev")}
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      type="button"
+                      onClick={() => {
+                        updateFunctionalPanel((current) => ({ ...current, page: clampPage(current.page + 1, totalPages) }));
+                        scrollTableAnchor(functionalTableAnchorRef);
+                      }}
+                      disabled={safePage >= totalPages}
+                    >
+                      {t("eval.table.next")}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </article>
     );
@@ -2814,6 +3648,17 @@ export default function EvalPage({ skills }: Props) {
       default:
         return status.toUpperCase();
     }
+  }
+
+  function resolveHistoryReviewMeta(entry: EvalHistoryEntry): { label: string; tone: HistoryReviewTone } {
+    if (!entry.reviewSummary?.reviewed) {
+      return { label: t("eval.history.review.pending"), tone: "pending" };
+    }
+    const verdict = (entry.reviewSummary.finalVerdict || "").trim().toLowerCase();
+    if (verdict.includes("pass")) {
+      return { label: t("eval.history.review.pass"), tone: "pass" };
+    }
+    return { label: t("eval.history.review.warn"), tone: "warn" };
   }
 
   const pageStyle = useMemo<CSSProperties>(
@@ -3170,7 +4015,7 @@ export default function EvalPage({ skills }: Props) {
                       setShowHistory(next);
                       if (next && selectedSkill) {
                         setShowSamples(false);
-                        void refreshHistory(selectedSkill);
+                        void refreshHistory(selectedSkill, "replace", 20);
                       }
                     }}
                     disabled={!selectedSkill}
@@ -3366,7 +4211,9 @@ export default function EvalPage({ skills }: Props) {
         </article>
       )}
 
-      {showSamples && (triggerDraftRows.length > 0 || functionalDraftRows.length > 0) && (
+      <EvalFloatingModal
+        open={showSamples && (triggerDraftRows.length > 0 || functionalDraftRows.length > 0)}
+      >
         <div
           className="eval-samples-modal-backdrop"
           role="dialog"
@@ -3614,9 +4461,9 @@ export default function EvalPage({ skills }: Props) {
             </div>
           </article>
         </div>
-      )}
+      </EvalFloatingModal>
 
-      {showHistory && selectedSkill && (
+      <EvalFloatingModal open={showHistory && Boolean(selectedSkill)}>
         <div
           className="eval-history-modal-backdrop"
           role="dialog"
@@ -3626,172 +4473,269 @@ export default function EvalPage({ skills }: Props) {
         >
           <article className="eval-history-modal" onClick={(event) => event.stopPropagation()}>
             <div className="eval-history-modal-head">
-              <h3 className="chart-title">{t("eval.history.title", { skill: selectedSkill })}</h3>
+              <div className="eval-history-modal-head-copy">
+                <h3 className="chart-title">{t("eval.history.title", { skill: selectedSkill })}</h3>
+                <p className="eval-path-hint eval-history-head-subtitle">
+                  {t("eval.history.subtitle", { skill: selectedSkill })}
+                </p>
+              </div>
               <div className="eval-history-modal-actions">
                 <button
                   className="btn btn-ghost"
-                  onClick={() => void refreshHistory(selectedSkill)}
-                  disabled={historyLoading}
+                  onClick={() => void refreshHistory(selectedSkill, "replace", 20)}
+                  disabled={historyRefreshing || historyLoadingPath !== null}
                 >
-                  {historyLoading ? t("eval.history.loading") : t("eval.history.refresh")}
+                  {historyRefreshing ? t("eval.history.loading") : t("eval.history.refresh")}
                 </button>
                 <button className="btn btn-ghost" onClick={() => setShowHistory(false)}>
                   {t("eval.history.close")}
                 </button>
               </div>
             </div>
-            <p className="eval-path-hint">
+            <p
+              className="eval-path-hint eval-history-path-row"
+              title={t("eval.history.path", { path: storagePaths?.historyDir ?? "--" })}
+            >
               {t("eval.history.path", { path: storagePaths?.historyDir ?? "--" })}
             </p>
 
             <div className="eval-history-modal-body">
               {historyEntries.length === 0 ? (
-                <p className="eval-path-hint">{t("eval.history.empty")}</p>
+                <div className="eval-history-empty">
+                  <p className="eval-path-hint">
+                    {historyRefreshError ? t("eval.history.loadFailed") : t("eval.history.empty")}
+                  </p>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => void refreshHistory(selectedSkill, "replace", 20)}
+                    disabled={historyRefreshing}
+                  >
+                    {historyRefreshError ? t("eval.history.retryNow") : t("eval.history.refreshNow")}
+                  </button>
+                </div>
               ) : (
-                <div className="eval-history-list">
-                  {historyEntries.map((item) => {
-                    const expanded = expandedHistoryPath === item.path;
-                    const detail = historyDetails[item.path];
-                    const detailError = historyDetailErrors[item.path];
-                    const detailLoading = historyDetailLoadingPath === item.path;
-                    return (
-                      <section className="eval-history-item" key={item.path}>
-                        <div className="eval-history-item-main">
-                          <div className="eval-history-item-grid">
-                            <div>
-                              <span className="eval-history-item-label">{t("eval.history.time")}</span>
-                              <strong>{new Date(item.savedAtUnix * 1000).toLocaleString()}</strong>
-                            </div>
-                            <div>
-                              <span className="eval-history-item-label">{t("eval.config.mode")}</span>
-                              <strong>{item.mode}</strong>
-                            </div>
-                            <div>
-                              <span className="eval-history-item-label">{t("eval.history.repeats")}</span>
-                              <strong>{item.repeats}</strong>
-                            </div>
-                            <div>
-                              <span className="eval-history-item-label">{t("eval.kpi.totalCases")}</span>
-                              <strong>{item.totalCases}</strong>
-                            </div>
-                            <div>
-                              <span className="eval-history-item-label">{t("eval.table.passRate")}</span>
-                              <strong>{Math.round(item.passRate * 100)}%</strong>
-                            </div>
-                            <div>
-                              <span className="eval-history-item-label">{t("eval.config.model")}</span>
-                              <strong>{item.model}</strong>
-                            </div>
-                            <div>
-                              <span className="eval-history-item-label">{t("eval.history.reviewStatus")}</span>
-                              <strong>
-                                {item.reviewSummary?.reviewed
-                                  ? item.reviewSummary.finalVerdict || t("eval.review.reviewed")
-                                  : t("eval.review.pending")}
-                              </strong>
-                            </div>
-                          </div>
-                          <div className="eval-history-item-actions">
-                            <button
-                              className="btn btn-ghost"
-                              onClick={() => void handleToggleHistoryExpand(item.path)}
-                              disabled={detailLoading}
-                            >
-                              {expanded ? t("eval.history.collapse") : t("eval.history.expand")}
-                            </button>
-                            <button
-                              className="btn btn-ghost"
-                              onClick={() => void handleLoadHistory(item.path)}
-                              disabled={historyLoading}
-                            >
-                              {t("eval.history.load")}
-                            </button>
-                          </div>
-                        </div>
-
-                        {expanded && (
-                          <div className="eval-history-item-detail">
-                            {detailLoading && <p className="eval-path-hint">{t("eval.history.detailLoading")}</p>}
-                            {!detailLoading && detailError && (
-                              <p className="settings-status">{`${t("eval.history.detailError")}: ${detailError}`}</p>
-                            )}
-                            {!detailLoading && !detailError && detail && (
-                              <div className="eval-history-detail-grid">
-                                <div>
-                                  <span className="eval-history-item-label">{t("eval.kpi.totalCases")}</span>
-                                  <strong>{detail.summary.totalCases}</strong>
-                                </div>
-                                <div>
-                                  <span className="eval-history-item-label">{t("eval.kpi.totalPassed")}</span>
-                                  <strong>{detail.summary.totalPassed}</strong>
-                                </div>
+                <>
+                  {historyRefreshError && (
+                    <div className="eval-history-refresh-error">
+                      <p className="settings-status">{`${t("eval.history.loadFailed")}: ${historyRefreshError}`}</p>
+                      <button
+                        className="btn btn-ghost"
+                        onClick={() => void refreshHistory(selectedSkill, "replace", 20)}
+                        disabled={historyRefreshing}
+                      >
+                        {t("eval.history.retryNow")}
+                      </button>
+                    </div>
+                  )}
+                  <div className="eval-history-list">
+                    {historyEntries.map((item) => {
+                      const expanded = expandedHistoryPath === item.path;
+                      const detail = historyDetails[item.path];
+                      const detailError = historyDetailErrors[item.path];
+                      const detailLoading = historyDetailLoadingPath === item.path;
+                      const loadingThisPath = historyLoadingPath === item.path;
+                      const isCurrentBaseline = report?.historyPath === item.path;
+                      const reviewMeta = resolveHistoryReviewMeta(item);
+                      return (
+                        <section className="eval-history-item" key={item.path}>
+                          <div className="eval-history-item-main">
+                            <div className="eval-history-item-copy">
+                              <div className="eval-history-item-headline">
+                                <strong className="eval-history-item-title">
+                                  {formatBeijingDateTimeYmdHm(new Date(item.savedAtUnix * 1000))}
+                                </strong>
+                                {isCurrentBaseline && (
+                                  <span className="eval-history-baseline-pill">
+                                    {t("eval.history.currentBaseline")}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="eval-history-item-summary-row">
                                 <div>
                                   <span className="eval-history-item-label">{t("eval.table.passRate")}</span>
-                                  <strong>{Math.round(detail.summary.passRate * 100)}%</strong>
+                                  <strong>{formatPercent(item.passRate, 2)}</strong>
                                 </div>
                                 <div>
-                                  <span className="eval-history-item-label">{t("eval.kpi.precision")}</span>
-                                  <strong>{Math.round(detail.triggerMetrics.precision * 100)}%</strong>
+                                  <span className="eval-history-item-label">{t("eval.kpi.totalCases")}</span>
+                                  <strong>{formatInteger(item.totalCases)}</strong>
                                 </div>
                                 <div>
-                                  <span className="eval-history-item-label">{t("eval.kpi.recall")}</span>
-                                  <strong>{Math.round(detail.triggerMetrics.recall * 100)}%</strong>
-                                </div>
-                                <div>
-                                  <span className="eval-history-item-label">{t("eval.kpi.fpr")}</span>
-                                  <strong>{Math.round(detail.triggerMetrics.fpr * 100)}%</strong>
-                                </div>
-                                <div>
-                                  <span className="eval-history-item-label">{t("eval.kpi.costEstimate")}</span>
-                                  <strong>
-                                    {formatCostRange(
-                                      detail.costEstimate.estimatedUsd,
-                                      detail.costEstimate.estimatedUsdMin,
-                                      detail.costEstimate.estimatedUsdMax,
-                                      costCurrency,
-                                    )}
-                                  </strong>
-                                </div>
-                                <div>
-                                  <span className="eval-history-item-label">{t("eval.advisory.level.label")}</span>
-                                  <strong>
-                                    {detail.advisory?.level === "high_risk"
-                                      ? t("eval.advisory.level.highRisk")
-                                      : detail.advisory?.level === "warn"
-                                        ? t("eval.advisory.level.warn")
-                                        : detail.advisory?.level === "pass"
-                                          ? t("eval.advisory.level.pass")
-                                          : "--"}
-                                  </strong>
-                                </div>
-                                <div>
-                                  <span className="eval-history-item-label">{t("eval.advisory.evidenceLevel")}</span>
-                                  <strong>
-                                    {detail.evidenceLevel === "real"
-                                      ? t("eval.advisory.evidenceLevel.real")
-                                      : t("eval.advisory.evidenceLevel.simulated")}
-                                  </strong>
-                                </div>
-                                <div>
-                                  <span className="eval-history-item-label">{t("eval.kpi.repeatStats")}</span>
-                                  <strong>
-                                    {Math.round(detail.repeatStats.overallPassRate.mean * 100)}% +/-{" "}
-                                    {Math.round(detail.repeatStats.overallPassRate.stdDev * 100)}%
-                                  </strong>
+                                  <span className="eval-history-item-label">{t("eval.config.mode")}</span>
+                                  <strong>{item.mode}</strong>
                                 </div>
                               </div>
-                            )}
+                              <div className="eval-history-item-summary-row">
+                                <div>
+                                  <span className="eval-history-item-label">{t("eval.history.repeats")}</span>
+                                  <strong>{item.repeats}</strong>
+                                </div>
+                                <div>
+                                  <span className="eval-history-item-label">{t("eval.config.model")}</span>
+                                  <strong>{item.model}</strong>
+                                </div>
+                                <div>
+                                  <span className="eval-history-item-label">{t("eval.history.reviewStatus")}</span>
+                                  <span className={`eval-history-review-pill is-${reviewMeta.tone}`}>
+                                    {reviewMeta.label}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="eval-history-item-actions">
+                              <button
+                                className="btn btn-ghost"
+                                onClick={() => void handleToggleHistoryExpand(item.path)}
+                                disabled={detailLoading}
+                              >
+                                {expanded ? t("eval.history.collapse") : t("eval.history.expand")}
+                              </button>
+                              <button
+                                className="btn btn-primary"
+                                onClick={() => void handleLoadHistory(item.path)}
+                                disabled={historyLoadingPath !== null || historyRefreshing}
+                              >
+                                {loadingThisPath ? (
+                                  <>
+                                    <span className="eval-inline-spinner" aria-hidden="true" />
+                                    {t("eval.history.loadingItem")}
+                                  </>
+                                ) : (
+                                  t("eval.history.load")
+                                )}
+                              </button>
+                            </div>
                           </div>
-                        )}
-                      </section>
-                    );
-                  })}
-                </div>
+
+                          <div className={`eval-history-item-detail-shell ${expanded ? "is-open" : ""}`}>
+                            <div className="eval-history-item-detail-inner">
+                              <div className="eval-history-item-detail">
+                                {detailLoading && (
+                                  <div className="eval-history-detail-skeleton" aria-hidden="true">
+                                    <span />
+                                    <span />
+                                    <span />
+                                  </div>
+                                )}
+                                {!detailLoading && detailError && (
+                                  <div className="eval-history-detail-error">
+                                    <p className="settings-status">{`${t("eval.history.detailError")}: ${detailError}`}</p>
+                                    <button
+                                      className="btn btn-ghost"
+                                      onClick={() => void handleRetryHistoryDetail(item.path)}
+                                    >
+                                      {t("eval.history.retryNow")}
+                                    </button>
+                                  </div>
+                                )}
+                                {!detailLoading && !detailError && detail && (
+                                  <div className="eval-history-detail-groups">
+                                    <section className="eval-history-detail-group">
+                                      <h4 className="eval-history-detail-group-title">{t("eval.history.group.overall")}</h4>
+                                      <div className="eval-history-detail-grid">
+                                        <div>
+                                          <span className="eval-history-item-label">{t("eval.kpi.totalCases")}</span>
+                                          <strong>{formatInteger(detail.summary.totalCases)}</strong>
+                                        </div>
+                                        <div>
+                                          <span className="eval-history-item-label">{t("eval.kpi.totalPassed")}</span>
+                                          <strong>{formatInteger(detail.summary.totalPassed)}</strong>
+                                        </div>
+                                        <div>
+                                          <span className="eval-history-item-label">{t("eval.table.passRate")}</span>
+                                          <strong>{formatPercent(detail.summary.passRate, 2)}</strong>
+                                        </div>
+                                        <div>
+                                          <span className="eval-history-item-label">{t("eval.kpi.repeatStats")}</span>
+                                          <strong>
+                                            {formatPercent(detail.repeatStats.overallPassRate.mean, 2)} +/-{" "}
+                                            {formatPercent(detail.repeatStats.overallPassRate.stdDev, 2)}
+                                          </strong>
+                                        </div>
+                                      </div>
+                                    </section>
+
+                                    <section className="eval-history-detail-group">
+                                      <h4 className="eval-history-detail-group-title">{t("eval.history.group.trigger")}</h4>
+                                      <div className="eval-history-detail-grid">
+                                        <div>
+                                          <span className="eval-history-item-label">{t("eval.kpi.precision")}</span>
+                                          <strong>{formatPercent(detail.triggerMetrics.precision, 2)}</strong>
+                                        </div>
+                                        <div>
+                                          <span className="eval-history-item-label">{t("eval.kpi.recall")}</span>
+                                          <strong>{formatPercent(detail.triggerMetrics.recall, 2)}</strong>
+                                        </div>
+                                        <div>
+                                          <span className="eval-history-item-label">{t("eval.kpi.fpr")}</span>
+                                          <strong>{formatPercent(detail.triggerMetrics.fpr, 2)}</strong>
+                                        </div>
+                                      </div>
+                                    </section>
+
+                                    <section className="eval-history-detail-group">
+                                      <h4 className="eval-history-detail-group-title">{t("eval.history.group.cost")}</h4>
+                                      <div className="eval-history-detail-grid">
+                                        <div>
+                                          <span className="eval-history-item-label">{t("eval.kpi.costEstimate")}</span>
+                                          <strong>
+                                            {formatCostRange(
+                                              detail.costEstimate.estimatedUsd,
+                                              detail.costEstimate.estimatedUsdMin,
+                                              detail.costEstimate.estimatedUsdMax,
+                                              costCurrency,
+                                            )}
+                                          </strong>
+                                        </div>
+                                        <div>
+                                          <span className="eval-history-item-label">{t("eval.advisory.level.label")}</span>
+                                          <strong>
+                                            {detail.advisory?.level === "high_risk"
+                                              ? t("eval.advisory.level.highRisk")
+                                              : detail.advisory?.level === "warn"
+                                                ? t("eval.advisory.level.warn")
+                                                : detail.advisory?.level === "pass"
+                                                  ? t("eval.advisory.level.pass")
+                                                  : "--"}
+                                          </strong>
+                                        </div>
+                                        <div>
+                                          <span className="eval-history-item-label">{t("eval.advisory.evidenceLevel")}</span>
+                                          <strong>
+                                            {detail.evidenceLevel === "real"
+                                              ? t("eval.advisory.evidenceLevel.real")
+                                              : t("eval.advisory.evidenceLevel.simulated")}
+                                          </strong>
+                                        </div>
+                                      </div>
+                                    </section>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </section>
+                      );
+                    })}
+                  </div>
+                  <div className="eval-history-load-more">
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => void handleLoadMoreHistory()}
+                      disabled={historyRefreshing || !historyHasMore}
+                    >
+                      {historyRefreshing
+                        ? t("eval.history.loading")
+                        : historyHasMore
+                          ? t("eval.history.loadMore")
+                          : t("eval.history.allLoaded")}
+                    </button>
+                  </div>
+                </>
               )}
             </div>
           </article>
         </div>
-      )}
+      </EvalFloatingModal>
 
       {showReviewView && report?.mode === "full" && (
         <>
@@ -3822,20 +4766,26 @@ export default function EvalPage({ skills }: Props) {
               </div>
             </article>
           )}
+          {renderSummaryKpis()}
           {renderGateAndQuickChecks()}
           {renderEvidenceOverview()}
           {renderEconomicsPanel()}
           {renderComparatorAnalyzerPanel()}
           {renderModuleResultsPanel()}
-          {renderSummaryKpis()}
           {renderModeKpis()}
           <div className="chart-row">
-            {renderTriggerChart(report.triggerClean, t("eval.trigger.titleClean"))}
+            {renderTriggerChart(report.triggerClean, t("eval.trigger.titleClean"), "clean")}
             {renderFunctionalChart()}
           </div>
           {report.mode === "full" &&
-            renderTriggerChart(report.triggerComplex, t("eval.trigger.titleComplex"))}
+            renderTriggerChart(report.triggerComplex, t("eval.trigger.titleComplex"), "complex")}
         </>
+      )}
+
+      {copyToast && (
+        <div className="eval-copy-toast" role="status" aria-live="polite">
+          {copyToast}
+        </div>
       )}
 
       {showSetupView && !report && !running && !status && <div className="empty-state">{t("eval.empty")}</div>}

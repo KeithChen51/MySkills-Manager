@@ -136,7 +136,11 @@ export default function OnboardingWizard({
           <section className="onboarding-step">
             <h2>{t("onboard.step1.title")}</h2>
             <p>{t("onboard.step1.desc")}</p>
+            <label className="field-label" htmlFor="onboarding-skills-dir-input">
+              {t("onboard.step3.skillsDir")}
+            </label>
             <input
+              id="onboarding-skills-dir-input"
               className="field-input"
               value={skillsDir}
               onChange={(e) => setSkillsDir(e.target.value)}

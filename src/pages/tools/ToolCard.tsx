@@ -16,6 +16,7 @@ type TranslateFn = (
 type ToolCardProps = {
   tool: ToolStatus;
   routerHealth?: ToolRouterHealthStatus;
+  syncFeedback?: { kind: "ok" | "warn"; text: string } | null;
   installed: boolean;
   draft: ToolPathDraft;
   hasPathChange: boolean;
@@ -75,6 +76,7 @@ function healthLabel(health: string, t: TranslateFn) {
 export default function ToolCard({
   tool,
   routerHealth,
+  syncFeedback,
   installed,
   draft,
   hasPathChange,
@@ -98,6 +100,10 @@ export default function ToolCard({
   const { skillsPathHealthy, rulesPathHealthy, skillsPathLabel, rulesPathLabel } =
     buildToolPathDiagnostics(tool);
   const healthNeedsFix = routerHealth && routerHealth.health !== "healthy";
+  const syncLiveMessage = syncingCurrentTool
+    ? t("tools.manual.syncingStatus", { tool: tool.name })
+    : syncFeedback?.text ?? "";
+  const syncLiveTone = syncingCurrentTool ? "neutral" : (syncFeedback?.kind ?? "neutral");
 
   return (
     <article key={tool.id} className={`tool-card ${installed ? "" : "tool-card-uninstalled"}`.trim()}>
@@ -120,19 +126,6 @@ export default function ToolCard({
         </div>
         <div className="tool-card-toggles">
           <div className="tool-card-toggle-wrap">
-            <span className="tool-switch-label">{t("tools.auto.toggle")}</span>
-            <button
-              type="button"
-              className={`tool-switch ${tool.autoSync ? "active" : ""}`}
-              aria-pressed={tool.autoSync}
-              aria-label={t("tools.aria.autoToggle", { tool: tool.name })}
-              onClick={onToggleAutoSync}
-              disabled={busy || togglingAutoCurrentTool}
-            >
-              <span className="tool-switch-thumb" />
-            </button>
-          </div>
-          <div className="tool-card-toggle-wrap">
             <span className="tool-switch-label">{t("tools.tracking.toggle")}</span>
             <button
               type="button"
@@ -141,6 +134,19 @@ export default function ToolCard({
               aria-label={t("tools.aria.trackingToggle", { tool: tool.name })}
               onClick={onToggleTracking}
               disabled={busy || togglingTrackingCurrentTool}
+            >
+              <span className="tool-switch-thumb" />
+            </button>
+          </div>
+          <div className="tool-card-toggle-wrap">
+            <span className="tool-switch-label">{t("tools.auto.toggle")}</span>
+            <button
+              type="button"
+              className={`tool-switch ${tool.autoSync ? "active" : ""}`}
+              aria-pressed={tool.autoSync}
+              aria-label={t("tools.aria.autoToggle", { tool: tool.name })}
+              onClick={onToggleAutoSync}
+              disabled={busy || togglingAutoCurrentTool}
             >
               <span className="tool-switch-thumb" />
             </button>
@@ -245,38 +251,57 @@ export default function ToolCard({
         </div>
       </footer>
 
-      {healthNeedsFix && (
-        <div className="tool-card-health-actions">
-          <button
-            type="button"
-            className="btn btn-ghost tool-card-action-btn"
-            onClick={onManualSync}
-            disabled={busy || syncingCurrentTool}
-          >
-            {t("tools.routerHealth.reapply")}
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost tool-card-action-btn"
-            onClick={() => setPathsOpen(true)}
-            disabled={busy || savingCurrentTool}
-          >
-            {t("tools.routerHealth.openPath")}
-          </button>
-          <span className="tool-card-health-reason">{routerHealth.reason}</span>
-        </div>
-      )}
+      <div className={`tool-card-health-actions ${healthNeedsFix ? "" : "is-placeholder"}`.trim()} aria-hidden={!healthNeedsFix}>
+        {healthNeedsFix ? (
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost tool-card-action-btn"
+              onClick={onManualSync}
+              disabled={busy || syncingCurrentTool}
+            >
+              {t("tools.routerHealth.reapply")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost tool-card-action-btn"
+              onClick={() => setPathsOpen(true)}
+              disabled={busy || savingCurrentTool}
+            >
+              {t("tools.routerHealth.openPath")}
+            </button>
+            <span className="tool-card-health-reason">{routerHealth.reason}</span>
+          </>
+        ) : (
+          <span className="tool-card-health-placeholder" />
+        )}
+      </div>
 
       <div className="tool-card-actions">
         {installed && (
-          <button
-            type="button"
-            className="btn btn-primary tool-card-action-btn"
-            onClick={onManualSync}
-            disabled={busy || syncingCurrentTool}
-          >
-            {syncingCurrentTool ? t("tools.manual.syncing") : t("tools.manual.button")}
-          </button>
+          <div className="tool-card-sync-action">
+            <button
+              type="button"
+              className="btn btn-primary tool-card-action-btn"
+              onClick={onManualSync}
+              disabled={busy || syncingCurrentTool}
+              aria-busy={syncingCurrentTool}
+            >
+              {syncingCurrentTool ? (
+                <span className="tool-card-btn-spinner" aria-hidden="true" />
+              ) : null}
+              <span>{syncingCurrentTool ? t("tools.manual.syncing") : t("tools.manual.button")}</span>
+            </button>
+            <span
+              className="tool-card-info-icon"
+              role="img"
+              tabIndex={0}
+              aria-label={t("tools.manual.directionHint.aria")}
+              title={t("tools.manual.directionHint")}
+            >
+              i
+            </span>
+          </div>
         )}
         <button
           type="button"
@@ -296,6 +321,17 @@ export default function ToolCard({
           </button>
         )}
       </div>
+
+      {syncLiveMessage && (
+        <p
+          className={`tool-card-sync-feedback ${syncLiveTone}`}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {syncLiveMessage}
+        </p>
+      )}
     </article>
   );
 }

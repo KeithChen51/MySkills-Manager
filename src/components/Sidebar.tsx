@@ -2,10 +2,8 @@ import {
     IconDashboard,
     IconEval,
     IconGit,
-    IconLogs,
     IconSettings,
     IconSkills,
-    IconTools,
 } from "./icons";
 import { useI18n } from "../i18n/I18nProvider";
 import { useTheme } from "../theme/ThemeProvider";
@@ -13,7 +11,7 @@ import brandLogoTransparent from "../../skillar-design-pack/logo/skillar-logo-tr
 import brandLogoWhiteBg from "../../skillar-design-pack/logo/skillar-logo-white-bg.png";
 import "./Sidebar.css";
 
-export type ViewName = "skills" | "dashboard" | "logs" | "tools" | "eval" | "git" | "settings";
+export type ViewName = "skills" | "dashboard" | "eval" | "git" | "settings";
 
 type Props = {
     active: ViewName;
@@ -27,9 +25,7 @@ export default function Sidebar({ active, onChange }: Props) {
     const betaLabel = "BETA";
     const navItems: { view: ViewName; icon: React.ReactNode; label: string; beta?: boolean }[] = [
         { view: "skills", icon: <IconSkills size={20} />, label: t("nav.skills") },
-        { view: "tools", icon: <IconTools size={20} />, label: t("nav.tools") },
         { view: "dashboard", icon: <IconDashboard size={20} />, label: t("nav.dashboard") },
-        { view: "logs", icon: <IconLogs size={20} />, label: t("nav.logs") },
         { view: "eval", icon: <IconEval size={20} />, label: t("nav.eval"), beta: true },
         { view: "git", icon: <IconGit size={20} />, label: t("nav.git") },
     ];

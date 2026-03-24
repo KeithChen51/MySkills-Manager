@@ -1,9 +1,10 @@
+import { useRef } from "react";
 import type { SkillConflictDetail } from "../../api/tauri";
+import useDialogA11y from "../../components/useDialogA11y";
 import { IconClose } from "../../components/icons";
 import type { MessageKey } from "../../i18n/messages";
 import { useConflictDiffView } from "./useConflictDiffView";
 
-type ConflictViewMode = "diff" | "full";
 type Translate = (key: MessageKey, params?: Record<string, string | number>) => string;
 
 type Props = {
@@ -11,11 +12,9 @@ type Props = {
   conflictDetailBusy: boolean;
   conflictStatus: string;
   conflictDetail: SkillConflictDetail | null;
-  conflictViewMode: ConflictViewMode;
   conflictResolveBusySource: string | null;
   t: Translate;
   onClose: () => void;
-  onViewModeChange: (mode: ConflictViewMode) => void;
   onResolveConflict: (sourceId: string) => void;
 };
 
@@ -37,14 +36,18 @@ export default function SkillConflictDrawer({
   conflictDetailBusy,
   conflictStatus,
   conflictDetail,
-  conflictViewMode,
   conflictResolveBusySource,
   t,
   onClose,
-  onViewModeChange,
   onResolveConflict,
 }: Props) {
   const { baseline, hiddenMatchedCount, conflicts, computingDiff } = useConflictDiffView(conflictDetail);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const { dialogRef } = useDialogA11y<HTMLElement>({
+    open: Boolean(activeConflictSkill),
+    onClose,
+    initialFocusRef: closeButtonRef,
+  });
 
   if (!activeConflictSkill) {
     return null;
@@ -53,10 +56,12 @@ export default function SkillConflictDrawer({
   return (
     <div className="skills-conflict-overlay" onClick={onClose}>
       <aside
+        ref={dialogRef}
         className="skills-conflict-drawer"
         role="dialog"
         aria-modal="true"
         aria-label={t("skills.conflict.drawer.aria", { skill: activeConflictSkill })}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
         <header className="skills-conflict-header">
@@ -66,6 +71,7 @@ export default function SkillConflictDrawer({
           <div className="skills-conflict-actions">
             <span className="skills-conflict-status">{conflictStatus}</span>
             <button
+              ref={closeButtonRef}
               type="button"
               className="btn btn-ghost"
               onClick={onClose}
@@ -89,26 +95,6 @@ export default function SkillConflictDrawer({
           )}
           {!conflictDetailBusy && conflictDetail && conflictDetail.variants.length > 0 && (
             <>
-              <div className="skills-conflict-view-mode">
-                <span className="skills-conflict-view-mode-label">{t("skills.conflict.view.label")}</span>
-                <div className="skills-conflict-view-mode-actions">
-                  <button
-                    type="button"
-                    className={`btn ${conflictViewMode === "diff" ? "btn-primary" : "btn-ghost"}`}
-                    onClick={() => onViewModeChange("diff")}
-                  >
-                    {t("skills.conflict.view.diff")}
-                  </button>
-                  <button
-                    type="button"
-                    className={`btn ${conflictViewMode === "full" ? "btn-primary" : "btn-ghost"}`}
-                    onClick={() => onViewModeChange("full")}
-                  >
-                    {t("skills.conflict.view.full")}
-                  </button>
-                </div>
-              </div>
-
               {hiddenMatchedCount > 0 && (
                 <p className="skills-conflict-placeholder">
                   {t("skills.conflict.placeholder.hiddenMatched", { count: hiddenMatchedCount })}
@@ -173,9 +159,7 @@ export default function SkillConflictDrawer({
                         </button>
                       </div>
                     </div>
-                    {conflictViewMode === "full" ? (
-                      <pre className="skills-conflict-content">{variant.content}</pre>
-                    ) : !diff ? (
+                    {!diff ? (
                       <p className="skills-conflict-placeholder">
                         {computingDiff
                           ? t("skills.conflict.diff.calculating")

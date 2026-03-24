@@ -1,7 +1,13 @@
 .app-shell {
   background:
-    radial-gradient(circle at 20% -10%, var(--shell-glow), transparent 42%),
-    radial-gradient(circle at 100% 100%, color-mix(in srgb, var(--content-glow) 70%, transparent), transparent 38%),
+    radial-gradient(78% 62% at -12% -18%, var(--shell-glow), transparent 66%),
+    radial-gradient(64% 56% at 112% 108%, color-mix(in srgb, var(--content-glow) 88%, transparent), transparent 68%),
+    linear-gradient(
+      150deg,
+      color-mix(in srgb, var(--prism-blue) 5%, transparent) 0%,
+      transparent 45%,
+      color-mix(in srgb, var(--prism-purple) 5%, transparent) 100%
+    ),
     var(--bg-app);
   color: var(--text-primary);
   display: flex;
@@ -14,7 +20,12 @@
 
 .app-content {
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--content-glow) 80%, transparent), transparent 44%),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--content-glow) 92%, transparent) 0%,
+      color-mix(in srgb, var(--content-glow) 40%, transparent) 20%,
+      transparent 52%
+    ),
     var(--bg-app);
   border-left: 1px solid var(--border-card);
   display: flex;
@@ -26,9 +37,10 @@
 
 .app-status-bar {
   align-items: center;
-  background: color-mix(in srgb, var(--status-bar-bg) 92%, transparent);
-  backdrop-filter: blur(10px);
+  background: color-mix(in srgb, var(--status-bar-bg) 94%, transparent);
+  backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border-card);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--bg-card) 32%, transparent);
   display: flex;
   flex-wrap: wrap;
   gap: var(--sp-sm);
@@ -40,7 +52,11 @@
 }
 
 .status-dot {
-  background: var(--prism-aqua);
+  background: linear-gradient(
+    145deg,
+    var(--prism-aqua) 0%,
+    color-mix(in srgb, var(--prism-blue) 45%, var(--prism-aqua)) 100%
+  );
   border-radius: 50%;
   display: inline-block;
   height: var(--status-dot-size);
@@ -49,15 +65,22 @@
 }
 
 .status-text {
-  color: var(--text-muted);
-  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  font-size: var(--typo-meta-size);
+  font-weight: 500;
+  line-height: var(--typo-meta-line);
 }
 
 .status-import {
-  color: var(--prism-aqua, #00bcd4);
-  font-size: var(--text-xs);
+  background: color-mix(in srgb, var(--prism-aqua-bg) 75%, transparent);
+  border: 1px solid color-mix(in srgb, var(--prism-aqua) 30%, var(--border-card));
+  border-radius: var(--radius-pill);
+  color: color-mix(in srgb, var(--prism-aqua) 58%, var(--text-primary));
+  font-size: var(--typo-meta-size);
   font-weight: 600;
+  line-height: 1;
   margin-left: auto;
+  padding: 5px 10px;
 }
 
 .app-error-toast-wrap {
@@ -76,7 +99,7 @@
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-card-hover);
   color: var(--danger);
-  font-size: var(--text-sm);
+  font-size: var(--typo-body-size);
   padding: var(--sp-sm) var(--sp-md);
 }
 

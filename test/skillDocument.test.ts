@@ -5,7 +5,7 @@ import {
   fromEditableDocument,
   toEditableDocument,
   type SkillDocument,
-} from "../src/domain/skillDocument";
+} from "../src/domain/skillDocument.ts";
 
 test("toEditableDocument normalizes frontmatter fields", () => {
   const raw: SkillDocument = {
@@ -104,3 +104,4 @@ test("toEditableDocument preserves skillar_taxonomy outside extra fields", () =>
     false,
   );
 });
+

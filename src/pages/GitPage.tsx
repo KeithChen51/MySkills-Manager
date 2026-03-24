@@ -27,6 +27,7 @@ import {
   type GitStatus,
 } from "../api/tauri";
 import { useI18n } from "../i18n/I18nProvider";
+import GitFloatingModal from "./git/components/GitFloatingModal";
 import "./GitPage.css";
 
 function inferRepositoryName(url: string): string {
@@ -51,6 +52,26 @@ const providerIcons: Record<GitManagedRepository["provider"], { path: string; he
   gitee: siGitee,
   other: undefined,
 };
+
+const BEIJING_TIME_ZONE = "Asia/Shanghai";
+const DEFAULT_COMMIT_TEMPLATE = "chore: update skills";
+
+function formatBeijingDateTimeYmdHm(value: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: BEIJING_TIME_ZONE,
+  }).formatToParts(value);
+  const map = parts.reduce<Record<string, string>>((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${map.year ?? "0000"}-${map.month ?? "00"}-${map.day ?? "00"} ${map.hour ?? "00"}:${map.minute ?? "00"}`;
+}
 
 function normalizeRepositoryWebUrl(rawUrl: string): string | null {
   const value = rawUrl.trim();
@@ -102,12 +123,28 @@ function formatCommitTime(value: string): string {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleString();
+  return formatBeijingDateTimeYmdHm(date);
+}
+
+function formatRepositoryTime(value: string | undefined): string {
+  if (!value?.trim()) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return formatBeijingDateTimeYmdHm(date);
+}
+
+function parseSortableTime(value: string | undefined): number {
+  if (!value?.trim()) return 0;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 }
 
 const GRAPH_LANE_WIDTH = 18;
 const GRAPH_ROW_HEIGHT = 34;
 const GRAPH_NODE_Y = 13;
+const GRAPH_PAGE_SIZE = 120;
+
+type GitActionStatusTone = "neutral" | "success" | "error";
 
 type GitGraphRow = GitGraphCommit & {
   lane: number;
@@ -351,6 +388,7 @@ export default function GitPage() {
   const { t } = useI18n();
   const [viewMode, setViewMode] = useState<GitViewMode>("overview");
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showAdvancedAddOptions, setShowAdvancedAddOptions] = useState(false);
 
   const [repositories, setRepositories] = useState<GitManagedRepository[]>([]);
   const [loadingRepositories, setLoadingRepositories] = useState(false);
@@ -371,17 +409,21 @@ export default function GitPage() {
 
   const [addingRepository, setAddingRepository] = useState(false);
   const [removingRepositoryId, setRemovingRepositoryId] = useState("");
+  const [removeConfirmRepo, setRemoveConfirmRepo] = useState<GitManagedRepository | null>(null);
   const [syncingSkills, setSyncingSkills] = useState(false);
 
   const [state, setState] = useState<GitStatus | null>(null);
   const [status, setStatus] = useState("");
-  const [commitMessage, setCommitMessage] = useState("");
+  const [commitMessage, setCommitMessage] = useState(DEFAULT_COMMIT_TEMPLATE);
+  const [operationsOpen, setOperationsOpen] = useState(false);
+  const [expandedChangeGroup, setExpandedChangeGroup] = useState<"changed" | "staged" | "not_added" | null>(null);
   const [aliasDraft, setAliasDraft] = useState("");
   const [aliasEditing, setAliasEditing] = useState(false);
   const [syncPathDraft, setSyncPathDraft] = useState("");
   const [savingAlias, setSavingAlias] = useState(false);
   const [savingSyncPath, setSavingSyncPath] = useState(false);
   const [actionStatus, setActionStatus] = useState("");
+  const [actionStatusTone, setActionStatusTone] = useState<GitActionStatusTone>("neutral");
   const [committing, setCommitting] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [syncTree, setSyncTree] = useState<Record<string, GitSyncTreeEntry[]>>({});
@@ -394,27 +436,40 @@ export default function GitPage() {
   const [ignoreSelectorOpen, setIgnoreSelectorOpen] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
   const [graphLoading, setGraphLoading] = useState(false);
+  const [graphLoadingMore, setGraphLoadingMore] = useState(false);
   const [graphStatus, setGraphStatus] = useState("");
   const [graphCommits, setGraphCommits] = useState<GitGraphCommit[]>([]);
+  const [graphLimit, setGraphLimit] = useState(GRAPH_PAGE_SIZE);
 
   const selectedRepository = useMemo(
     () => repositories.find((repo) => repo.id === selectedRepoId),
     [repositories, selectedRepoId],
   );
+  const sortedRepositories = useMemo(
+    () =>
+      [...repositories].sort(
+        (a, b) => parseSortableTime(b.lastSyncAt) - parseSortableTime(a.lastSyncAt),
+      ),
+    [repositories],
+  );
   const selectedRepoPath = selectedRepository?.localPath ?? "";
   const syncingRepositories = useMemo(
-    () => repositories.filter((repo) => repo.isSyncing),
-    [repositories],
+    () => sortedRepositories.filter((repo) => repo.isSyncing),
+    [sortedRepositories],
   );
   const displayedSyncPath = selectedRepository?.sourcePath || syncSourcePath;
   const guideBlocks = useMemo(() => parseGuideMarkdown(guideMarkdown), [guideMarkdown]);
   const recentCommits = state?.recent_commits ?? [];
+  const changedFiles = state?.changed ?? [];
+  const stagedFiles = state?.staged ?? [];
+  const untrackedFiles = state?.not_added ?? [];
   const latestCommitHash = state?.latest_commit_hash ?? "";
   const graphRows = useMemo(() => buildCommitGraphRows(graphCommits), [graphCommits]);
   const graphLaneCount = useMemo(
     () => graphRows.reduce((maxCount, row) => Math.max(maxCount, row.laneCount), 1),
     [graphRows],
   );
+  const graphCanLoadMore = graphCommits.length > 0 && graphCommits.length >= graphLimit;
   const commitGraphUrl = useMemo(() => {
     if (!selectedRepository) return null;
     return buildCommitGraphUrl(selectedRepository, state?.branch ?? "");
@@ -426,6 +481,19 @@ export default function GitPage() {
     () => ignoreDraft.join("\u0000") !== ignoreInitial.join("\u0000"),
     [ignoreDraft, ignoreInitial],
   );
+  const headerPrimaryStatus = actionStatus || status || repositoryStatus || "";
+  const headerSecondaryStatus = useMemo(() => {
+    const candidates = [status, repositoryStatus].filter(Boolean);
+    return candidates.find((item) => item !== headerPrimaryStatus) ?? "";
+  }, [headerPrimaryStatus, repositoryStatus, status]);
+  const setActionFeedback = useCallback((message: string, tone: GitActionStatusTone = "neutral") => {
+    setActionStatus(message);
+    setActionStatusTone(tone);
+  }, []);
+  const clearActionFeedback = useCallback(() => {
+    setActionStatus("");
+    setActionStatusTone("neutral");
+  }, []);
 
   const refreshStatus = useCallback(
     async (repoPath?: string) => {
@@ -526,9 +594,21 @@ export default function GitPage() {
     setIgnoreSelectorOpen(false);
     setGraphOpen(false);
     setGraphLoading(false);
+    setGraphLoadingMore(false);
     setGraphStatus("");
     setGraphCommits([]);
+    setGraphLimit(GRAPH_PAGE_SIZE);
+    setOperationsOpen(false);
+    setExpandedChangeGroup(null);
   }, [selectedRepository?.id, selectedRepository?.ignorePaths, viewMode]);
+
+  useEffect(() => {
+    if (!actionStatus || actionStatusTone !== "success") return;
+    const timer = window.setTimeout(() => {
+      clearActionFeedback();
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [actionStatus, actionStatusTone, clearActionFeedback]);
 
   useEffect(() => {
     if (!showAddForm) return;
@@ -574,11 +654,23 @@ export default function GitPage() {
     return () => window.removeEventListener("keydown", handleEscape);
   }, [graphOpen]);
 
+  useEffect(() => {
+    if (!removeConfirmRepo) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setRemoveConfirmRepo(null);
+      }
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [removeConfirmRepo]);
+
   function openRepositoryDetail(repo: GitManagedRepository) {
     setShowAddForm(false);
     setGuideOpen(false);
     setIgnoreSelectorOpen(false);
     setGraphOpen(false);
+    setRemoveConfirmRepo(null);
     setSelectedRepoId(repo.id);
     setViewMode("detail");
     void refreshStatus(repo.localPath);
@@ -590,6 +682,7 @@ export default function GitPage() {
     setPostAddScript("");
     setSyncMode("direct");
     setSyncPathInput("");
+    setShowAdvancedAddOptions(false);
   }
 
   function closeAddDrawer() {
@@ -612,6 +705,7 @@ export default function GitPage() {
     setShowAddForm(false);
     setIgnoreSelectorOpen(false);
     setGraphOpen(false);
+    setRemoveConfirmRepo(null);
     setGuideOpen(true);
     setGuideLoading(true);
     setGuideError("");
@@ -674,37 +768,37 @@ export default function GitPage() {
         setSyncPathDraft(selected);
       }
     } catch (e: unknown) {
-      setActionStatus(String(e));
+      setActionFeedback(String(e), "error");
     }
   }
 
   async function handleOpenDetailSyncPath() {
     const targetPath = (syncPathDraft.trim() || displayedSyncPath.trim() || syncSourcePath.trim()).trim();
     if (!targetPath) {
-      setActionStatus(t("git.path.empty"));
+      setActionFeedback(t("git.path.empty"), "error");
       return;
     }
-    setActionStatus(t("git.path.opening"));
+    setActionFeedback(t("git.path.opening"));
     try {
       await gitOpenDirectory(targetPath);
-      setActionStatus(t("git.path.opened"));
+      setActionFeedback(t("git.path.opened"), "success");
     } catch (e: unknown) {
-      setActionStatus(String(e));
+      setActionFeedback(String(e), "error");
     }
   }
 
   async function handleSaveSyncPath() {
     if (!selectedRepository || savingSyncPath) return;
     setSavingSyncPath(true);
-    setActionStatus(t("git.path.saving"));
+    setActionFeedback(t("git.path.saving"));
     try {
       const updated = await gitUpdateRepositorySyncPath(selectedRepository.id, syncPathDraft.trim() || undefined);
       setRepositories((previous) => previous.map((repo) => (repo.id === updated.id ? updated : repo)));
       setSyncPathDraft(updated.sourcePath);
-      setActionStatus(t("git.path.saved"));
+      setActionFeedback(t("git.path.saved"), "success");
       await refreshStatus(updated.localPath);
     } catch (e: unknown) {
-      setActionStatus(String(e));
+      setActionFeedback(String(e), "error");
     } finally {
       setSavingSyncPath(false);
     }
@@ -741,36 +835,53 @@ export default function GitPage() {
     setIgnoreSelectorOpen(true);
     setGuideOpen(false);
     setGraphOpen(false);
+    setRemoveConfirmRepo(null);
     await loadSyncTree(undefined, false);
   }
 
-  async function loadGraphHistory(force = false) {
+  async function loadGraphHistory(force = false, limit = GRAPH_PAGE_SIZE) {
     if (!selectedRepoPath) return;
-    if (!force && graphCommits.length > 0) return;
-    setGraphLoading(true);
+    if (!force && graphCommits.length > 0 && limit <= graphLimit) return;
+    const isLoadMore = limit > graphLimit;
+    if (isLoadMore) {
+      setGraphLoadingMore(true);
+    } else {
+      setGraphLoading(true);
+    }
     setGraphStatus("");
     try {
-      const commits = await gitListCommitHistory(selectedRepoPath, 120);
+      const commits = await gitListCommitHistory(selectedRepoPath, limit);
       setGraphCommits(commits);
+      setGraphLimit(limit);
     } catch (e: unknown) {
       setGraphStatus(String(e));
     } finally {
-      setGraphLoading(false);
+      if (isLoadMore) {
+        setGraphLoadingMore(false);
+      } else {
+        setGraphLoading(false);
+      }
     }
+  }
+
+  async function handleLoadMoreGraphHistory() {
+    if (graphLoading || graphLoadingMore) return;
+    await loadGraphHistory(true, graphLimit + GRAPH_PAGE_SIZE);
   }
 
   async function handleOpenGraphModal() {
     if (!selectedRepoPath) {
-      setActionStatus(t("git.graph.noRepo"));
+      setActionFeedback(t("git.graph.noRepo"), "error");
       return;
     }
     setShowAddForm(false);
     setGuideOpen(false);
     setIgnoreSelectorOpen(false);
-    setActionStatus(t("git.graph.opening"));
+    setRemoveConfirmRepo(null);
+    setActionFeedback(t("git.graph.opening"));
     setGraphOpen(true);
-    await loadGraphHistory(false);
-    setActionStatus("");
+    await loadGraphHistory(false, graphLimit);
+    clearActionFeedback();
   }
 
   async function handleOpenExternalUrl(url: string | null) {
@@ -778,7 +889,7 @@ export default function GitPage() {
     try {
       await gitOpenUrl(url);
     } catch (e: unknown) {
-      setActionStatus(String(e));
+      setActionFeedback(String(e), "error");
     }
   }
 
@@ -864,24 +975,25 @@ export default function GitPage() {
       sourcePath: resolvedSourcePath,
       localPath: syncMode === "direct" ? resolvedSourcePath : "",
       isSyncing: true,
+      lastSyncAt: new Date().toISOString(),
       scriptAfterAdd: script || undefined,
       ignorePaths: [],
     };
 
     setAddingRepository(true);
-    setActionStatus(t("git.repo.adding"));
+    setActionFeedback(t("git.repo.adding"));
     setRepositories((prev) => [pendingRepository, ...prev]);
 
     try {
       const created = await gitAddRepository(trimmedUrl, addOptions);
-      setActionStatus(t("git.repo.add.ok", { name: repositoryDisplayName(created) }));
+      setActionFeedback(t("git.repo.add.ok", { name: repositoryDisplayName(created) }), "success");
       resetAddForm();
       setShowAddForm(false);
       setViewMode("detail");
       await refreshRepositories(created.id);
       await refreshStatus(created.localPath);
     } catch (e: unknown) {
-      setActionStatus(String(e));
+      setActionFeedback(String(e), "error");
     } finally {
       setAddingRepository(false);
       setRepositories((prev) => prev.filter((repo) => !repo.id.startsWith("pending-")));
@@ -891,15 +1003,15 @@ export default function GitPage() {
   async function handleSaveAlias() {
     if (!selectedRepository || savingAlias) return false;
     setSavingAlias(true);
-    setActionStatus(t("git.repo.alias.saving"));
+    setActionFeedback(t("git.repo.alias.saving"));
     try {
       const updated = await gitUpdateRepositoryAlias(selectedRepository.id, aliasDraft.trim() || undefined);
       setRepositories((previous) => previous.map((repo) => (repo.id === updated.id ? updated : repo)));
       setAliasDraft(updated.alias ?? "");
-      setActionStatus(t("git.repo.alias.saved", { name: repositoryDisplayName(updated) }));
+      setActionFeedback(t("git.repo.alias.saved", { name: repositoryDisplayName(updated) }), "success");
       return true;
     } catch (e: unknown) {
-      setActionStatus(String(e));
+      setActionFeedback(String(e), "error");
       return false;
     } finally {
       setSavingAlias(false);
@@ -921,14 +1033,14 @@ export default function GitPage() {
   async function handleCommit() {
     if (committing || pushing || !selectedRepoPath) return;
     setCommitting(true);
-    setActionStatus(t("git.committing"));
+    setActionFeedback(t("git.committing"));
     try {
       const result = await gitCommit(commitMessage, selectedRepoPath);
-      setActionStatus(`${t("git.commit.ok", { hash: result.hash.slice(0, 8) })} (${result.hash})`);
-      setCommitMessage("");
+      setActionFeedback(`${t("git.commit.ok", { hash: result.hash.slice(0, 8) })} (${result.hash})`, "success");
+      setCommitMessage(DEFAULT_COMMIT_TEMPLATE);
       await refreshStatus(selectedRepoPath);
     } catch (e: unknown) {
-      setActionStatus(String(e));
+      setActionFeedback(String(e), "error");
     } finally {
       setCommitting(false);
     }
@@ -937,13 +1049,13 @@ export default function GitPage() {
   async function handlePush() {
     if (committing || pushing || !selectedRepoPath) return;
     setPushing(true);
-    setActionStatus(t("git.pushing"));
+    setActionFeedback(t("git.pushing"));
     try {
       await gitPush(selectedRepoPath);
-      setActionStatus(t("git.push.ok"));
+      setActionFeedback(t("git.push.ok"), "success");
       await refreshStatus(selectedRepoPath);
     } catch (e: unknown) {
-      setActionStatus(String(e));
+      setActionFeedback(String(e), "error");
     } finally {
       setPushing(false);
     }
@@ -952,40 +1064,45 @@ export default function GitPage() {
   async function handleSyncSkills() {
     if (!selectedRepoPath || syncingSkills || committing || pushing) return;
     if (selectedRepository?.syncMode === "direct") {
-      setActionStatus(t("git.sync.skip.direct"));
+      setActionFeedback(t("git.sync.skip.direct"));
       return;
     }
 
     setSyncingSkills(true);
-    setActionStatus(t("git.sync.syncing"));
+    setActionFeedback(t("git.sync.syncing"));
     try {
       const result = await gitSyncSkillsToRepo(selectedRepoPath, selectedRepository?.sourcePath);
-      setActionStatus(
+      setActionFeedback(
         t("git.sync.ok", {
           copied: result.copiedFiles,
           removed: result.removedEntries,
         }),
+        "success",
       );
       await refreshStatus(selectedRepoPath);
     } catch (e: unknown) {
-      setActionStatus(String(e));
+      setActionFeedback(String(e), "error");
     } finally {
       setSyncingSkills(false);
     }
   }
 
-  async function handleRemoveRepository(repo: GitManagedRepository) {
+  function handleRemoveRepository(repo: GitManagedRepository) {
     if (removingRepositoryId || addingRepository || syncingSkills || committing || pushing) return;
+    setRemoveConfirmRepo(repo);
+  }
 
+  async function handleConfirmRemoveRepository() {
+    if (!removeConfirmRepo) return;
+    const repo = removeConfirmRepo;
     const displayName = repositoryDisplayName(repo);
-    const confirmed = window.confirm(t("git.repo.remove.confirm", { name: displayName }));
-    if (!confirmed) return;
+    setRemoveConfirmRepo(null);
 
     setRemovingRepositoryId(repo.id);
-    setActionStatus(t("git.repo.removing"));
+    setActionFeedback(t("git.repo.removing"));
     try {
       await gitRemoveRepository(repo.id);
-      setActionStatus(t("git.repo.remove.ok", { name: displayName }));
+      setActionFeedback(t("git.repo.remove.ok", { name: displayName }), "success");
       if (selectedRepoId === repo.id) {
         setSelectedRepoId("");
         setViewMode("overview");
@@ -994,9 +1111,16 @@ export default function GitPage() {
       }
       await refreshRepositories();
     } catch (e: unknown) {
-      setActionStatus(String(e));
+      setActionFeedback(String(e), "error");
     } finally {
       setRemovingRepositoryId("");
+    }
+  }
+
+  async function handleHeaderRefresh() {
+    await refreshRepositories();
+    if (viewMode === "detail" && selectedRepoPath) {
+      await refreshStatus(selectedRepoPath);
     }
   }
 
@@ -1058,8 +1182,11 @@ export default function GitPage() {
       <header className="page-header git-page-header page-header-grid">
         <div className="git-header-copy page-header-copy">
           <h1 className="page-title">{t("git.title")}</h1>
-          {(status || repositoryStatus) && (
-            <span className="page-count git-header-status">{status || repositoryStatus}</span>
+          {headerPrimaryStatus && <span className="page-count git-header-status">{headerPrimaryStatus}</span>}
+          {headerSecondaryStatus && (
+            <span className="page-count git-header-status git-header-status-secondary">
+              {headerSecondaryStatus}
+            </span>
           )}
         </div>
         <div className="git-header-actions page-header-actions-grid">
@@ -1077,10 +1204,12 @@ export default function GitPage() {
                 {showAddForm ? t("git.repo.addForm.hide") : t("git.repo.addForm.show")}
               </button>
             )}
-            <button className="btn btn-ghost" onClick={() => void openGuideModal()}>
-              {t("git.guide.open")}
-            </button>
-            <button className="btn btn-ghost" onClick={() => void refreshRepositories()} disabled={loadingRepositories}>
+            {viewMode === "overview" && (
+              <button className="btn btn-ghost" onClick={() => void openGuideModal()}>
+                {t("git.guide.open")}
+              </button>
+            )}
+            <button className="btn btn-ghost" onClick={() => void handleHeaderRefresh()} disabled={loadingRepositories}>
               {t("git.refresh")}
             </button>
           </div>
@@ -1095,23 +1224,58 @@ export default function GitPage() {
               <span className="git-overview-meta">{t("git.repo.count", { count: repositories.length })}</span>
             </div>
             {syncingRepositories.length > 0 && (
-              <p className="git-syncing-inline">
-                {t("git.repo.syncing.title")}:{" "}
-                {syncingRepositories.map((repo) => repositoryDisplayName(repo)).join(" / ")}
-              </p>
+              <div className="git-syncing-inline">
+                <span className="git-syncing-inline-label">{t("git.repo.syncing.title")}:</span>
+                <div className="git-syncing-pill-list">
+                  {syncingRepositories.map((repo) => (
+                    <span key={repo.id} className="git-repo-state-pill is-syncing">
+                      {repositoryDisplayName(repo)}
+                    </span>
+                  ))}
+                </div>
+              </div>
             )}
             {repositories.length === 0 ? (
-              <p className="empty-state">{t("git.repo.list.empty")}</p>
+              <div className="git-empty-callout">
+                <p className="empty-state">{t("git.repo.list.empty")}</p>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => setShowAddForm(true)}
+                >
+                  {t("git.repo.connectFirst")}
+                </button>
+              </div>
             ) : (
               <div className="git-repo-grid">
-                {repositories.map((repo) => {
+                {sortedRepositories.map((repo) => {
                   const isSelected = repo.id === selectedRepoId;
+                  const isPending = repo.id.startsWith("pending-");
+                  const statusTone = repo.lastSyncError
+                    ? "error"
+                    : repo.isSyncing
+                      ? "syncing"
+                      : "normal";
+                  const statusLabel = repo.lastSyncError
+                    ? t("git.repo.state.error")
+                    : repo.isSyncing
+                      ? t("git.repo.state.syncing")
+                      : t("git.repo.state.normal");
                   const providerIcon = providerIcons[repo.provider];
                   return (
-                    <article key={repo.id} className={`git-repo-card ${isSelected ? "is-selected" : ""}`}>
-                      <button className="git-repo-card-main" onClick={() => openRepositoryDetail(repo)}>
+                    <article
+                      key={repo.id}
+                      className={`git-repo-card ${isSelected ? "is-selected" : ""} ${isPending ? "is-pending" : ""}`}
+                    >
+                      <button
+                        className="git-repo-card-main"
+                        onClick={() => openRepositoryDetail(repo)}
+                        disabled={isPending}
+                      >
                         <div className="git-repo-title-row">
                           <strong>{repositoryDisplayName(repo)}</strong>
+                          {isPending ? <span className="git-inline-spinner" aria-hidden="true" /> : null}
+                          <span className={`git-repo-state-pill is-${statusTone}`}>{statusLabel}</span>
                           <span className="git-provider-inline git-provider-chip">
                             {providerIcon ? (
                               <svg
@@ -1131,10 +1295,19 @@ export default function GitPage() {
                           {t("git.repo.mode")}: {t(`git.repo.mode.${repo.syncMode}`)}
                         </p>
                         <p className="git-repo-card-meta">
-                          {t("git.repo.syncPath")}: <span className="git-repo-card-path">{repo.sourcePath || syncSourcePath || "-"}</span>
+                          {t("git.repo.syncPath")}:{" "}
+                          <span
+                            className="git-repo-card-path"
+                            title={repo.sourcePath || syncSourcePath || "-"}
+                          >
+                            {repo.sourcePath || syncSourcePath || "-"}
+                          </span>
                         </p>
                         <p className="git-repo-card-meta">
-                          {t("git.repo.lastSync")}: {repo.lastSyncAt ?? t("git.repo.lastSync.never")}
+                          {t("git.repo.lastSync")}:{" "}
+                          {repo.lastSyncAt
+                            ? formatRepositoryTime(repo.lastSyncAt)
+                            : t("git.repo.lastSync.never")}
                         </p>
                         {repo.lastSyncError && (
                           <p className="git-repo-card-error">
@@ -1143,13 +1316,10 @@ export default function GitPage() {
                         )}
                       </button>
                       <div className="git-repo-card-actions">
-                        <button className="btn btn-ghost" onClick={() => openRepositoryDetail(repo)}>
-                          {t("git.repo.open")}
-                        </button>
                         <button
                           className="btn btn-ghost"
                           onClick={() => void handleRemoveRepository(repo)}
-                          disabled={removingRepositoryId === repo.id}
+                          disabled={removingRepositoryId === repo.id || isPending}
                         >
                           {removingRepositoryId === repo.id ? t("git.repo.removing") : t("git.repo.remove")}
                         </button>
@@ -1231,15 +1401,26 @@ export default function GitPage() {
                           </button>
                         </div>
                       </label>
-                      <label className="field git-field field-wide">
-                        <span className="field-label">{t("git.repo.script")}</span>
-                        <input
-                          className="field-input"
-                          value={postAddScript}
-                          placeholder={t("git.repo.script.placeholder")}
-                          onChange={(e) => setPostAddScript(e.target.value)}
-                        />
-                      </label>
+                      <div className="field git-field field-wide">
+                        <button
+                          type="button"
+                          className="btn btn-ghost git-advanced-toggle"
+                          onClick={() => setShowAdvancedAddOptions((previous) => !previous)}
+                        >
+                          {showAdvancedAddOptions ? t("git.repo.advanced.hide") : t("git.repo.advanced.show")}
+                        </button>
+                      </div>
+                      {showAdvancedAddOptions && (
+                        <label className="field git-field field-wide">
+                          <span className="field-label">{t("git.repo.script")}</span>
+                          <input
+                            className="field-input"
+                            value={postAddScript}
+                            placeholder={t("git.repo.script.placeholder")}
+                            onChange={(e) => setPostAddScript(e.target.value)}
+                          />
+                        </label>
+                      )}
                       <div className="git-action-buttons field-wide">
                         <button
                           className="btn btn-primary"
@@ -1250,10 +1431,7 @@ export default function GitPage() {
                         </button>
                         <button
                           className="btn btn-ghost"
-                          onClick={() => {
-                            resetAddForm();
-                            closeAddDrawer();
-                          }}
+                          onClick={closeAddDrawer}
                           disabled={addingRepository}
                         >
                           {t("git.repo.addForm.hide")}
@@ -1359,113 +1537,133 @@ export default function GitPage() {
                 </div>
                 <div className="git-config-meta-item">
                   <span>{t("git.repo.lastSync")}</span>
-                  <strong>{selectedRepository.lastSyncAt ?? t("git.repo.lastSync.never")}</strong>
+                  <strong>
+                    {selectedRepository.lastSyncAt
+                      ? formatRepositoryTime(selectedRepository.lastSyncAt)
+                      : t("git.repo.lastSync.never")}
+                  </strong>
                 </div>
               </div>
             </article>
 
             <article className="chart-card git-detail-card">
-              <h3 className="chart-title">{t("git.actions")}</h3>
-              <div className="git-actions">
-                <label className="field git-field">
-                  <span className="field-label">{t("git.commit.message")}</span>
-                  <input
-                    className="field-input"
-                    value={commitMessage}
-                    placeholder={t("git.commit.placeholder")}
-                    onChange={(e) => setCommitMessage(e.target.value)}
-                  />
-                </label>
-                <div className="git-action-buttons">
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => void handleCommit()}
-                    disabled={committing || pushing || !selectedRepoPath || commitMessage.trim().length === 0}
-                  >
-                    {committing ? t("git.committing") : t("git.commit")}
-                  </button>
-                  <button
-                    className="btn btn-ghost"
-                    onClick={() => void handlePush()}
-                    disabled={committing || pushing || !selectedRepoPath}
-                  >
-                    {pushing ? t("git.pushing") : t("git.push")}
-                  </button>
-                  <button
-                    className="btn btn-ghost"
-                    onClick={() => void handleSyncSkills()}
-                    disabled={
-                      syncingSkills ||
-                      committing ||
-                      pushing ||
-                      !selectedRepoPath ||
-                      selectedRepository.syncMode === "direct"
-                    }
-                  >
-                    {syncingSkills ? t("git.sync.syncing") : t("git.sync.button")}
-                  </button>
-                  <button
-                    className="btn btn-ghost"
-                    onClick={() => void refreshStatus(selectedRepoPath)}
-                    disabled={committing || pushing || !selectedRepoPath}
-                  >
-                    {t("git.refresh")}
-                  </button>
-                </div>
-                {actionStatus && <p className="git-action-status">{actionStatus}</p>}
-                <section className="git-recent-panel">
-                  <div className="git-recent-head">
-                    <h4 className="git-recent-title">{t("git.recent.title")}</h4>
+              <div className="git-actions-head">
+                <h3 className="chart-title">{t("git.actions")}</h3>
+                <button
+                  type="button"
+                  className={operationsOpen ? "btn btn-ghost" : "btn btn-primary"}
+                  onClick={() => setOperationsOpen((previous) => !previous)}
+                >
+                  {operationsOpen ? t("git.actions.hide") : t("git.actions.show")}
+                </button>
+              </div>
+              {operationsOpen ? (
+                <div className="git-actions">
+                  <label className="field git-field">
+                    <span className="field-label">{t("git.commit.message")}</span>
+                    <input
+                      className="field-input"
+                      value={commitMessage}
+                      placeholder={t("git.commit.placeholder")}
+                      onChange={(e) => setCommitMessage(e.target.value)}
+                    />
+                  </label>
+                  <div className="git-action-buttons">
                     <button
-                      type="button"
-                      className="btn btn-ghost git-recent-graph-link"
-                      onClick={() => void handleOpenGraphModal()}
-                      disabled={!selectedRepoPath}
+                      className="btn btn-primary"
+                      onClick={() => void handleCommit()}
+                      disabled={committing || pushing || !selectedRepoPath || commitMessage.trim().length === 0}
                     >
-                      {t("git.recent.openGraph")}
+                      {committing ? t("git.committing") : t("git.commit")}
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => void handlePush()}
+                      disabled={committing || pushing || !selectedRepoPath}
+                    >
+                      {pushing ? t("git.pushing") : t("git.push")}
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => void handleSyncSkills()}
+                      disabled={
+                        syncingSkills ||
+                        committing ||
+                        pushing ||
+                        !selectedRepoPath ||
+                        selectedRepository.syncMode === "direct"
+                      }
+                    >
+                      {syncingSkills ? t("git.sync.syncing") : t("git.sync.button")}
+                    </button>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => void refreshStatus(selectedRepoPath)}
+                      disabled={committing || pushing || !selectedRepoPath}
+                    >
+                      {t("git.refresh")}
                     </button>
                   </div>
-                  <p className="git-recent-latest">
-                    {t("git.recent.latestHash")}:{" "}
-                    <code>{latestCommitHash || "-"}</code>
-                  </p>
-                  {recentCommits.length === 0 ? (
-                    <p className="empty-state">{t("git.recent.empty")}</p>
-                  ) : (
-                    <ul className="git-recent-list">
-                      {recentCommits.slice(0, 1).map((entry) => {
-                        const detailUrl = buildCommitDetailUrl(selectedRepository, entry.hash);
-                        return (
-                          <li key={entry.hash} className="git-recent-item">
-                            <div className="git-recent-item-head">
-                              {detailUrl ? (
-                                <button
-                                  type="button"
-                                  className="git-recent-hash-link git-recent-link-btn"
-                                  onClick={() => void handleOpenExternalUrl(detailUrl)}
-                                >
-                                  {entry.short_hash}
-                                </button>
-                              ) : (
-                                <code>{entry.short_hash}</code>
-                              )}
-                              <span
-                                className={`git-recent-tag ${entry.is_pushed ? "is-pushed" : "is-pending"}`}
-                              >
-                                {entry.is_pushed ? t("git.recent.pushed") : t("git.recent.notPushed")}
-                              </span>
-                            </div>
-                            <p className="git-recent-summary">{entry.summary}</p>
-                            <p className="git-recent-meta">
-                              {entry.author_name} · {formatCommitTime(entry.authored_at)}
-                            </p>
-                          </li>
-                        );
-                      })}
-                    </ul>
+                  {selectedRepository.syncMode === "direct" && (
+                    <p className="git-action-note">{t("git.sync.mirrorOnlyHint")}</p>
                   )}
-                </section>
-              </div>
+                  {actionStatus && <p className={`git-action-status is-${actionStatusTone}`}>{actionStatus}</p>}
+                </div>
+              ) : (
+                <p className="git-action-collapsed-hint">{t("git.actions.collapsedHint")}</p>
+              )}
+              <section className="git-recent-panel">
+                <div className="git-recent-head">
+                  <h4 className="git-recent-title">{t("git.recent.title")}</h4>
+                  <button
+                    type="button"
+                    className="btn btn-ghost git-recent-graph-link"
+                    onClick={() => void handleOpenGraphModal()}
+                    disabled={!selectedRepoPath}
+                  >
+                    {t("git.recent.openGraph")}
+                  </button>
+                </div>
+                <p className="git-recent-latest">
+                  {t("git.recent.latestHash")}:{" "}
+                  <code>{latestCommitHash || "-"}</code>
+                </p>
+                {recentCommits.length === 0 ? (
+                  <p className="empty-state">{t("git.recent.empty")}</p>
+                ) : (
+                  <ul className="git-recent-list">
+                    {recentCommits.slice(0, 3).map((entry) => {
+                      const detailUrl = buildCommitDetailUrl(selectedRepository, entry.hash);
+                      return (
+                        <li key={entry.hash} className="git-recent-item">
+                          <div className="git-recent-item-head">
+                            {detailUrl ? (
+                              <button
+                                type="button"
+                                className="git-recent-hash-link git-recent-link-btn"
+                                onClick={() => void handleOpenExternalUrl(detailUrl)}
+                              >
+                                {entry.short_hash}
+                              </button>
+                            ) : (
+                              <code>{entry.short_hash}</code>
+                            )}
+                            <span
+                              className={`git-recent-tag ${entry.is_pushed ? "is-pushed" : "is-pending"}`}
+                            >
+                              {entry.is_pushed ? t("git.recent.pushed") : t("git.recent.notPushed")}
+                            </span>
+                          </div>
+                          <p className="git-recent-summary">{entry.summary}</p>
+                          <p className="git-recent-meta">
+                            {entry.author_name} · {formatCommitTime(entry.authored_at)}
+                          </p>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </section>
             </article>
           </div>
 
@@ -1476,36 +1674,87 @@ export default function GitPage() {
             </div>
             <div className="git-file-grid">
               <article className="git-file-card">
-                <div className="git-file-head">
+                <button
+                  type="button"
+                  className="git-file-head git-file-toggle-head"
+                  onClick={() => setExpandedChangeGroup((previous) => (previous === "changed" ? null : "changed"))}
+                >
                   <h3 className="chart-title">{t("git.changedFiles")}</h3>
-                  <span className="git-file-count">{state?.changed.length ?? 0}</span>
-                </div>
-                {(state?.changed.length ?? 0) === 0 ? (
-                  <p className="empty-state">{t("git.empty.changed")}</p>
+                  <span className="git-file-head-right">
+                    <span className="git-file-count">{changedFiles.length}</span>
+                    <span className={`git-file-toggle-arrow ${expandedChangeGroup === "changed" ? "is-open" : ""}`}>
+                      ▾
+                    </span>
+                  </span>
+                </button>
+                {expandedChangeGroup === "changed" ? (
+                  changedFiles.length === 0 ? (
+                    <p className="empty-state">{t("git.empty.changed")}</p>
+                  ) : (
+                    <ul className="item-list git-file-list">{changedFiles.map((f) => <li key={f}>{f}</li>)}</ul>
+                  )
                 ) : (
-                  <ul className="item-list git-file-list">{state?.changed.map((f) => <li key={f}>{f}</li>)}</ul>
+                  <p className="git-file-collapsed-hint">
+                    {changedFiles.length === 0
+                      ? t("git.empty.changed")
+                      : t("git.files.collapsedHint", { count: changedFiles.length })}
+                  </p>
                 )}
               </article>
               <article className="git-file-card">
-                <div className="git-file-head">
+                <button
+                  type="button"
+                  className="git-file-head git-file-toggle-head"
+                  onClick={() => setExpandedChangeGroup((previous) => (previous === "staged" ? null : "staged"))}
+                >
                   <h3 className="chart-title">{t("git.stagedFiles")}</h3>
-                  <span className="git-file-count">{state?.staged.length ?? 0}</span>
-                </div>
-                {(state?.staged.length ?? 0) === 0 ? (
-                  <p className="empty-state">{t("git.empty.staged")}</p>
+                  <span className="git-file-head-right">
+                    <span className="git-file-count">{stagedFiles.length}</span>
+                    <span className={`git-file-toggle-arrow ${expandedChangeGroup === "staged" ? "is-open" : ""}`}>
+                      ▾
+                    </span>
+                  </span>
+                </button>
+                {expandedChangeGroup === "staged" ? (
+                  stagedFiles.length === 0 ? (
+                    <p className="empty-state">{t("git.empty.staged")}</p>
+                  ) : (
+                    <ul className="item-list git-file-list">{stagedFiles.map((f) => <li key={f}>{f}</li>)}</ul>
+                  )
                 ) : (
-                  <ul className="item-list git-file-list">{state?.staged.map((f) => <li key={f}>{f}</li>)}</ul>
+                  <p className="git-file-collapsed-hint">
+                    {stagedFiles.length === 0
+                      ? t("git.empty.staged")
+                      : t("git.files.collapsedHint", { count: stagedFiles.length })}
+                  </p>
                 )}
               </article>
               <article className="git-file-card">
-                <div className="git-file-head">
+                <button
+                  type="button"
+                  className="git-file-head git-file-toggle-head"
+                  onClick={() => setExpandedChangeGroup((previous) => (previous === "not_added" ? null : "not_added"))}
+                >
                   <h3 className="chart-title">{t("git.untrackedFiles")}</h3>
-                  <span className="git-file-count">{state?.not_added.length ?? 0}</span>
-                </div>
-                {(state?.not_added.length ?? 0) === 0 ? (
-                  <p className="empty-state">{t("git.empty.untracked")}</p>
+                  <span className="git-file-head-right">
+                    <span className="git-file-count">{untrackedFiles.length}</span>
+                    <span className={`git-file-toggle-arrow ${expandedChangeGroup === "not_added" ? "is-open" : ""}`}>
+                      ▾
+                    </span>
+                  </span>
+                </button>
+                {expandedChangeGroup === "not_added" ? (
+                  untrackedFiles.length === 0 ? (
+                    <p className="empty-state">{t("git.empty.untracked")}</p>
+                  ) : (
+                    <ul className="item-list git-file-list">{untrackedFiles.map((f) => <li key={f}>{f}</li>)}</ul>
+                  )
                 ) : (
-                  <ul className="item-list git-file-list">{state?.not_added.map((f) => <li key={f}>{f}</li>)}</ul>
+                  <p className="git-file-collapsed-hint">
+                    {untrackedFiles.length === 0
+                      ? t("git.empty.untracked")
+                      : t("git.files.collapsedHint", { count: untrackedFiles.length })}
+                  </p>
                 )}
               </article>
               <article className="git-file-card git-ignore-file-card">
@@ -1548,8 +1797,49 @@ export default function GitPage() {
         </article>
       )}
 
-      {guideOpen && (
+      {removeConfirmRepo && (
         <>
+          <button
+            type="button"
+            className="git-remove-overlay"
+            aria-label={t("git.repo.remove.title")}
+            onClick={() => setRemoveConfirmRepo(null)}
+          />
+          <aside
+            className="git-remove-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("git.repo.remove.title")}
+          >
+            <article className="chart-card git-remove-panel">
+              <h3 className="chart-title">{t("git.repo.remove.title")}</h3>
+              <p className="git-action-collapsed-hint">
+                {t("git.repo.remove.confirm", { name: repositoryDisplayName(removeConfirmRepo) })}
+              </p>
+              <div className="git-action-buttons">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setRemoveConfirmRepo(null)}
+                  disabled={removingRepositoryId.length > 0}
+                >
+                  {t("git.repo.addForm.hide")}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => void handleConfirmRemoveRepository()}
+                  disabled={removingRepositoryId.length > 0}
+                >
+                  {removingRepositoryId.length > 0 ? t("git.repo.removing") : t("git.repo.remove")}
+                </button>
+              </div>
+            </article>
+          </aside>
+        </>
+      )}
+
+      <GitFloatingModal open={guideOpen}>
           <button
             type="button"
             className="git-guide-overlay"
@@ -1604,11 +1894,9 @@ export default function GitPage() {
               </div>
             </article>
           </aside>
-        </>
-      )}
+      </GitFloatingModal>
 
-      {graphOpen && (
-        <>
+      <GitFloatingModal open={graphOpen}>
           <button
             type="button"
             className="git-graph-overlay"
@@ -1632,8 +1920,8 @@ export default function GitPage() {
                   <button
                     type="button"
                     className="btn btn-ghost"
-                    onClick={() => void loadGraphHistory(true)}
-                    disabled={graphLoading}
+                    onClick={() => void loadGraphHistory(true, graphLimit)}
+                    disabled={graphLoading || graphLoadingMore}
                   >
                     {t("git.graph.refresh")}
                   </button>
@@ -1649,105 +1937,119 @@ export default function GitPage() {
                 ) : graphCommits.length === 0 ? (
                   <p className="empty-state">{t("git.graph.empty")}</p>
                 ) : (
-                  <ul className="git-graph-list">
-                    {graphRows.map((entry) => {
-                      const detailUrl = selectedRepository ? buildCommitDetailUrl(selectedRepository, entry.hash) : null;
-                      const graphWidth = graphLaneCount * GRAPH_LANE_WIDTH;
-                      const laneToX = (laneIndex: number) => laneIndex * GRAPH_LANE_WIDTH + GRAPH_LANE_WIDTH / 2;
-                      const continuityEdges = entry.beforeLanes
-                        .map((hash, laneIndex) => {
-                          if (hash === entry.hash) return null;
-                          const nextLane = entry.afterLanes.indexOf(hash);
-                          if (nextLane < 0) return null;
-                          return { from: laneIndex, to: nextLane };
-                        })
-                        .filter((edge): edge is { from: number; to: number } => Boolean(edge));
-                      return (
-                        <li key={entry.hash} className="git-graph-item">
-                          <div className="git-graph-track" aria-hidden="true">
-                            <svg
-                              className="git-graph-svg"
-                              viewBox={`0 0 ${graphWidth} ${GRAPH_ROW_HEIGHT}`}
-                              style={{ width: `${graphWidth}px`, height: `${GRAPH_ROW_HEIGHT}px` }}
-                            >
-                              <line
-                                x1={laneToX(entry.lane)}
-                                y1={0}
-                                x2={laneToX(entry.lane)}
-                                y2={GRAPH_NODE_Y}
-                                className="git-graph-edge"
-                              />
-                              {continuityEdges.map((edge, edgeIndex) => (
+                  <div className="git-graph-list-wrap">
+                    <ul className="git-graph-list">
+                      {graphRows.map((entry) => {
+                        const detailUrl = selectedRepository ? buildCommitDetailUrl(selectedRepository, entry.hash) : null;
+                        const graphWidth = graphLaneCount * GRAPH_LANE_WIDTH;
+                        const laneToX = (laneIndex: number) => laneIndex * GRAPH_LANE_WIDTH + GRAPH_LANE_WIDTH / 2;
+                        const continuityEdges = entry.beforeLanes
+                          .map((hash, laneIndex) => {
+                            if (hash === entry.hash) return null;
+                            const nextLane = entry.afterLanes.indexOf(hash);
+                            if (nextLane < 0) return null;
+                            return { from: laneIndex, to: nextLane };
+                          })
+                          .filter((edge): edge is { from: number; to: number } => Boolean(edge));
+                        return (
+                          <li key={entry.hash} className="git-graph-item">
+                            <div className="git-graph-track" aria-hidden="true">
+                              <svg
+                                className="git-graph-svg"
+                                viewBox={`0 0 ${graphWidth} ${GRAPH_ROW_HEIGHT}`}
+                                style={{ width: `${graphWidth}px`, height: `${GRAPH_ROW_HEIGHT}px` }}
+                              >
                                 <line
-                                  key={`continuity-${entry.hash}-${edgeIndex}`}
-                                  x1={laneToX(edge.from)}
+                                  x1={laneToX(entry.lane)}
                                   y1={0}
-                                  x2={laneToX(edge.to)}
-                                  y2={GRAPH_ROW_HEIGHT}
+                                  x2={laneToX(entry.lane)}
+                                  y2={GRAPH_NODE_Y}
                                   className="git-graph-edge"
                                 />
-                              ))}
-                              {entry.parentLanes.map((parentLane, edgeIndex) => (
-                                <line
-                                  key={`parent-${entry.hash}-${edgeIndex}`}
-                                  x1={laneToX(entry.lane)}
-                                  y1={GRAPH_NODE_Y}
-                                  x2={laneToX(parentLane)}
-                                  y2={GRAPH_ROW_HEIGHT}
-                                  className={`git-graph-edge ${entry.parent_hashes.length > 1 ? "is-merge" : ""}`}
+                                {continuityEdges.map((edge, edgeIndex) => (
+                                  <line
+                                    key={`continuity-${entry.hash}-${edgeIndex}`}
+                                    x1={laneToX(edge.from)}
+                                    y1={0}
+                                    x2={laneToX(edge.to)}
+                                    y2={GRAPH_ROW_HEIGHT}
+                                    className="git-graph-edge"
+                                  />
+                                ))}
+                                {entry.parentLanes.map((parentLane, edgeIndex) => (
+                                  <line
+                                    key={`parent-${entry.hash}-${edgeIndex}`}
+                                    x1={laneToX(entry.lane)}
+                                    y1={GRAPH_NODE_Y}
+                                    x2={laneToX(parentLane)}
+                                    y2={GRAPH_ROW_HEIGHT}
+                                    className={`git-graph-edge ${entry.parent_hashes.length > 1 ? "is-merge" : ""}`}
+                                  />
+                                ))}
+                                <circle
+                                  cx={laneToX(entry.lane)}
+                                  cy={GRAPH_NODE_Y}
+                                  r={4.4}
+                                  className={`git-graph-node ${entry.is_pushed ? "is-pushed" : "is-pending"}`}
                                 />
-                              ))}
-                              <circle
-                                cx={laneToX(entry.lane)}
-                                cy={GRAPH_NODE_Y}
-                                r={4.4}
-                                className={`git-graph-node ${entry.is_pushed ? "is-pushed" : "is-pending"}`}
-                              />
-                            </svg>
-                          </div>
-                          <div className="git-graph-content">
-                            <div className="git-graph-top">
-                              {detailUrl ? (
-                                <button
-                                  type="button"
-                                  className="git-recent-hash-link git-recent-link-btn"
-                                  onClick={() => void handleOpenExternalUrl(detailUrl)}
-                                >
-                                  {entry.short_hash}
-                                </button>
-                              ) : (
-                                <code>{entry.short_hash}</code>
-                              )}
-                              {entry.refs.map((label, refIndex) => (
-                                <span key={`${entry.hash}-${refIndex}`} className="git-graph-ref">
-                                  {label}
-                                </span>
-                              ))}
-                              {entry.parent_hashes.length > 1 ? (
-                                <span className="git-graph-merge">{t("git.graph.merge")}</span>
-                              ) : null}
-                              <span className={`git-recent-tag ${entry.is_pushed ? "is-pushed" : "is-pending"}`}>
-                                {entry.is_pushed ? t("git.recent.pushed") : t("git.recent.notPushed")}
-                              </span>
+                              </svg>
                             </div>
-                            <p className="git-graph-summary">{entry.summary}</p>
-                            <p className="git-graph-meta">
-                              {entry.author_name} · {formatCommitTime(entry.authored_at)}
-                            </p>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
+                            <div className="git-graph-content">
+                              <div className="git-graph-top">
+                                {detailUrl ? (
+                                  <button
+                                    type="button"
+                                    className="git-recent-hash-link git-recent-link-btn"
+                                    onClick={() => void handleOpenExternalUrl(detailUrl)}
+                                  >
+                                    {entry.short_hash}
+                                  </button>
+                                ) : (
+                                  <code>{entry.short_hash}</code>
+                                )}
+                                {entry.refs.map((label, refIndex) => (
+                                  <span key={`${entry.hash}-${refIndex}`} className="git-graph-ref">
+                                    {label}
+                                  </span>
+                                ))}
+                                {entry.parent_hashes.length > 1 ? (
+                                  <span className="git-graph-merge">{t("git.graph.merge")}</span>
+                                ) : null}
+                                <span className={`git-recent-tag ${entry.is_pushed ? "is-pushed" : "is-pending"}`}>
+                                  {entry.is_pushed ? t("git.recent.pushed") : t("git.recent.notPushed")}
+                                </span>
+                              </div>
+                              <p className="git-graph-summary" title={entry.summary}>
+                                {entry.summary}
+                              </p>
+                              <p className="git-graph-meta">
+                                {entry.author_name} · {formatCommitTime(entry.authored_at)}
+                              </p>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    {graphCanLoadMore && (
+                      <div className="git-graph-more">
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() => void handleLoadMoreGraphHistory()}
+                          disabled={graphLoadingMore}
+                        >
+                          {graphLoadingMore ? t("git.graph.loadingMore") : t("git.graph.loadMore")}
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </article>
           </aside>
-        </>
-      )}
+      </GitFloatingModal>
 
-      {ignoreSelectorOpen && (
-        <>
+      <GitFloatingModal open={ignoreSelectorOpen}>
           <button
             type="button"
             className="git-ignore-overlay"
@@ -1814,8 +2116,7 @@ export default function GitPage() {
               </div>
             </article>
           </aside>
-        </>
-      )}
+      </GitFloatingModal>
     </div>
   );
 }

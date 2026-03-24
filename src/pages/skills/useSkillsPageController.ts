@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 
 import {
-  onboardingImportInstalledSkills,
   setupGetSkillConflictDetail,
   setupLocalSkillsOverview,
   setupResolveSkillConflict,
@@ -13,8 +12,6 @@ import {
   summarizeConflictDetail,
 } from "../../domain/skillConflict";
 import type { MessageKey } from "../../i18n/messages";
-
-type ConflictViewMode = "diff" | "full";
 
 type Translate = (key: MessageKey, params?: Record<string, string | number>) => string;
 
@@ -57,7 +54,6 @@ function buildOverviewSummary(overview: LocalSkillsOverview, t: Translate) {
 
 export function useSkillsPageController({ onRefresh, t }: Params) {
   const [overviewBusy, setOverviewBusy] = useState(false);
-  const [syncMissingBusy, setSyncMissingBusy] = useState(false);
   const [overviewStatus, setOverviewStatus] = useState("");
   const [overview, setOverview] = useState<LocalSkillsOverview | null>(null);
 
@@ -66,7 +62,6 @@ export function useSkillsPageController({ onRefresh, t }: Params) {
   const [conflictResolveBusySource, setConflictResolveBusySource] = useState<string | null>(null);
   const [conflictStatus, setConflictStatus] = useState("");
   const [conflictDetail, setConflictDetail] = useState<SkillConflictDetail | null>(null);
-  const [conflictViewMode, setConflictViewMode] = useState<ConflictViewMode>("diff");
 
   const conflictSkillNames = useMemo(() => {
     return selectConflictSkillNames(overview);
@@ -97,37 +92,11 @@ export function useSkillsPageController({ onRefresh, t }: Params) {
     }
   }
 
-  async function handleSyncMissingSkills() {
-    if (!overview || overview.missingInMySkills === 0) return;
-
-    setSyncMissingBusy(true);
-    setOverviewStatus(t("skills.overview.sync.start", { count: overview.missingInMySkills }));
-    try {
-      const syncResult = await onboardingImportInstalledSkills();
-      const refreshed = await setupLocalSkillsOverview();
-      setOverview(refreshed);
-      setOverviewStatus(
-        t("skills.overview.sync.done", {
-          imported: syncResult.importedTotal,
-          detected: syncResult.detectedTotal,
-          skipped: syncResult.skippedExistingTotal,
-          missing: refreshed.missingInMySkills,
-        }),
-      );
-      onRefresh();
-    } catch (e: unknown) {
-      setOverviewStatus(String(e));
-    } finally {
-      setSyncMissingBusy(false);
-    }
-  }
-
   async function handleOpenConflictResolver(skillName: string) {
     if (!skillName) return;
     setActiveConflictSkill(skillName);
     setConflictDetailBusy(true);
     setConflictResolveBusySource(null);
-    setConflictViewMode("diff");
     setConflictDetail(null);
     setConflictStatus(t("skills.conflict.load.start", { skill: skillName }));
     try {
@@ -145,7 +114,6 @@ export function useSkillsPageController({ onRefresh, t }: Params) {
     setActiveConflictSkill(null);
     setConflictDetail(null);
     setConflictResolveBusySource(null);
-    setConflictViewMode("diff");
     setConflictStatus("");
   }
 
@@ -180,7 +148,6 @@ export function useSkillsPageController({ onRefresh, t }: Params) {
 
   return {
     overviewBusy,
-    syncMissingBusy,
     overviewStatus,
     overview,
     conflictSkillNames,
@@ -189,10 +156,7 @@ export function useSkillsPageController({ onRefresh, t }: Params) {
     conflictResolveBusySource,
     conflictStatus,
     conflictDetail,
-    conflictViewMode,
-    setConflictViewMode,
     handleLocalOverview,
-    handleSyncMissingSkills,
     handleOpenConflictResolver,
     handleCloseConflictResolver,
     handleResolveConflict,

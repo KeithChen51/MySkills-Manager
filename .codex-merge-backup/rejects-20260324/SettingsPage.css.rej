@@ -1,0 +1,223 @@
+diff a/src/pages/SettingsPage.css b/src/pages/SettingsPage.css	(rejected hunks)
+@@ -102,9 +102,9 @@
+ }
+ 
+ .settings-vscode-installed.is-installed {
+-  background: rgba(16, 185, 129, 0.12);
+-  border: 1px solid rgba(16, 185, 129, 0.35);
+-  color: #059669;
++  background: color-mix(in srgb, var(--success) 12%, transparent);
++  border: 1px solid color-mix(in srgb, var(--success) 35%, var(--border-card));
++  color: var(--success);
+ }
+ 
+ .settings-vscode-installed.is-not-installed {
+@@ -114,14 +114,14 @@
+ }
+ 
+ .settings-vscode-uninstall-btn {
+-  background: #dc2626;
+-  border-color: #dc2626;
+-  color: #fff;
++  background: var(--danger);
++  border-color: var(--danger);
++  color: var(--accent-contrast);
+ }
+ 
+ .settings-vscode-uninstall-btn:hover:not(:disabled) {
+-  background: #b91c1c;
+-  border-color: #b91c1c;
++  background: color-mix(in srgb, var(--danger) 88%, var(--text-primary));
++  border-color: color-mix(in srgb, var(--danger) 88%, var(--text-primary));
+ }
+ 
+ .settings-vscode-uninstall-btn-disabled {
+@@ -130,6 +130,188 @@
+   color: var(--text-muted);
+ }
+ 
++/* Model Group Cards */
++.settings-model-group-card {
++  background: var(--bg-panel);
++  border: 1px solid var(--border-card);
++  border-radius: var(--radius-md, 8px);
++  display: grid;
++  gap: var(--sp-sm);
++  padding: var(--sp-md);
++  transition: box-shadow 0.15s ease;
++}
++
++.settings-model-group-card.is-dragging {
++  cursor: grabbing;
++  opacity: 0.6;
++}
++
++.settings-model-group-card:hover {
++  box-shadow: var(--shadow-card);
++}
++
++.settings-model-group-header {
++  align-items: center;
++  appearance: none;
++  background: none;
++  border: 0;
++  color: inherit;
++  cursor: pointer;
++  display: flex;
++  font: inherit;
++  gap: var(--sp-sm);
++  padding: 0;
++  text-align: left;
++  width: 100%;
++}
++
++.settings-model-group-drag-handle {
++  color: var(--text-muted);
++  cursor: grab;
++  font-size: 16px;
++  user-select: none;
++}
++
++.settings-model-group-header-name {
++  flex: 1;
++  font-weight: 600;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.settings-model-group-header-meta {
++  align-items: center;
++  display: flex;
++  gap: var(--sp-xs);
++}
++
++.settings-model-group-model-count {
++  background: var(--bg-card);
++  border-radius: var(--radius-sm);
++  color: var(--text-secondary);
++  font-size: 11px;
++  padding: 2px 6px;
++}
++
++.settings-model-group-badge-ok {
++  color: var(--success);
++  font-weight: 700;
++}
++
++.settings-model-group-badge-fail {
++  color: var(--danger);
++  font-weight: 700;
++}
++
++.settings-model-group-badge-testing {
++  color: var(--text-secondary);
++  animation: pulse-opacity 1s infinite;
++}
++
++@keyframes pulse-opacity {
++  0%, 100% { opacity: 1; }
++  50% { opacity: 0.3; }
++}
++
++.settings-model-group-chevron {
++  color: var(--text-muted);
++  font-size: 10px;
++  transition: transform 0.15s ease;
++}
++
++.settings-model-group-chevron.is-open {
++  transform: rotate(90deg);
++}
++
++.settings-model-group-expanded-toolbar {
++  align-items: center;
++  display: flex;
++  gap: var(--sp-sm);
++}
++
++.settings-model-group-name-input {
++  flex: 1;
++  font-weight: 600;
++}
++
++.settings-model-group-remove-btn {
++  color: var(--danger);
++  font-size: var(--text-sm);
++}
++
++.settings-model-group-remove-btn:hover:not(:disabled) {
++  background: color-mix(in srgb, var(--danger) 8%, transparent);
++}
++
++.settings-model-group-fields {
++  display: grid;
++  gap: var(--sp-sm);
++}
++
++.settings-model-group-gateway-toggle {
++  align-items: center;
++  color: var(--text-secondary);
++  display: inline-flex;
++  font-size: var(--text-sm);
++  font-weight: 400;
++  gap: var(--sp-xs);
++  margin-left: var(--sp-md);
++}
++
++.settings-model-group-gateway-toggle input[type="checkbox"] {
++  accent-color: var(--accent);
++}
++
++.settings-model-group-add-model-btn {
++  font-size: var(--text-sm);
++  margin-left: var(--sp-sm);
++}
++
++.settings-model-group-model-row {
++  align-items: center;
++  display: flex;
++  gap: var(--sp-sm);
++}
++
++.settings-model-group-model-row.is-dragging {
++  opacity: 0.5;
++}
++
++.settings-model-group-model-row .field-input {
++  flex: 1;
++}
++
++.settings-model-group-model-drag {
++  color: var(--text-muted);
++  cursor: grab;
++  font-size: 14px;
++  user-select: none;
++}
++
++.settings-model-group-footer {
++  align-items: center;
++  border-top: 1px solid var(--border-card);
++  display: flex;
++  gap: var(--sp-sm);
++  padding-top: var(--sp-sm);
++}
++
++.settings-model-group-test-ok {
++  color: var(--success);
++  font-size: var(--text-sm);
++  font-weight: 600;
++}
++
++.settings-model-group-test-fail {
++  color: var(--danger);
++  font-size: var(--text-sm);
++  max-width: 400px;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
+ @media (max-width: 900px) {
+   .settings-row {
+     align-items: stretch;

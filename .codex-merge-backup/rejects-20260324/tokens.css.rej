@@ -1,0 +1,66 @@
+diff a/src/styles/tokens.css b/src/styles/tokens.css	(rejected hunks)
+@@ -15,18 +15,18 @@
+   --border-active: #4f7df0;
+   --text-primary: #172239;
+   --text-secondary: #42506b;
+-  --text-muted: #66738c;
++  --text-muted: #5b6880;
+   --accent: #3f7cff;
+   --accent-hover: #356fe2;
+   --accent-light: rgba(63, 124, 255, 0.14);
+   --accent-strong: #2d66d3;
+   --accent-contrast: #ffffff;
+-  --success: #1fa870;
+-  --success-bg: rgba(31, 168, 112, 0.14);
+-  --warning: #d98a28;
+-  --warning-bg: rgba(217, 138, 40, 0.15);
+-  --danger: #df5d70;
+-  --danger-bg: rgba(223, 93, 112, 0.14);
++  --success: #0f7250;
++  --success-bg: rgba(15, 114, 80, 0.1);
++  --warning: #8c5a00;
++  --warning-bg: rgba(140, 90, 0, 0.1);
++  --danger: #b23a4d;
++  --danger-bg: rgba(178, 58, 77, 0.1);
+   --focus-ring: 0 0 0 3px rgba(63, 124, 255, 0.28);
+ 
+   /* Decorative tones */
+@@ -87,6 +87,7 @@
+   --text-md: 1rem;
+   --text-lg: 1.125rem;
+   --text-xl: clamp(1.35rem, 1.08rem + 0.84vw, 1.5rem);
++  --type-display: clamp(1.48rem, 1.1rem + 1.12vw, 1.78rem);
+ 
+   /* Spacing scale */
+   --sp-2xs: 2px;
+@@ -97,6 +98,7 @@
+   --sp-xl: 24px;
+   --sp-2xl: 32px;
+   --sp-3xl: 40px;
++  --card-rhythm-gap: clamp(14px, 1.2vw, 20px);
+ 
+   /* Radius */
+   --radius-sm: 8px;
+@@ -110,7 +112,7 @@
+   --shadow-drawer: -20px 0 44px rgba(23, 34, 57, 0.24);
+ 
+   /* Layout */
+-  --control-height: 40px;
++  --control-height: 44px;
+   --control-height-compact: 32px;
+   --control-height-touch: 44px;
+   --status-bar-height: 52px;
+@@ -127,10 +129,12 @@
+   --filter-min-width-sm: 130px;
+   --filter-min-width-md: 170px;
+   --capsule-option-min-width: 52px;
+-  --drawer-min-width: 540px;
++  --drawer-min-width: clamp(320px, 72vw, 420px);
+   --editor-meta-textarea-min-height: 88px;
+   --editor-pane-min-height: 320px;
+   --rules-editor-min-height: 400px;
++  --chart-height-tall: clamp(300px, 36vw, 380px);
++  --chart-height-medium: clamp(272px, 32vw, 344px);
+ 
+   /* Motion */
+   --transition-fast: 0.15s ease;

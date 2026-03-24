@@ -15,9 +15,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
-const DEFAULT_PROVIDER: &str = "openai-compatible";
-const DEFAULT_MODEL: &str = "gpt-4o-mini";
-const DEFAULT_COST_CURRENCY: &str = "USD";
+mod types;
+pub use types::*;
+
 const EVAL_TIMEOUT_SECS: u64 = 300;
 const MAX_EVAL_TIMEOUT_SECS: u64 = 10800;
 const EVAL_TIMEOUT_PER_CASE_SECS: u64 = 12;
@@ -32,11 +32,8 @@ const SAMPLE_GENERATION_REQUEST_TIMEOUT_MAX_SECS: u64 = 900;
 const DEFAULT_TRIGGER_CASE_COUNT: usize = 48;
 const DEFAULT_FUNCTIONAL_CASE_COUNT: usize = 24;
 const DEFAULT_PIPELINE_REPEATS: usize = 1;
-const DEFAULT_MAX_PARALLEL_ARMS: usize = 2;
 const MIN_MAX_PARALLEL_ARMS: usize = 1;
 const MAX_MAX_PARALLEL_ARMS: usize = 4;
-const DEFAULT_TRIGGER_MAX_WORKERS: usize = 6;
-const DEFAULT_FUNCTIONAL_MAX_WORKERS: usize = 3;
 const MIN_EVAL_WORKERS: usize = 1;
 const MAX_EVAL_WORKERS: usize = 16;
 const DEFAULT_REVIEW_QUEUE_LIMIT: usize = 30;
@@ -87,519 +84,6 @@ const ESTIMATE_TAXONOMY_SECONDS_PER_CALL: u64 = 8;
 const EVAL_PROGRESS_EVENT: &str = "eval://pipeline-progress";
 static EVAL_TMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-fn default_max_parallel_arms() -> usize {
-    DEFAULT_MAX_PARALLEL_ARMS
-}
-
-fn default_trigger_max_workers() -> usize {
-    DEFAULT_TRIGGER_MAX_WORKERS
-}
-
-fn default_functional_max_workers() -> usize {
-    DEFAULT_FUNCTIONAL_MAX_WORKERS
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "snake_case")]
-pub struct TriggerEvalResultItem {
-    pub query: String,
-    pub should_trigger: bool,
-    pub triggered: bool,
-    pub triggered_skill_name: Option<String>,
-    pub pass: bool,
-    pub error: Option<String>,
-    pub raw_response_path: Option<String>,
-    pub latency_ms: Option<u64>,
-    pub input_tokens: Option<u64>,
-    pub output_tokens: Option<u64>,
-    pub judge_trace_id: Option<String>,
-    pub error_type: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "snake_case")]
-pub struct TriggerEvalSummary {
-    pub total: i32,
-    pub passed: i32,
-    pub failed: i32,
-    pub pass_rate: f64,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "snake_case")]
-pub struct TriggerEvalOutput {
-    pub status: String,
-    pub skill_name: Option<String>,
-    pub summary: Option<TriggerEvalSummary>,
-    pub results: Option<Vec<TriggerEvalResultItem>>,
-    pub message: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "snake_case")]
-pub struct FunctionalEvalResultItem {
-    pub case_id: String,
-    pub passed: bool,
-    pub pass_rate: f64,
-    pub error: Option<String>,
-    pub layer1_pass: Option<bool>,
-    pub quality_score: Option<f64>,
-    pub dimension_scores: Option<HashMap<String, f64>>,
-    pub judge_rationale: Option<String>,
-    pub judge_suggestions: Option<Vec<String>>,
-    pub judge_source: Option<String>,
-    pub raw_response_path: Option<String>,
-    pub latency_ms: Option<u64>,
-    pub input_tokens: Option<u64>,
-    pub output_tokens: Option<u64>,
-    pub judge_trace_id: Option<String>,
-    pub error_type: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "snake_case")]
-pub struct FunctionalEvalSummary {
-    pub total: i32,
-    pub passed: i32,
-    pub failed: i32,
-    pub pass_rate: f64,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "snake_case")]
-pub struct FunctionalEvalOutput {
-    pub status: String,
-    pub skill_name: Option<String>,
-    pub summary: Option<FunctionalEvalSummary>,
-    pub dimension_scores: Option<HashMap<String, f64>>,
-    pub results: Option<Vec<FunctionalEvalResultItem>>,
-    pub message: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalConfig {
-    pub api_key: String,
-    pub provider: String,
-    pub base_url: Option<String>,
-    pub sample_model: String,
-    pub run_model: String,
-    pub default_model: String,
-    pub cost_currency: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-struct RawEvalConfig {
-    api_key: Option<String>,
-    provider: Option<String>,
-    base_url: Option<String>,
-    sample_model: Option<String>,
-    run_model: Option<String>,
-    default_model: Option<String>,
-    cost_currency: Option<String>,
-}
-
-impl Default for EvalConfig {
-    fn default() -> Self {
-        Self {
-            api_key: String::new(),
-            provider: DEFAULT_PROVIDER.to_string(),
-            base_url: None,
-            sample_model: DEFAULT_MODEL.to_string(),
-            run_model: DEFAULT_MODEL.to_string(),
-            default_model: DEFAULT_MODEL.to_string(),
-            cost_currency: DEFAULT_COST_CURRENCY.to_string(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalMutationResult {
-    pub success: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalDatasetSaveResult {
-    pub success: bool,
-    pub path: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalStoragePaths {
-    pub dataset_dir: String,
-    pub history_dir: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latest_trigger_path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latest_functional_path: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalHistoryEntry {
-    pub path: String,
-    pub file_name: String,
-    pub saved_at_unix: u64,
-    pub mode: String,
-    pub repeats: usize,
-    pub pass_rate: f64,
-    pub total_cases: i32,
-    pub model: String,
-    pub status: String,
-    pub review_summary: Option<EvalReviewSummary>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalSampleDrafts {
-    pub trigger_draft: String,
-    pub functional_draft: String,
-    pub trigger_count: usize,
-    pub functional_count: usize,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalSampleGenerationTimingEntry {
-    pub recorded_at_unix: u64,
-    pub skill_name: String,
-    pub model: String,
-    pub trigger_count: usize,
-    pub functional_count: usize,
-    pub elapsed_seconds: u64,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalPipelineSummary {
-    pub total_cases: i32,
-    pub total_passed: i32,
-    pub total_failed: i32,
-    pub pass_rate: f64,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalTriggerMetrics {
-    pub precision: f64,
-    pub recall: f64,
-    pub fpr: f64,
-    pub true_positive: i32,
-    pub true_negative: i32,
-    pub false_positive: i32,
-    pub false_negative: i32,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalDimensionScores {
-    pub trigger_accuracy: f64,
-    pub functional_correctness: f64,
-    pub robustness: f64,
-    pub efficiency: f64,
-    pub value_added: f64,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalCostEstimate {
-    pub estimated_usd: f64,
-    pub estimated_usd_min: Option<f64>,
-    pub estimated_usd_max: Option<f64>,
-    pub actual_usd_estimate: f64,
-    pub trigger_cases: usize,
-    pub functional_cases: usize,
-    pub api_calls_estimate: usize,
-    pub budget_limit_usd: Option<f64>,
-    pub budget_exceeded: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalEstimateStep {
-    pub key: String,
-    pub title: String,
-    pub stage: Option<String>,
-    pub module_key: Option<String>,
-    pub case_count: usize,
-    pub runs: usize,
-    pub llm_calls: usize,
-    pub estimated_input_tokens: usize,
-    pub estimated_output_tokens: usize,
-    pub estimated_total_tokens: usize,
-    pub estimated_seconds: u64,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalPipelineEstimate {
-    pub mode: String,
-    pub model: String,
-    pub judge_models: Vec<String>,
-    pub selected_modules: Vec<String>,
-    pub repeats: usize,
-    pub trigger_cases: usize,
-    pub functional_cases: usize,
-    pub taxonomy_pending: bool,
-    pub estimated_input_tokens: usize,
-    pub estimated_output_tokens: usize,
-    pub estimated_total_tokens: usize,
-    pub estimated_seconds: u64,
-    pub estimated_minutes: f64,
-    pub cost_estimate: EvalCostEstimate,
-    pub steps: Vec<EvalEstimateStep>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalQuickCheckItem {
-    pub key: String,
-    pub title: String,
-    pub blocking: bool,
-    pub passed: bool,
-    pub message: String,
-    pub elapsed_ms: u128,
-    pub evidence_path: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalTriggerBucketCoverage {
-    pub min_required_per_bucket: usize,
-    pub positive_trigger: usize,
-    pub negative_trigger: usize,
-    pub boundary_ambiguous: usize,
-    pub adjacent_skill_confusion: usize,
-    pub all_buckets_met: bool,
-    pub failed_buckets: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalQuickChecks {
-    pub all_passed: bool,
-    pub checks: Vec<EvalQuickCheckItem>,
-    pub bucket_coverage: Option<EvalTriggerBucketCoverage>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalModuleResult {
-    pub key: String,
-    pub title: String,
-    pub selected: bool,
-    pub status: String,
-    pub passed: Option<bool>,
-    pub score: Option<f64>,
-    pub message: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalGate {
-    pub quick_blocking_pass: bool,
-    pub full_release_pass: Option<bool>,
-    pub partial_release: Option<bool>,
-    pub selected_modules: Vec<String>,
-    pub failed_modules: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalEconomics {
-    pub gross_time_saved_ms: f64,
-    pub gross_token_saved: f64,
-    pub negative_time_waste_ms: f64,
-    pub negative_token_waste: f64,
-    pub net_time_saved_ms: f64,
-    pub net_token_saved: f64,
-    pub net_usd: Option<f64>,
-    pub baseline_samples: usize,
-    pub evaluated_pairs: usize,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalDeltaVsNoSkill {
-    pub with_skill_pass_rate: f64,
-    pub without_skill_pass_rate: f64,
-    pub functional_pass_rate_delta: f64,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalRunMeta {
-    pub mode: String,
-    pub model: String,
-    pub judge_models: Vec<String>,
-    pub repeats: usize,
-    #[serde(default = "default_max_parallel_arms")]
-    pub max_parallel_arms: usize,
-    #[serde(default = "default_trigger_max_workers")]
-    pub trigger_max_workers: usize,
-    #[serde(default = "default_functional_max_workers")]
-    pub functional_max_workers: usize,
-    pub seed: Option<u64>,
-    pub temperature: f64,
-    pub executed_steps: usize,
-    pub elapsed_ms: u128,
-    pub skill_hash: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalRateStats {
-    pub mean: f64,
-    pub median: f64,
-    pub std_dev: f64,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalRepeatStats {
-    pub overall_pass_rate: EvalRateStats,
-    pub trigger_pass_rate: EvalRateStats,
-    pub functional_pass_rate: Option<EvalRateStats>,
-    pub robustness: EvalRateStats,
-    pub value_added: Option<EvalRateStats>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalPipelineOutput {
-    pub status: String,
-    pub mode: String,
-    pub summary: EvalPipelineSummary,
-    pub quick_checks: Option<EvalQuickChecks>,
-    pub trigger_clean: TriggerEvalOutput,
-    pub trigger_complex: Option<TriggerEvalOutput>,
-    pub functional: FunctionalEvalOutput,
-    pub functional_without_skill: Option<FunctionalEvalOutput>,
-    pub module_results: Option<Vec<EvalModuleResult>>,
-    pub gate: Option<EvalGate>,
-    pub economics: Option<EvalEconomics>,
-    pub dimension_scores: EvalDimensionScores,
-    pub trigger_metrics: EvalTriggerMetrics,
-    pub cost_estimate: EvalCostEstimate,
-    pub delta_vs_no_skill: Option<EvalDeltaVsNoSkill>,
-    pub repeat_stats: EvalRepeatStats,
-    pub run_meta: EvalRunMeta,
-    pub evidence_level: Option<String>,
-    pub advisory: Option<EvalAdvisory>,
-    pub evidence_summary: Option<EvalEvidenceSummary>,
-    pub review_summary: Option<EvalReviewSummary>,
-    pub final_verdict: Option<String>,
-    pub override_reason: Option<String>,
-    pub override_at: Option<u64>,
-    pub override_by: Option<String>,
-    pub comparator: Option<EvalComparatorSummary>,
-    pub analyzer: Option<EvalAnalyzerSummary>,
-    pub taxonomy_status: Option<String>,
-    pub taxonomy_message: Option<String>,
-    pub taxonomy_applied: Option<bool>,
-    pub history_path: Option<String>,
-    pub message: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalAdvisory {
-    pub level: String,
-    pub reasons: Vec<String>,
-    pub non_blocking: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalEvidenceSummary {
-    pub total_runs: usize,
-    pub captured_transcripts: usize,
-    pub captured_timing: usize,
-    pub captured_tokens: usize,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalReviewSummary {
-    pub reviewed: bool,
-    pub final_verdict: Option<String>,
-    pub override_gate: bool,
-    pub decided_at_unix: Option<u64>,
-    pub reviewer: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalComparatorSummary {
-    pub evaluated_cases: usize,
-    pub improved_cases: usize,
-    pub regressed_cases: usize,
-    pub unchanged_cases: usize,
-    pub average_delta: f64,
-    pub highlights: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalAnalyzerSummary {
-    pub top_failure_patterns: Vec<String>,
-    pub recommendations: Vec<String>,
-    pub generated_at_unix: u64,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalReviewQueueItem {
-    pub path: String,
-    pub file_name: String,
-    pub saved_at_unix: u64,
-    pub pass_rate: f64,
-    pub total_cases: i32,
-    pub model: String,
-    pub gate_pass: Option<bool>,
-    pub reviewed: bool,
-    pub final_verdict: Option<String>,
-    pub decided_at_unix: Option<u64>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalReviewDetail {
-    pub path: String,
-    pub final_verdict: String,
-    pub override_gate: bool,
-    pub override_reason: Option<String>,
-    pub notes: Option<String>,
-    pub reviewer: Option<String>,
-    pub tags: Vec<String>,
-    pub failed_case_ids: Vec<String>,
-    pub decided_at_unix: u64,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalSubmitReviewResult {
-    pub success: bool,
-    pub review: EvalReviewDetail,
-    pub review_summary: EvalReviewSummary,
-    pub final_verdict: String,
-    pub override_reason: Option<String>,
-    pub override_by: Option<String>,
-    pub override_at: Option<u64>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct EvalEvidenceCaseResult {
-    pub case_id: String,
-    pub stage: String,
-    pub evidence_path: Option<String>,
-    pub content: Option<String>,
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -721,7 +205,10 @@ struct EvalPipelineProgressEvent {
     remaining_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     review_gate_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    case_statuses: Option<Vec<CaseStatus>>,
 }
+
 
 #[derive(Debug, Clone, Default)]
 struct EvalPipelineProgressMeta {
@@ -979,6 +466,7 @@ fn push_pipeline_progress_with_i18n_and_meta(
             functional_max_workers: meta.functional_max_workers,
             remaining_seconds: meta.remaining_seconds,
             review_gate_state: meta.review_gate_state,
+            case_statuses: None,
         },
     );
 }
@@ -1273,6 +761,40 @@ fn sanitize_eval_config(raw: RawEvalConfig) -> EvalConfig {
             .or(raw.sample_model.as_deref())
             .unwrap_or(DEFAULT_MODEL),
     );
+    let judge_model = raw.judge_model
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("")
+        .to_string();
+
+    // Auto-migrate: if no model_groups but flat config has api_key + base_url, create one group
+    let model_groups = if raw.model_groups.is_empty() {
+        let api_key = raw.api_key.as_deref().unwrap_or("").trim().to_string();
+        let base_url_str = normalize_base_url(raw.base_url.clone())
+            .unwrap_or_default();
+        if !base_url_str.is_empty() || !api_key.is_empty() {
+            let mut models: Vec<String> = Vec::new();
+            for m in [&sample_model, &run_model, &judge_model] {
+                if !m.is_empty() && !models.contains(m) {
+                    models.push(m.clone());
+                }
+            }
+            vec![ModelGroup {
+                id: format!("migrated-{}", now_unix_secs().unwrap_or(0)),
+                name: "模型组 1".to_string(),
+                base_url: base_url_str,
+                api_key,
+                is_gateway: false,
+                models,
+            }]
+        } else {
+            Vec::new()
+        }
+    } else {
+        raw.model_groups
+    };
+
     EvalConfig {
         api_key: raw.api_key.unwrap_or_default().trim().to_string(),
         provider: normalize_provider(raw.provider.as_deref().unwrap_or(DEFAULT_PROVIDER)),
@@ -1280,11 +802,13 @@ fn sanitize_eval_config(raw: RawEvalConfig) -> EvalConfig {
         sample_model,
         run_model: run_model.clone(),
         default_model: run_model,
+        judge_model,
         cost_currency: normalize_cost_currency(
             raw.cost_currency
                 .as_deref()
                 .unwrap_or(DEFAULT_COST_CURRENCY),
         ),
+        model_groups,
     }
 }
 
@@ -1432,7 +956,7 @@ fn normalize_taxonomy(
         && !taxonomy.sok_representation.is_empty()
         && !taxonomy.sok_scope.is_empty()
     {
-        taxonomy.sok_group = format!("{} 脳 {}", taxonomy.sok_representation, taxonomy.sok_scope);
+        taxonomy.sok_group = format!("{} 鑴?{}", taxonomy.sok_representation, taxonomy.sok_scope);
     }
 
     taxonomy.skillsbench_difficulty_core =
@@ -4112,29 +3636,29 @@ fn build_analyzer_summary(
     for (name, _) in ranked.iter().take(3) {
         if name.contains("network") {
             recommendations.push(
-                "Add retry/backoff and timeout observability to reduce network-induced flakiness."
+                "增加重试/退避和超时可观测性，降低网络抖动导致的失败。"
                     .to_string(),
             );
         } else if name.contains("parse") || name.contains("json") {
             recommendations.push(
-                "Harden structured-output parsing and add stricter output-format assertions."
+                "强化结构化解析与输出格式断言，减少解析类失败。"
                     .to_string(),
             );
         } else if name.contains("routing_mismatch") {
             recommendations.push(
-                "Expand trigger boundary and adjacent-skill confusion cases for disambiguation."
+                "补充触发边界与相邻技能混淆样例，提升判别能力。"
                     .to_string(),
             );
         } else {
             recommendations.push(
-                "Promote representative failed cases into the next-round regression dataset."
+                "将代表性失败样例纳入下一轮回归数据集。"
                     .to_string(),
             );
         }
     }
     if recommendations.is_empty() {
         recommendations
-            .push("No dominant failure pattern detected; keep monitoring variance.".to_string());
+            .push("暂无主导失败模式，建议持续观察评测波动。".to_string());
     }
     recommendations.dedup();
 
@@ -4142,6 +3666,8 @@ fn build_analyzer_summary(
         top_failure_patterns,
         recommendations,
         generated_at_unix: now_unix_secs().unwrap_or(0),
+        improvement_suggestions: None,
+        description_feedback: None,
     }
 }
 
@@ -6204,11 +5730,27 @@ pub fn eval_save_config(
     sample_model: Option<String>,
     run_model: Option<String>,
     default_model: Option<String>,
+    judge_model: Option<String>,
     cost_currency: Option<String>,
+    model_groups: Option<Vec<ModelGroup>>,
 ) -> Result<EvalMutationResult, String> {
+    let groups = model_groups.unwrap_or_default();
+
+    // Derive flat fields from first group for backward compat
+    let (effective_api_key, effective_base_url, effective_default_model) = if let Some(first) = groups.first() {
+        (
+            if first.api_key.is_empty() { api_key.clone() } else { first.api_key.clone() },
+            if first.base_url.is_empty() { base_url.clone() } else { Some(first.base_url.clone()) },
+            first.models.first().cloned(),
+        )
+    } else {
+        (api_key.clone(), base_url.clone(), None)
+    };
+
     let normalized_sample_model = normalize_model(
         sample_model
             .as_deref()
+            .or(effective_default_model.as_deref())
             .or(default_model.as_deref())
             .or(run_model.as_deref())
             .unwrap_or(DEFAULT_MODEL),
@@ -6216,23 +5758,92 @@ pub fn eval_save_config(
     let normalized_run_model = normalize_model(
         run_model
             .as_deref()
+            .or(effective_default_model.as_deref())
             .or(default_model.as_deref())
             .or(sample_model.as_deref())
             .unwrap_or(DEFAULT_MODEL),
     );
+    let normalized_judge_model = judge_model
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("")
+        .to_string();
     let config = EvalConfig {
-        api_key: api_key.trim().to_string(),
+        api_key: effective_api_key.trim().to_string(),
         provider: normalize_provider(provider.as_deref().unwrap_or(DEFAULT_PROVIDER)),
-        base_url: normalize_base_url(base_url),
+        base_url: normalize_base_url(effective_base_url),
         sample_model: normalized_sample_model,
         run_model: normalized_run_model.clone(),
         default_model: normalized_run_model,
+        judge_model: normalized_judge_model,
         cost_currency: normalize_cost_currency(
             cost_currency.as_deref().unwrap_or(DEFAULT_COST_CURRENCY),
         ),
+        model_groups: groups,
     };
     write_eval_config_with_home(&crate::root_dir::default_home_dir(), &config)?;
     Ok(EvalMutationResult { success: true })
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelConnectionTestResult {
+    pub success: bool,
+    pub message: String,
+}
+
+#[tauri::command]
+pub fn eval_test_model_connection(
+    base_url: String,
+    api_key: Option<String>,
+    model: String,
+) -> Result<ModelConnectionTestResult, String> {
+    let url = format!(
+        "{}/chat/completions",
+        base_url.trim().trim_end_matches('/')
+    );
+    let body = serde_json::json!({
+        "model": model.trim(),
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+    });
+
+    let client = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(15))
+        .build();
+
+    let mut req = client.post(&url)
+        .set("Content-Type", "application/json");
+
+    if let Some(key) = &api_key {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            req = req.set("Authorization", &format!("Bearer {trimmed}"));
+        }
+    }
+
+    match req.send_string(&body.to_string()) {
+        Ok(resp) => {
+            let status = resp.status();
+            if (200..300).contains(&status) {
+                Ok(ModelConnectionTestResult {
+                    success: true,
+                    message: format!("Connected (HTTP {status})"),
+                })
+            } else {
+                let body_text = resp.into_string().unwrap_or_default();
+                Ok(ModelConnectionTestResult {
+                    success: false,
+                    message: format!("HTTP {status}: {}", body_text.chars().take(200).collect::<String>()),
+                })
+            }
+        }
+        Err(e) => Ok(ModelConnectionTestResult {
+            success: false,
+            message: format!("Connection failed: {e}"),
+        }),
+    }
 }
 
 #[tauri::command]
@@ -6684,7 +6295,7 @@ mod tests {
         })
         .expect("normalize taxonomy");
 
-        assert_eq!(normalized.sok_group, "Natural-language 脳 Single-tool");
+        assert_eq!(normalized.sok_group, "Natural-language 鑴?Single-tool");
         assert_eq!(normalized.skillsbench_difficulty_core, "Core");
         assert_eq!(normalized.skillsbench_difficulty_level, "Easy");
     }
@@ -6703,7 +6314,7 @@ mod tests {
         );
         taxonomy_map.insert(
             YamlValue::String("sokGroup".to_string()),
-            YamlValue::String("Natural-language 脳 Single-tool".to_string()),
+            YamlValue::String("Natural-language 鑴?Single-tool".to_string()),
         );
         taxonomy_map.insert(
             YamlValue::String("anthropicCategory".to_string()),
@@ -7172,7 +6783,7 @@ description: A non-agent skill used for testing quick check shape routing.
         let taxonomy = normalize_taxonomy(SkillTaxonomyClassification {
             sok_representation: "Natural-language".to_string(),
             sok_scope: "Single-tool".to_string(),
-            sok_group: "Natural-language × Single-tool".to_string(),
+            sok_group: "Natural-language 脳 Single-tool".to_string(),
             anthropic_category: "MCP Enhancement".to_string(),
             skillsbench_domain: "Software Engineering".to_string(),
             skillsbench_difficulty_core: "Core".to_string(),
@@ -7262,7 +6873,7 @@ description: A skill that declares agent shape but misses openai metadata.
         let taxonomy = normalize_taxonomy(SkillTaxonomyClassification {
             sok_representation: "Natural-language".to_string(),
             sok_scope: "Single-tool".to_string(),
-            sok_group: "Natural-language 脳 Single-tool".to_string(),
+            sok_group: "Natural-language 鑴?Single-tool".to_string(),
             anthropic_category: "MCP Enhancement".to_string(),
             skillsbench_domain: "Software Engineering".to_string(),
             skillsbench_difficulty_core: "Core".to_string(),
@@ -7570,6 +7181,7 @@ description: A skill that declares agent shape but misses openai metadata.
             functional_max_workers: Some(3),
             remaining_seconds: Some(180),
             review_gate_state: Some("required".to_string()),
+            case_statuses: None,
         };
         let serialized = serde_json::to_value(event).expect("serialize progress event");
         assert_eq!(
@@ -7618,6 +7230,7 @@ description: A skill that declares agent shape but misses openai metadata.
             functional_max_workers: None,
             remaining_seconds: None,
             review_gate_state: None,
+            case_statuses: None,
         };
         let serialized = serde_json::to_value(event).expect("serialize progress event");
         assert!(serialized.get("messageKey").is_none());

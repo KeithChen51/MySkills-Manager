@@ -6,7 +6,7 @@ import {
   pickPathValueFromDialogResult,
   updateDraftWithPickedPath,
   type ToolPathDraft,
-} from "../src/pages/toolsPathPicker";
+} from "../src/pages/toolsPathPicker.ts";
 
 test("buildPathPickerOptions creates directory options for skills path", () => {
   const options = buildPathPickerOptions("skills", "C:\\Users\\Keith\\.codex\\skills");
@@ -46,3 +46,4 @@ test("updateDraftWithPickedPath only mutates chosen field when value exists", ()
 
   assert.deepEqual(updateDraftWithPickedPath(draft, "skills", null), draft);
 });
+

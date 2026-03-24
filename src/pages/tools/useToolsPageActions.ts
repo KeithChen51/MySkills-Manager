@@ -38,7 +38,8 @@ type UseToolsPageActionsParams = {
   setRouterHealthByTool: Dispatch<SetStateAction<Record<string, ToolRouterHealthStatus>>>;
   setPathDrafts: Dispatch<SetStateAction<Record<string, ToolPathDraft>>>;
   setStatus: Dispatch<SetStateAction<string>>;
-  setApplyResults: Dispatch<SetStateAction<SetupApplyResult[]>>;
+  setApplyResults?: Dispatch<SetStateAction<SetupApplyResult[]>>;
+  onManualSyncResult?: (toolId: string, result: SetupApplyResult) => void;
   setForm: Dispatch<SetStateAction<CustomToolForm>>;
   setBusy: Dispatch<SetStateAction<boolean>>;
   setSubmitting: Dispatch<SetStateAction<boolean>>;
@@ -63,6 +64,7 @@ export function useToolsPageActions({
   setPathDrafts,
   setStatus,
   setApplyResults,
+  onManualSyncResult,
   setForm,
   setBusy,
   setSubmitting,
@@ -105,10 +107,10 @@ export function useToolsPageActions({
       return;
     }
     setBusy(true);
-    setStatus(t("tools.syncing"));
+    setStatus(t("tools.auto.syncingStatus", { count: autoToolIds.length }));
     try {
       const results = await setupApply(autoToolIds);
-      setApplyResults(results);
+      setApplyResults?.(results);
       await loadStatus();
       setStatus("");
     } catch (e: unknown) {
@@ -120,10 +122,13 @@ export function useToolsPageActions({
 
   const handleManualSync = useCallback(async (tool: ToolStatus) => {
     setSyncingToolId(tool.id);
-    setStatus(t("tools.syncing"));
+    setStatus(t("tools.manual.syncingStatus", { tool: tool.name }));
     try {
       const results = await setupApply([tool.id]);
-      setApplyResults(results);
+      setApplyResults?.(results);
+      if (results[0]) {
+        onManualSyncResult?.(tool.id, results[0]);
+      }
       await loadStatus();
       setStatus("");
     } catch (e: unknown) {
@@ -131,7 +136,7 @@ export function useToolsPageActions({
     } finally {
       setSyncingToolId(null);
     }
-  }, [loadStatus, setApplyResults, setStatus, setSyncingToolId, t]);
+  }, [loadStatus, onManualSyncResult, setApplyResults, setStatus, setSyncingToolId, t]);
 
   const handleToggleAutoSync = useCallback(async (tool: ToolStatus) => {
     setTogglingAutoToolId(tool.id);

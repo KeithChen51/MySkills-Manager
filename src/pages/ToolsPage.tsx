@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { type SetupApplyResult, type ToolRouterHealthStatus, type ToolStatus } from "../api/tauri";
-import { IconClose, IconPlus, IconRefresh, IconSave } from "../components/icons";
+import { IconClose, IconPlus, IconRefresh } from "../components/icons";
 import { useI18n } from "../i18n/I18nProvider";
 import { type ToolPathDraft } from "./toolsPathPicker";
 import CustomToolFormCard from "./tools/CustomToolFormCard";
@@ -9,6 +9,11 @@ import ToolSection from "./tools/ToolSection";
 import { EMPTY_CUSTOM_TOOL_FORM, type CustomToolForm } from "./tools/customToolForm";
 import { useToolsPageActions } from "./tools/useToolsPageActions";
 import "./ToolsPage.css";
+
+type ToolSyncFeedback = {
+  kind: "ok" | "warn";
+  text: string;
+};
 
 export default function ToolsPage() {
   const { t, locale } = useI18n();
@@ -18,7 +23,7 @@ export default function ToolsPage() {
   >({});
   const [pathDrafts, setPathDrafts] = useState<Record<string, ToolPathDraft>>({});
   const [status, setStatus] = useState("");
-  const [applyResults, setApplyResults] = useState<SetupApplyResult[]>([]);
+  const [syncFeedbackByTool, setSyncFeedbackByTool] = useState<Record<string, ToolSyncFeedback>>({});
   const [form, setForm] = useState<CustomToolForm>(EMPTY_CUSTOM_TOOL_FORM);
   const [busy, setBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -27,6 +32,7 @@ export default function ToolsPage() {
   const [togglingAutoToolId, setTogglingAutoToolId] = useState<string | null>(null);
   const [togglingTrackingToolId, setTogglingTrackingToolId] = useState<string | null>(null);
   const [showCustomForm, setShowCustomForm] = useState(false);
+  const syncFeedbackTimersRef = useRef<Record<string, number>>({});
 
   const installedTools = useMemo(() => tools.filter((tool) => tool.exists), [tools]);
   const uninstalledTools = useMemo(() => tools.filter((tool) => !tool.exists), [tools]);
@@ -35,9 +41,37 @@ export default function ToolsPage() {
     [tools],
   );
 
+  const handleManualSyncResult = useCallback(
+    (toolId: string, result: SetupApplyResult) => {
+      const existingTimer = syncFeedbackTimersRef.current[toolId];
+      if (existingTimer) {
+        window.clearTimeout(existingTimer);
+      }
+
+      const text = result.success
+        ? t("tools.manual.result.success", { action: result.action })
+        : t("tools.manual.result.failed", { reason: result.error || t("tools.result.failed") });
+      const nextFeedback: ToolSyncFeedback = {
+        kind: result.success ? "ok" : "warn",
+        text,
+      };
+      setSyncFeedbackByTool((prev) => ({ ...prev, [toolId]: nextFeedback }));
+
+      const timeoutMs = result.success ? 2500 : 5000;
+      syncFeedbackTimersRef.current[toolId] = window.setTimeout(() => {
+        setSyncFeedbackByTool((prev) => {
+          const next = { ...prev };
+          delete next[toolId];
+          return next;
+        });
+        delete syncFeedbackTimersRef.current[toolId];
+      }, timeoutMs);
+    },
+    [t],
+  );
+
   const {
     loadStatus,
-    handleApplyAutoTools,
     handleManualSync,
     handleToggleAutoSync,
     handleToggleTracking,
@@ -55,7 +89,7 @@ export default function ToolsPage() {
     setRouterHealthByTool,
     setPathDrafts,
     setStatus,
-    setApplyResults,
+    onManualSyncResult: handleManualSyncResult,
     setForm,
     setBusy,
     setSubmitting,
@@ -92,6 +126,7 @@ export default function ToolsPage() {
     syncingToolId,
     togglingAutoToolId,
     togglingTrackingToolId,
+    syncFeedbackByTool,
     locale,
     t,
     onDraftChange: (toolId: string, nextDraft: ToolPathDraft) =>
@@ -107,6 +142,15 @@ export default function ToolsPage() {
   useEffect(() => {
     void loadStatus();
   }, [loadStatus]);
+
+  useEffect(() => {
+    return () => {
+      for (const timerId of Object.values(syncFeedbackTimersRef.current)) {
+        window.clearTimeout(timerId);
+      }
+      syncFeedbackTimersRef.current = {};
+    };
+  }, []);
 
   return (
     <div className="page animate-fadein tools-page">
@@ -133,14 +177,6 @@ export default function ToolsPage() {
             >
               {showCustomForm ? <IconClose size={14} /> : <IconPlus size={14} />}
               {showCustomForm ? t("tools.form.hide") : t("tools.form.show")}
-            </button>
-            <button
-              className="btn btn-primary tools-header-btn"
-              onClick={() => void handleApplyAutoTools()}
-              disabled={busy || autoToolIds.length === 0}
-            >
-              <IconSave size={14} />
-              {busy ? t("tools.syncing") : t("tools.apply.auto.button", { count: autoToolIds.length })}
             </button>
           </div>
         </div>
@@ -170,23 +206,6 @@ export default function ToolsPage() {
         />
       )}
 
-      {applyResults.length > 0 && (
-        <article className="chart-card">
-          <h3 className="chart-title">{t("tools.result.title")}</h3>
-          <div className="tools-results">
-            {applyResults.map((result) => (
-              <div key={result.tool} className="tools-result-item">
-                <strong>{result.tool}</strong>
-                <span className={`tool-card-badge ${result.success ? "ok" : "warn"}`}>
-                  {result.success ? t("tools.result.success") : t("tools.result.failed")}
-                </span>
-                <span>{result.action}</span>
-                {result.error && <span className="tools-error">{result.error}</span>}
-              </div>
-            ))}
-          </div>
-        </article>
-      )}
     </div>
   );
 }

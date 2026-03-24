@@ -6,22 +6,18 @@ type Translate = (key: MessageKey, params?: Record<string, string | number>) => 
 type Props = {
   overview: LocalSkillsOverview | null;
   overviewStatus: string;
-  syncMissingBusy: boolean;
   conflictDetailBusy: boolean;
   conflictSkillNames: string[];
   t: Translate;
-  onSyncMissingSkills: () => void;
   onOpenConflictResolver: (skillName: string) => void;
 };
 
 export default function SkillsOverviewPanel({
   overview,
   overviewStatus,
-  syncMissingBusy,
   conflictDetailBusy,
   conflictSkillNames,
   t,
-  onSyncMissingSkills,
   onOpenConflictResolver,
 }: Props) {
   if (!overviewStatus && !overview) {
@@ -30,7 +26,11 @@ export default function SkillsOverviewPanel({
 
   return (
     <section className="skills-overview-panel">
-      {overviewStatus && <p className="skills-overview-status">{overviewStatus}</p>}
+      {overviewStatus && (
+        <p className="skills-overview-status" role="status" aria-live="polite">
+          {overviewStatus}
+        </p>
+      )}
       {overview && (
         <>
           <p className="skills-overview-summary">
@@ -48,15 +48,6 @@ export default function SkillsOverviewPanel({
             <span className="skills-overview-tag missing">{t("skills.overview.legend.missing")}</span>
             <span className="skills-overview-tag conflict">{t("skills.overview.legend.conflict")}</span>
           </div>
-          {overview.missingInMySkills > 0 && (
-            <div className="skills-overview-actions">
-              <button className="btn btn-primary" onClick={onSyncMissingSkills} disabled={syncMissingBusy}>
-                {syncMissingBusy
-                  ? t("skills.overview.sync.button.busy")
-                  : t("skills.overview.sync.button", { count: overview.missingInMySkills })}
-              </button>
-            </div>
-          )}
           {overview.duplicateNames.length > 0 && (
             <div className="skills-overview-duplicates">
               <strong>{t("skills.overview.duplicates.title")}</strong>

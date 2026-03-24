@@ -13,6 +13,7 @@ type ToolSectionProps = {
   tools: ToolStatus[];
   installed: boolean;
   routerHealthByTool: Record<string, ToolRouterHealthStatus>;
+  syncFeedbackByTool: Record<string, { kind: "ok" | "warn"; text: string }>;
   pathDrafts: Record<string, ToolPathDraft>;
   busy: boolean;
   savingPathToolId: string | null;
@@ -39,6 +40,7 @@ export default function ToolSection({
   tools,
   installed,
   routerHealthByTool,
+  syncFeedbackByTool,
   pathDrafts,
   busy,
   savingPathToolId,
@@ -71,6 +73,7 @@ export default function ToolSection({
               tool={tool}
               installed={installed}
               routerHealth={routerHealthByTool[tool.id]}
+              syncFeedback={syncFeedbackByTool[tool.id] ?? null}
               draft={draft}
               hasPathChange={
                 normalizedPath(draft.skillsDir) !== normalizedPath(tool.skillsDir) ||

@@ -1,0 +1,426 @@
+diff a/src/pages/SettingsPage.tsx b/src/pages/SettingsPage.tsx	(rejected hunks)
+@@ -1,16 +1,18 @@
+-import { useEffect, useState } from "react";
++import { useEffect, useState, useCallback, useRef } from "react";
+ import { getVersion } from "@tauri-apps/api/app";
+ import { open } from "@tauri-apps/plugin-dialog";
+ 
+ import {
+   evalGetConfig,
+   evalSaveConfig,
++  evalTestConnection,
+   getVscodeExtensionStatus,
+   installVscodeExtension,
+   syncVscodeSkillsRoot,
+   uninstallVscodeExtension,
+   type CostCurrency,
+   type EvalConfig,
++  type ModelGroup,
+   type UpdateSettings,
+   onboardingGetState,
+   onboardingSetSkillsDir,
+@@ -50,6 +52,12 @@ function normalizeCostCurrency(value: string | undefined): CostCurrency {
+   return value === "CNY" ? "CNY" : "USD";
+ }
+ 
++function makeGroupId(): string {
++  return `g-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
++}
++
++type TestStatus = { state: "idle" | "testing" | "success" | "fail"; message?: string };
++
+ export default function SettingsPage({
+   onSkillsDirChanged,
+   updaterSettings,
+@@ -63,15 +71,13 @@ export default function SettingsPage({
+   const { themeMode, setThemeMode } = useTheme();
+   const [skillsDir, setSkillsDir] = useState("");
+   const [importMode, setImportMode] = useState("manual");
+-  const [apiConfig, setApiConfig] = useState<EvalConfig>({
+-    apiKey: "",
+-    provider: "openai-compatible",
+-    sampleModel: "gpt-4o-mini",
+-    runModel: "gpt-4o-mini",
+-    costCurrency: "USD",
+-  });
++  const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
++  const [costCurrency, setCostCurrency] = useState<CostCurrency>("USD");
+   const [busy, setBusy] = useState(false);
+   const [apiBusy, setApiBusy] = useState(false);
++  const [testStatuses, setTestStatuses] = useState<Record<string, TestStatus>>({});
++  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
++  const dragHandleActive = useRef<string | null>(null);
+   const [vscodeInstalled, setVscodeInstalled] = useState<boolean | null>(null);
+   const [vscodeInstallBusy, setVscodeInstallBusy] = useState(false);
+   const [vscodeUninstallBusy, setVscodeUninstallBusy] = useState(false);
+@@ -91,14 +97,8 @@ export default function SettingsPage({
+       .then(([state, mode, evalConfig, version, vscodeStatus]) => {
+         setSkillsDir(state.skillsDir);
+         setImportMode(mode);
+-        setApiConfig({
+-          apiKey: evalConfig.apiKey,
+-          provider: evalConfig.provider || "openai-compatible",
+-          baseUrl: evalConfig.baseUrl,
+-          sampleModel: evalConfig.sampleModel || evalConfig.defaultModel || "gpt-4o-mini",
+-          runModel: evalConfig.runModel || evalConfig.defaultModel || "gpt-4o-mini",
+-          costCurrency: normalizeCostCurrency(evalConfig.costCurrency),
+-        });
++        setModelGroups(evalConfig.modelGroups ?? []);
++        setCostCurrency(normalizeCostCurrency(evalConfig.costCurrency));
+         setAppVersion(version);
+         if (vscodeStatus) {
+           setVscodeInstalled(vscodeStatus.installed);
+@@ -168,16 +168,19 @@ export default function SettingsPage({
+     setApiBusy(true);
+     setStatus(t("settings.evalConfig.saving"));
+     try {
++      // Derive flat fields from first group for backward compat
++      const first = modelGroups[0];
+       const normalized: EvalConfig = {
+-        apiKey: apiConfig.apiKey.trim(),
++        apiKey: first?.apiKey ?? "",
+         provider: "openai-compatible",
+-        baseUrl: apiConfig.baseUrl?.trim() || undefined,
+-        sampleModel: apiConfig.sampleModel.trim() || "gpt-4o-mini",
+-        runModel: apiConfig.runModel.trim() || "gpt-4o-mini",
+-        costCurrency: normalizeCostCurrency(apiConfig.costCurrency),
++        baseUrl: first?.baseUrl || undefined,
++        sampleModel: first?.models[0] ?? "gpt-4o-mini",
++        runModel: first?.models[0] ?? "gpt-4o-mini",
++        judgeModel: "",
++        costCurrency,
++        modelGroups,
+       };
+       await evalSaveConfig(normalized);
+-      setApiConfig(normalized);
+       setStatus(t("settings.evalConfig.saved"));
+     } catch (error: unknown) {
+       setStatus(`${t("settings.evalConfig.failed")}: ${String(error)}`);
+@@ -258,8 +348,12 @@ export default function SettingsPage({
+       <section className="chart-card settings-card">
+         <h2 className="chart-title">{t("onboard.step3.skillsDir")}</h2>
+         <p className="settings-help">{t("onboard.step1.desc")}</p>
++        <label className="field-label" htmlFor="settings-skills-dir-input">
++          {t("onboard.step3.skillsDir")}
++        </label>
+         <div className="settings-row">
+           <input
++            id="settings-skills-dir-input"
+             className="field-input settings-path-input"
+             value={skillsDir}
+             onChange={(e) => setSkillsDir(e.target.value)}
+@@ -445,82 +539,238 @@ export default function SettingsPage({
+       <section className="chart-card settings-card">
+         <h2 className="chart-title">{t("settings.evalConfig.title")}</h2>
+         <p className="settings-help">{t("settings.evalConfig.help")}</p>
+-        <div className="field">
+-          <label className="field-label">{t("settings.evalConfig.apiKey")}</label>
+-          <input
+-            className="field-input"
+-            type="password"
+-            value={apiConfig.apiKey}
+-            onChange={(e) =>
+-              setApiConfig((prev) => ({
+-                ...prev,
+-                apiKey: e.target.value,
+-              }))
+-            }
+-            placeholder="sk-..."
+-            autoComplete="off"
+-            disabled={busy || apiBusy}
+-          />
+-        </div>
+-        <div className="field">
+-          <label className="field-label">{t("settings.evalConfig.baseUrl")}</label>
+-          <input
+-            className="field-input"
+-            value={apiConfig.baseUrl ?? ""}
+-            onChange={(e) =>
+-              setApiConfig((prev) => ({
+-                ...prev,
+-                baseUrl: e.target.value,
+-              }))
+-            }
+-            placeholder="https://api.openai.com/v1"
+-            autoComplete="off"
+-            disabled={busy || apiBusy}
+-          />
+-        </div>
+-        <div className="field">
+-          <label className="field-label">{t("settings.evalConfig.sampleModel")}</label>
+-          <input
+-            className="field-input"
+-            value={apiConfig.sampleModel}
+-            onChange={(e) =>
+-              setApiConfig((prev) => ({
+-                ...prev,
+-                sampleModel: e.target.value,
+-              }))
+-            }
+-            placeholder="gpt-4o-mini"
+-            autoComplete="off"
+-            disabled={busy || apiBusy}
+-          />
+-        </div>
+-        <div className="field">
+-          <label className="field-label">{t("settings.evalConfig.runModel")}</label>
+-          <input
+-            className="field-input"
+-            value={apiConfig.runModel}
+-            onChange={(e) =>
+-              setApiConfig((prev) => ({
++
++        {modelGroups.map((group, groupIdx) => {
++          const ts = testStatuses[group.id] ?? { state: "idle" as const };
++          const isExpanded = expandedGroups.has(group.id);
++          return (
++            <div
++              key={group.id}
++              className={`settings-model-group-card${isExpanded ? " is-expanded" : ""}`}
++              draggable
++              onDragStart={(e) => {
++                if (dragHandleActive.current !== `group:${groupIdx}`) {
++                  e.preventDefault();
++                  return;
++                }
++                e.dataTransfer.setData("groupIdx", String(groupIdx));
++                e.dataTransfer.effectAllowed = "move";
++              }}
++              onDragEnd={() => { dragHandleActive.current = null; }}
++              onDragOver={(e) => e.preventDefault()}
++              onDrop={(e) => {
++                const from = parseInt(e.dataTransfer.getData("groupIdx"), 10);
++                if (!isNaN(from) && from !== groupIdx) handleMoveGroup(from, groupIdx);
++              }}
++            >
++              <button
++                type="button"
++                className="settings-model-group-header"
++                onClick={() => toggleGroupExpanded(group.id)}
++              >
++                <span
++                  className="settings-model-group-drag-handle"
++                  title="Drag"
++                  onClick={(e) => e.stopPropagation()}
++                  onMouseDown={() => { dragHandleActive.current = `group:${groupIdx}`; }}
++                  onMouseUp={() => { dragHandleActive.current = null; }}
++                >☰</span>
++                <span className="settings-model-group-header-name">{group.name || `模型组 ${groupIdx + 1}`}</span>
++                <span className="settings-model-group-header-meta">
++                  {group.models.length > 0 && (
++                    <span className="settings-model-group-model-count">{group.models.length} models</span>
++                  )}
++                  {ts.state === "success" && <span className="settings-model-group-badge-ok">✓</span>}
++                  {ts.state === "fail" && <span className="settings-model-group-badge-fail">✗</span>}
++                  {ts.state === "testing" && <span className="settings-model-group-badge-testing">…</span>}
++                </span>
++                <span className={`settings-model-group-chevron${isExpanded ? " is-open" : ""}`}>▶</span>
++              </button>
++
++              {isExpanded && (
++                <>
++                  <div className="settings-model-group-expanded-toolbar">
++                    <input
++                      className="field-input settings-model-group-name-input"
++                      value={group.name}
++                      onChange={(e) => updateGroup(group.id, { name: e.target.value })}
++                      placeholder={t("settings.modelGroup.groupName" as MessageKey)}
++                      disabled={busy || apiBusy}
++                      onClick={(e) => e.stopPropagation()}
++                      draggable={false}
++                    />
++                    <button
++                      type="button"
++                      className="btn btn-ghost settings-model-group-remove-btn"
++                      onClick={() => setModelGroups((prev) => prev.filter((g) => g.id !== group.id))}
++                      disabled={busy || apiBusy}
++                    >
++                      {t("settings.modelGroup.removeGroup" as MessageKey)}
++                    </button>
++                  </div>
++
++                  <div className="settings-model-group-fields">
++                    <div className="field">
++                      <label className="field-label">{t("settings.modelGroup.url" as MessageKey)}</label>
++                      <input
++                        className="field-input"
++                        value={group.baseUrl}
++                        onChange={(e) => updateGroup(group.id, { baseUrl: e.target.value })}
++                        placeholder="https://api.openai.com/v1"
++                        disabled={busy || apiBusy}
++                        draggable={false}
++                      />
++                    </div>
++                    <div className="field">
++                      <label className="field-label">
++                        {t("settings.modelGroup.apiKey" as MessageKey)}
++                        <label className="settings-model-group-gateway-toggle">
++                          <input
++                            type="checkbox"
++                            checked={group.isGateway}
++                            onChange={(e) => updateGroup(group.id, { isGateway: e.target.checked })}
++                            disabled={busy || apiBusy}
++                          />
++                          <span>{t("settings.modelGroup.gateway" as MessageKey)}</span>
++                        </label>
++                      </label>
++                      {!group.isGateway && (
++                        <input
++                          className="field-input"
++                          type="password"
++                          value={group.apiKey}
++                          onChange={(e) => updateGroup(group.id, { apiKey: e.target.value })}
++                          placeholder="sk-..."
++                          autoComplete="off"
++                          disabled={busy || apiBusy}
++                          draggable={false}
++                        />
++                      )}
++                    </div>
++
++                    <div className="field">
++                      <label className="field-label">
++                        Models
++                        <button
++                          type="button"
++                          className="btn btn-ghost settings-model-group-add-model-btn"
++                          onClick={() => addModelToGroup(group.id)}
++                          disabled={busy || apiBusy}
++                        >
++                          + {t("settings.modelGroup.addModel" as MessageKey)}
++                        </button>
++                      </label>
++                      {group.models.length === 0 && (
++                        <p className="settings-help">{t("settings.modelGroup.emptyModels" as MessageKey)}</p>
++                      )}
++                      {group.models.map((model, mi) => (
++                        <div
++                          key={mi}
++                          className="settings-model-group-model-row"
++                          draggable
++                          onDragStart={(e) => {
++                            if (dragHandleActive.current !== `model:${group.id}:${mi}`) {
++                              e.preventDefault();
++                              return;
++                            }
++                            e.stopPropagation();
++                            e.dataTransfer.setData("modelDrag", JSON.stringify({ groupId: group.id, idx: mi }));
++                            e.dataTransfer.effectAllowed = "move";
++                          }}
++                          onDragEnd={() => { dragHandleActive.current = null; }}
++                          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
++                          onDrop={(e) => {
++                            e.stopPropagation();
++                            try {
++                              const data = JSON.parse(e.dataTransfer.getData("modelDrag"));
++                              if (data.groupId === group.id && data.idx !== mi) {
++                                handleMoveModel(group.id, data.idx, mi);
++                              }
++                            } catch { /* group-level drop */ }
++                          }}
++                        >
++                          <span
++                            className="settings-model-group-model-drag"
++                            title="Drag"
++                            onMouseDown={() => { dragHandleActive.current = `model:${group.id}:${mi}`; }}
++                            onMouseUp={() => { dragHandleActive.current = null; }}
++                          >≡</span>
++                          <input
++                            className="field-input"
++                            value={model}
++                            onChange={(e) => updateModelInGroup(group.id, mi, e.target.value)}
++                            placeholder={t("settings.modelGroup.modelPlaceholder" as MessageKey)}
++                            disabled={busy || apiBusy}
++                            draggable={false}
++                          />
++                          <button
++                            type="button"
++                            className="btn btn-ghost"
++                            onClick={() => removeModelFromGroup(group.id, mi)}
++                            disabled={busy || apiBusy}
++                          >
++                            {t("settings.modelGroup.removeModel" as MessageKey)}
++                          </button>
++                        </div>
++                      ))}
++                    </div>
++                  </div>
++
++                  <div className="settings-model-group-footer">
++                    <button
++                      type="button"
++                      className="btn btn-ghost"
++                      onClick={() => void handleTestConnection(group)}
++                      disabled={busy || apiBusy || ts.state === "testing" || !group.baseUrl || group.models.length === 0}
++                    >
++                      {ts.state === "testing"
++                        ? t("settings.modelGroup.testing" as MessageKey)
++                        : t("settings.modelGroup.testConnection" as MessageKey)}
++                    </button>
++                    {ts.state === "success" && (
++                      <span className="settings-model-group-test-ok">{t("settings.modelGroup.testSuccess" as MessageKey)}</span>
++                    )}
++                    {ts.state === "fail" && (
++                      <span className="settings-model-group-test-fail" title={ts.message}>
++                        {t("settings.modelGroup.testFailed" as MessageKey)}: {ts.message?.slice(0, 80)}
++                      </span>
++                    )}
++                  </div>
++                </>
++              )}
++            </div>
++          );
++        })}
++
++        <div className="settings-row">
++          <button
++            type="button"
++            className="btn btn-ghost"
++            onClick={() =>
++              setModelGroups((prev) => [
+                 ...prev,
+-                runModel: e.target.value,
+-              }))
++                {
++                  id: makeGroupId(),
++                  name: `模型组 ${prev.length + 1}`,
++                  baseUrl: "",
++                  apiKey: "",
++                  isGateway: false,
++                  models: [],
++                },
++              ])
+             }
+-            placeholder="gpt-4o-mini"
+-            autoComplete="off"
+             disabled={busy || apiBusy}
+-          />
++          >
++            + {t("settings.modelGroup.addGroup" as MessageKey)}
++          </button>
+         </div>
++
+         <div className="field">
+           <label className="field-label">{t("settings.evalConfig.costCurrency")}</label>
+           <select
+             className="filter-select settings-eval-currency-select"
+-            value={apiConfig.costCurrency}
+-            onChange={(e) =>
+-              setApiConfig((prev) => ({
+-                ...prev,
+-                costCurrency: normalizeCostCurrency(e.target.value),
+-              }))
+-            }
++            value={costCurrency}
++            onChange={(e) => setCostCurrency(normalizeCostCurrency(e.target.value))}
+             disabled={busy || apiBusy}
+           >
+             <option value="USD">{t("settings.evalConfig.costCurrency.usd")}</option>
+@@ -528,6 +778,7 @@ export default function SettingsPage({
+           </select>
+           <p className="settings-help">{t("settings.evalConfig.costCurrency.help")}</p>
+         </div>
++
+         <div className="settings-row">
+           <button
+             type="button"

@@ -1,0 +1,2682 @@
+diff --git a/src/App.css b/src/App.css
+index 3102f3c..fe84fc3 100644
+--- a/src/App.css
++++ b/src/App.css
+@@ -49,12 +49,12 @@
+ }
+ 
+ .status-text {
+-  color: var(--text-muted);
++  color: var(--text-secondary);
+   font-size: var(--text-xs);
+ }
+ 
+ .status-import {
+-  color: var(--prism-aqua, #00bcd4);
++  color: var(--prism-aqua);
+   font-size: var(--text-xs);
+   font-weight: 600;
+   margin-left: auto;
+diff --git a/src/App.tsx b/src/App.tsx
+index ca2b465..aab2821 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,4 +1,4 @@
+-﻿import { useEffect, useState } from "react";
++import { useEffect, useState } from "react";
+ 
+ import {
+   APP_ERROR_EVENT,
+@@ -24,7 +24,7 @@ import LogsPage from "./pages/LogsPage";
+ import SkillsPage from "./pages/SkillsPage";
+ import SettingsPage from "./pages/SettingsPage";
+ import ToolsPage from "./pages/ToolsPage";
+-import EvalPage from "./pages/EvalPage";
++import EvalPage from "./pages/eval";
+ import { useAppUpdater } from "./updater/useAppUpdater";
+ import "./App.css";
+ 
+@@ -183,8 +183,6 @@ export default function App() {
+         return <LogsPage skills={skills} />;
+       case "tools":
+         return <ToolsPage />;
+-      case "eval":
+-        return <EvalPage skills={skills} />;
+       case "git":
+         return <GitPage />;
+       case "settings":
+@@ -253,7 +251,10 @@ export default function App() {
+               onDismiss={updater.dismissSilentReady}
+             />
+           )}
+-          {renderPage()}
++          <div style={{ display: view === "eval" ? "flex" : "none", flex: 1, minHeight: 0 }}>
++            <EvalPage skills={skills} />
++          </div>
++          {view !== "eval" && renderPage()}
+         </div>
+         <div className="app-error-toast-wrap">
+           {globalErrors.map((item) => (
+diff --git a/src/i18n/messages.ts b/src/i18n/messages.ts
+index 6c82c3f..cb2f262 100644
+--- a/src/i18n/messages.ts
++++ b/src/i18n/messages.ts
+@@ -1,4 +1,4 @@
+-﻿export type Locale = "zh-CN" | "en-US";
++export type Locale = "zh-CN" | "en-US";
+ 
+ const enMessages = {
+   "app.loading": "Loading...",
+@@ -71,22 +71,39 @@ const enMessages = {
+   "settings.update.versionJump.fromTo": "{previous} -> {current}",
+   "settings.update.versionJump.noNotes": "No release notes were provided for this version.",
+   "settings.update.versionJump.close": "Got it",
+-  "settings.evalConfig.title": "Evaluation API Configuration",
++  "settings.evalConfig.title": "Model Groups",
+   "settings.evalConfig.help":
+-    "Configure API key, base URL, and separate model defaults for sample generation and evaluation runs.",
++    "Manage model groups. Each group has its own URL, API key, and list of models for use in evaluations.",
+   "settings.evalConfig.apiKey": "API Key",
+-  "settings.evalConfig.baseUrl": "Base URL (optional)",
++  "settings.evalConfig.baseUrl": "Base URL",
+   "settings.evalConfig.sampleModel": "Sample Generation Model",
+   "settings.evalConfig.runModel": "Evaluation Run Model",
++  "settings.evalConfig.judgeModel": "Judge Model",
++  "settings.evalConfig.judgeModelHint": "Model for judging eval quality (optional)",
++  "settings.evalConfig.judgeModelHelp": "Used to judge and score evaluation results. Defaults to Run Model if empty.",
+   "settings.evalConfig.costCurrency": "Cost Currency",
+   "settings.evalConfig.costCurrency.help": "Default is USD; switch to CNY for cost displays in Eval.",
+   "settings.evalConfig.costCurrency.usd": "USD ($)",
+   "settings.evalConfig.costCurrency.cny": "CNY (¥)",
+-  "settings.evalConfig.saveButton": "Save API Config",
++  "settings.evalConfig.saveButton": "Save Configuration",
+   "settings.evalConfig.savingButton": "Saving...",
+-  "settings.evalConfig.saving": "Saving evaluation API config...",
+-  "settings.evalConfig.saved": "Evaluation API config saved.",
+-  "settings.evalConfig.failed": "Failed to save evaluation API config",
++  "settings.evalConfig.saving": "Saving configuration...",
++  "settings.evalConfig.saved": "Configuration saved.",
++  "settings.evalConfig.failed": "Failed to save configuration",
++  "settings.modelGroup.addGroup": "Add Model Group",
++  "settings.modelGroup.removeGroup": "Remove Group",
++  "settings.modelGroup.groupName": "Group Name",
++  "settings.modelGroup.url": "Base URL",
++  "settings.modelGroup.apiKey": "API Key",
++  "settings.modelGroup.gateway": "Gateway (no key)",
++  "settings.modelGroup.addModel": "Add Model",
++  "settings.modelGroup.removeModel": "Remove",
++  "settings.modelGroup.testConnection": "Test Connection",
++  "settings.modelGroup.testing": "Testing...",
++  "settings.modelGroup.testSuccess": "Connected",
++  "settings.modelGroup.testFailed": "Failed",
++  "settings.modelGroup.modelPlaceholder": "e.g. gpt-4o-mini",
++  "settings.modelGroup.emptyModels": "No models added yet",
+   "settings.importMode.title": "Skills Import Mode",
+   "settings.importMode.help": "Choose how to handle newly discovered skills from tools.",
+   "settings.importMode.manual": "Manual - sync from Skills page when needed",
+@@ -147,7 +164,7 @@ const enMessages = {
+   "skills.search": "Search skills...",
+   "skills.category.all": "All categories",
+   "skills.taxonomy.standard.label": "Classification Standard",
+-  "skills.taxonomy.standard.sok": "SoK (Representation × Scope)",
++  "skills.taxonomy.standard.sok": "SoK (Representation x Scope)",
+   "skills.taxonomy.standard.anthropic": "Anthropic Category",
+   "skills.taxonomy.standard.skillsbenchDomain": "SkillsBench Domain",
+   "skills.taxonomy.standard.skillsbenchDifficulty": "SkillsBench Difficulty",
+@@ -516,17 +533,18 @@ const enMessages = {
+   "eval.flow.step2.desc": "Set sample model, then provide trigger/functional datasets and sample drafts.",
+   "eval.flow.step3.title": "Step 3: Run configuration & preflight",
+   "eval.flow.step3.desc": "Configure run mode/model/budget, then review estimate and history.",
+-  "eval.flow.current": "Current: Step {step} · {title}",
++  "eval.flow.current": "Current: Step {step} 路 {title}",
+   "eval.flow.completed": "Progress {done}/{total}",
+   "eval.flow.state.active": "In progress",
++  "eval.flow.state.generating": "Generating...",
+   "eval.flow.state.done": "Done",
+   "eval.flow.state.pending": "Pending",
+   "eval.flow.stageHint.step1": "Choose skill first, then continue to dataset and sample configuration.",
+   "eval.flow.stageHint.step2": "Set sample model, provide dataset paths, then generate or edit sample drafts.",
+   "eval.flow.stageHint.step3": "Set run mode/model/repeats/budget, then validate estimate before running.",
+-  "eval.flow.group.step1": "Step 1 · Core Setup",
+-  "eval.flow.group.step2": "Step 2 · Datasets",
+-  "eval.flow.group.step3": "Step 3 · Run & Review",
++  "eval.flow.group.step1": "Step 1 路 Core Setup",
++  "eval.flow.group.step2": "Step 2 路 Datasets",
++  "eval.flow.group.step3": "Step 3 路 Run & Review",
+   "eval.flow.edit.step1": "Edit Step 1",
+   "eval.flow.continue.step2": "Continue to Step 2",
+   "eval.flow.edit.step2": "Edit Step 2",
+@@ -560,7 +578,8 @@ const enMessages = {
+   "eval.config.generationModel": "Sample Generation Model",
+   "eval.config.generationModelHint":
+     "One-click sample generation uses the sample model selected in this step.",
+-  "eval.config.runModel": "Evaluation Run Model",
++  "eval.config.runModel": "Run Model",
++  "eval.config.runModelHint": "Model for executing evaluation test cases.",
+   "eval.config.maxParallelArms": "Parallel Arms",
+   "eval.config.triggerMaxWorkers": "Trigger Worker Threads",
+   "eval.config.functionalMaxWorkers": "Functional Worker Threads",
+@@ -594,12 +613,12 @@ const enMessages = {
+   "eval.preflight.step.triggerComplex": "Trigger test (complex)",
+   "eval.preflight.step.functionalWithSkill": "Functional test (with skill)",
+   "eval.preflight.step.functionalWithoutSkill": "Functional test (without skill)",
+-  "eval.preflight.step.quickTaxonomyValidity": "Quick check · taxonomy validity",
+-  "eval.preflight.step.quickStructureSyntax": "Quick check · skill structure and syntax",
+-  "eval.preflight.step.quickGenerationGuardrail": "Quick check · generation guardrail",
+-  "eval.preflight.step.quickUiMetadataConsistency": "Quick check · UI metadata consistency",
+-  "eval.preflight.step.quickScriptSmoke": "Quick check · script smoke",
+-  "eval.preflight.step.quickTriggerBucketCoverage": "Quick check · trigger bucket coverage",
++  "eval.preflight.step.quickTaxonomyValidity": "Quick check 路 taxonomy validity",
++  "eval.preflight.step.quickStructureSyntax": "Quick check 路 skill structure and syntax",
++  "eval.preflight.step.quickGenerationGuardrail": "Quick check 路 generation guardrail",
++  "eval.preflight.step.quickUiMetadataConsistency": "Quick check 路 UI metadata consistency",
++  "eval.preflight.step.quickScriptSmoke": "Quick check 路 script smoke",
++  "eval.preflight.step.quickTriggerBucketCoverage": "Quick check 路 trigger bucket coverage",
+   "eval.preflight.step.auditabilityCheck": "Auditability check",
+   "eval.preflight.stepMeta":
+     "cases {cases} x runs {runs} -> {calls} calls, ~{tokens} tokens, ~{seconds}s",
+@@ -610,11 +629,19 @@ const enMessages = {
+   "eval.actions.primary": "Primary Actions",
+   "eval.actions.secondary": "Browse & Manage",
+   "eval.samples.title": "Generated Sample Drafts",
++  "eval.samples.generateButton": "Generate Test Samples",
+   "eval.samples.generate": "Generate {trigger}/{functional} Samples",
++  "eval.samples.generateHint": "Will generate {trigger} trigger samples and {functional} functional samples.",
+   "eval.samples.generating": "Generating samples...",
++  "eval.samples.stage.generating": "AI is generating sample cases...",
++  "eval.samples.stage.generatingTrigger": "AI is generating trigger test set...",
++  "eval.samples.stage.generatingFunctional": "AI is generating functional test set...",
++  "eval.samples.stage.savingTrigger": "Saving trigger dataset...",
++  "eval.samples.stage.savingFunctional": "Saving functional dataset...",
+   "eval.samples.generated": "Generated trigger {trigger} / functional {functional} samples.",
++  "eval.samples.retry": "Retry Generation",
+   "eval.samples.eta.title": "Sample Generation ETA",
+-  "eval.samples.eta.meta": "Model {model} · history matched {history} runs · latest {last}s",
++  "eval.samples.eta.meta": "Model {model} 路 history matched {history} runs 路 latest {last}s",
+   "eval.samples.history.title": "Recent generation timings",
+   "eval.samples.history.empty": "No generation timing history yet.",
+   "eval.samples.history.item": "{model}: {seconds}s ({trigger}/{functional})",
+@@ -701,7 +728,7 @@ const enMessages = {
+   "eval.analysis.pattern.trigger": "Trigger evaluation",
+   "eval.analysis.pattern.functionalWithSkill": "Functional eval (with skill)",
+   "eval.analysis.pattern.functionalWithoutSkill": "Functional eval (without skill)",
+-  "eval.analysis.pattern.localized": "{scope} · {error} ({count})",
++  "eval.analysis.pattern.localized": "{scope} 路 {error} ({count})",
+   "eval.analysis.error.routingMismatch": "Routing mismatch",
+   "eval.analysis.error.assertionOrQualityFailed": "Assertion or quality check failed",
+   "eval.analysis.error.network": "Network instability",
+@@ -802,12 +829,16 @@ const enMessages = {
+   "eval.runDock.elapsed": "Elapsed {seconds}s",
+   "eval.runDock.progressAria": "Evaluation progress",
+   "eval.running.title": "Evaluation In Progress",
++  "eval.running.waiting": "Waiting for progress...",
++  "eval.running.initializing": "Initializing evaluation pipeline...",
+   "eval.running.backToSetup": "Back to Setup",
+   "eval.running.progressPercent": "Progress",
+   "eval.running.stageProgress": "Current stage progress",
+   "eval.running.activeStage": "Current stage",
+   "eval.running.stageCountersLabel": "Stage counters",
+   "eval.running.stageCounters": "{completed}/{total} completed · running {active} · failed {failed}",
++  "eval.running.stageStatsWithFailures": "{passed} passed {failed} failed",
++  "eval.running.failedCount": "{failed} failed",
+   "eval.running.remaining": "Estimated remaining",
+   "eval.running.remainingCalculating": "Calculating...",
+   "eval.running.dimensions": "Dimensions",
+@@ -963,6 +994,40 @@ const enMessages = {
+   "eval.table.judgeSuggestions": "Improvement Suggestions",
+   "eval.table.tokenPairSuffix": "in/out",
+   "eval.table.bucket": "Bucket",
++  "eval.scorecard.title": "Evaluation Scorecard",
++  "eval.scorecard.trigger": "Trigger Accuracy",
++  "eval.scorecard.functional": "Functional Correctness",
++  "eval.scorecard.robustness": "Robustness",
++  "eval.scorecard.efficiency": "Efficiency",
++  "eval.scorecard.value": "Value Added",
++  "eval.scorecard.comparator": "With-Skill vs Without-Skill",
++  "eval.scorecard.improvedCases": "+ {count} improved",
++  "eval.scorecard.regressedCases": "- {count} regressed",
++  "eval.scorecard.unchangedCases": "= {count} unchanged",
++  "eval.scorecard.averageDelta": "Average delta",
++  "eval.scorecard.analyzerNotes": "Analyzer Recommendations",
++  "eval.scorecard.suggestions": "Improvement Suggestions",
++  "eval.scorecard.confidenceWarning":
++    "judge model is the same as executor model, which may lower confidence of the evaluation results.",
++  "eval.mode.standard": "Standard",
++  "eval.mode.standardDesc": "Standard Test (Trigger Clean+Complex + Functional + Efficiency)",
++  "eval.config.judgeModel": "Judge Model",
++  "eval.config.judgeModelHint": "Separate judge model for evaluation scoring. Defaults to the run model.",
++  "eval.config.generatorModel": "Generator Model",
++  "eval.config.generatorModelHint": "Model for sample generation. Defaults to the judge model.",
++  "eval.running.casePass": "Pass",
++  "eval.running.caseFail": "Fail",
++  "eval.running.caseRunning": "Running",
++  "eval.running.casePending": "Pending",
++  "eval.running.caseGrid": "Case Grid",
++  "eval.running.liveStats": "Live Statistics",
++  "eval.running.tokenCount": "Token Count",
++  "eval.dataset.source.ai": "AI Generate",
++  "eval.dataset.source.pick": "Choose File",
++  "eval.dataset.source.aiHint": "AI will generate trigger & functional test sets, auto-archived to the dataset directory after generation.",
++  "eval.dataset.source.pickHint": "Select a pre-existing test set file, or a previously AI-generated archived version.",
++  "eval.config.selectModel": "Select model...",
++  "eval.config.model.customHint": "Or type a custom model name",
+ } as const;
+ 
+ export type MessageKey = keyof typeof enMessages;
+@@ -1465,6 +1530,7 @@ const zhMessages: Partial<Record<MessageKey, string>> = {
+   "eval.flow.current": "当前：步骤 {step} · {title}",
+   "eval.flow.completed": "进度 {done}/{total}",
+   "eval.flow.state.active": "进行中",
++  "eval.flow.state.generating": "生成中...",
+   "eval.flow.state.done": "已完成",
+   "eval.flow.state.pending": "待完成",
+   "eval.flow.stageHint.step1": "先选择技能，再进入数据集与样例配置。",
+@@ -1505,7 +1571,8 @@ const zhMessages: Partial<Record<MessageKey, string>> = {
+   "eval.config.generationModelPreset": "样例模型预置",
+   "eval.config.generationModel": "样例生成模型",
+   "eval.config.generationModelHint": "一键生成样例将使用本步骤选择的模型。",
+-  "eval.config.runModel": "评测运行模型",
++  "eval.config.runModel": "运行模型",
++  "eval.config.runModelHint": "用于执行评测用例的模型。",
+   "eval.config.maxParallelArms": "并行任务臂数",
+   "eval.config.triggerMaxWorkers": "触发评测线程数",
+   "eval.config.functionalMaxWorkers": "功能评测线程数",
+@@ -1555,8 +1622,16 @@ const zhMessages: Partial<Record<MessageKey, string>> = {
+   "eval.actions.primary": "核心操作",
+   "eval.actions.secondary": "查看与管理",
+   "eval.samples.title": "AI 生成样例草稿",
++  "eval.samples.generateButton": "测试样例生成",
+   "eval.samples.generate": "一键生成 {trigger}/{functional} 样例",
++  "eval.samples.generateHint": "将生成 {trigger} 条触发样例、{functional} 条功能样例。",
+   "eval.samples.generating": "正在生成样例...",
++  "eval.samples.stage.generating": "AI 正在生成测试样例...",
++  "eval.samples.stage.generatingTrigger": "AI 正在生成触发测试集...",
++  "eval.samples.stage.generatingFunctional": "AI 正在生成功能测试集...",
++  "eval.samples.stage.savingTrigger": "正在保存触发数据集...",
++  "eval.samples.stage.savingFunctional": "正在保存功能数据集...",
++  "eval.samples.retry": "重新生成",
+   "eval.samples.generated": "已生成触发 {trigger} 条 / 功能 {functional} 条样例。",
+   "eval.samples.eta.title": "样例生成耗时预估",
+   "eval.samples.eta.meta": "模型 {model} · 匹配历史 {history} 次 · 最近一次 {last}s",
+@@ -1870,6 +1945,38 @@ const zhMessages: Partial<Record<MessageKey, string>> = {
+   "eval.table.judgeSuggestions": "改进建议",
+   "eval.table.tokenPairSuffix": "输入/输出",
+   "eval.table.bucket": "桶",
++  "eval.scorecard.title": "评测评分卡",
++  "eval.scorecard.trigger": "触发准确性",
++  "eval.scorecard.functional": "功能正确性",
++  "eval.scorecard.robustness": "鲁棒性",
++  "eval.scorecard.efficiency": "效率",
++  "eval.scorecard.value": "增益价值",
++  "eval.scorecard.comparator": "带技能 vs 不带技能",
++  "eval.scorecard.improvedCases": "+ {count} 改善",
++  "eval.scorecard.regressedCases": "- {count} 回退",
++  "eval.scorecard.unchangedCases": "= {count} 持平",
++  "eval.scorecard.averageDelta": "平均差值",
++  "eval.scorecard.analyzerNotes": "分析器建议",
++  "eval.scorecard.suggestions": "改进建议",
++  "eval.scorecard.confidenceWarning": "评审模型与执行模型相同，评测结果置信度可能降低。",
++  "eval.config.judgeModel": "评审模型",
++  "eval.config.judgeModelHint": "独立的评审评分模型，默认使用运行模型。",
++  "eval.config.generatorModel": "生成模型",
++  "eval.config.generatorModelHint": "样例生成模型，默认使用评审模型。",
++  "eval.running.casePass": "通过",
++  "eval.running.caseFail": "失败",
++  "eval.running.caseRunning": "运行中",
++  "eval.running.casePending": "等待中",
++  "eval.running.caseGrid": "用例矩阵",
++  "eval.running.liveStats": "实时统计",
++  "eval.running.tokenCount": "Token 计数",
++  "eval.dataset.source.ai": "AI 生成",
++  "eval.dataset.source.pick": "选择文件",
++  "eval.dataset.source.aiHint": "AI 将生成触发和功能测试集，生成后自动归档到数据集目录。",
++  "eval.dataset.source.pickHint": "选择已有的测试集文件，或之前 AI 生成并归档的版本。",
++  "eval.config.selectModel": "选择模型...",
++  "eval.config.model.customHint": "或输入自定义模型名称",
++  "eval.mode.standard": "标准模式",
+   "skills.conflict.diff.degraded.input": "文本过大，已使用降级 diff（结果为近似展示）。",
+   "skills.conflict.diff.degraded.complexity": "复杂度过高，已使用降级 diff（结果为近似展示）。",
+   "skills.conflict.diff.degraded.generic": "为保持页面可交互，diff 已降级展示。",
+@@ -1889,4 +1996,3 @@ export const messages: Record<Locale, Record<MessageKey, string>> = {
+   "zh-CN": { ...enMessages, ...zhMessages } as Record<MessageKey, string>,
+   "en-US": enMessages,
+ };
+-
+diff --git a/src/pages/DashboardPage.css b/src/pages/DashboardPage.css
+index cb6ceb1..daf4456 100644
+--- a/src/pages/DashboardPage.css
++++ b/src/pages/DashboardPage.css
+@@ -7,9 +7,9 @@
+ }
+ 
+ .dashboard-chart--tall {
+-  height: 320px;
++  height: var(--chart-height-tall);
+ }
+ 
+ .dashboard-chart--medium {
+-  height: 300px;
++  height: var(--chart-height-medium);
+ }
+diff --git a/src/pages/DashboardPage.tsx b/src/pages/DashboardPage.tsx
+index 25373e5..39409f4 100644
+--- a/src/pages/DashboardPage.tsx
++++ b/src/pages/DashboardPage.tsx
+@@ -21,13 +21,13 @@ type DashboardChartTokens = {
+ 
+ function readDashboardChartTokens(): DashboardChartTokens {
+   const fallback: DashboardChartTokens = {
+-    palette: ["#5a87f4", "#4aaed6", "#8d74f5", "#1fa870", "#d98a28", "#df5d70"],
+-    textPrimary: "#172239",
+-    textSecondary: "#42506b",
+-    border: "#d8e3f2",
+-    split: "#d8e3f2",
+-    tooltipBg: "#ffffff",
+-    tooltipBorder: "#d8e3f2",
++    palette: ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)", "var(--chart-6)"],
++    textPrimary: "var(--text-primary)",
++    textSecondary: "var(--text-secondary)",
++    border: "var(--border-card)",
++    split: "var(--border-card)",
++    tooltipBg: "var(--bg-card)",
++    tooltipBorder: "var(--border-card)",
+   };
+   if (typeof window === "undefined") {
+     return fallback;
+diff --git a/src/pages/EvalPage.css b/src/pages/EvalPage.css
+index 90769c9..a0ed4ea 100644
+--- a/src/pages/EvalPage.css
++++ b/src/pages/EvalPage.css
+@@ -3,10 +3,13 @@
+ .eval-page {
+   --eval-page-gutter: clamp(var(--sp-lg), 1.6vw + var(--sp-sm), var(--sp-2xl));
+   gap: var(--sp-md);
+-  padding-bottom: var(--eval-run-dock-offset, clamp(230px, 30vh, 320px));
+   scroll-padding-top: var(--eval-header-offset, 96px);
+ }
+ 
++.eval-page-has-dock {
++  padding-bottom: var(--eval-run-dock-offset, clamp(230px, 30vh, 320px));
++}
++
+ .eval-config-card {
+   padding: var(--sp-xl);
+ }
+@@ -72,15 +75,21 @@
+ 
+ .eval-flow-step {
+   align-items: center;
++  appearance: none;
+   background: color-mix(in srgb, var(--bg-input) 60%, var(--bg-card) 40%);
+   border: 1px solid color-mix(in srgb, var(--border-card) 88%, var(--text-secondary) 12%);
+   border-radius: var(--radius-md);
++  color: inherit;
++  cursor: pointer;
+   display: grid;
++  font: inherit;
+   gap: var(--sp-sm);
+   grid-template-columns: auto 1fr;
+   overflow: hidden;
+   padding: var(--sp-sm);
+   position: relative;
++  text-align: left;
++  width: 100%;
+ }
+ 
+ .eval-flow-step::before {
+@@ -117,6 +126,24 @@
+   opacity: 0.9;
+ }
+ 
++.eval-flow-step.is-generating {
++  background: color-mix(in srgb, var(--primary) 12%, var(--bg-card) 88%);
++  border-color: var(--primary);
++  animation: eval-running-breathe 1.8s ease-in-out infinite;
++}
++
++.eval-flow-step.is-generating .eval-flow-index {
++  background: var(--primary);
++  color: #fff;
++  border-color: var(--primary);
++}
++
++.eval-flow-state-generating {
++  background: color-mix(in srgb, var(--primary) 16%, transparent 84%);
++  color: var(--primary);
++  animation: eval-running-pill-breathe 1.4s ease-in-out infinite;
++}
++
+ .eval-flow-index {
+   align-items: center;
+   background: var(--bg-card);
+@@ -166,9 +193,9 @@
+ }
+ 
+ .eval-flow-state-active {
+-  background: color-mix(in srgb, var(--accent) 26%, transparent);
+-  color: var(--accent);
+-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 36%, transparent);
++  background: var(--accent);
++  color: var(--accent-contrast, #fff);
++  box-shadow: 0 0 0 1px var(--accent);
+ }
+ 
+ .eval-flow-state-done {
+@@ -602,9 +629,8 @@
+ }
+ 
+ .btn.eval-action-btn {
+-  font-size: var(--text-xs);
+-  min-height: 40px;
+-  padding: 0 var(--sp-sm);
++  min-height: var(--control-height);
++  padding: 0 var(--sp-md);
+ }
+ 
+ .eval-action-btn-run {
+@@ -1066,6 +1092,26 @@
+   grid-template-columns: minmax(0, 1fr) auto;
+ }
+ 
++.eval-history-item-toggle {
++  appearance: none;
++  background: transparent;
++  border: 0;
++  color: inherit;
++  cursor: pointer;
++  display: block;
++  font: inherit;
++  margin: 0;
++  padding: 0;
++  text-align: left;
++  width: 100%;
++}
++
++.eval-history-item-toggle:focus-visible {
++  border-radius: var(--radius-sm);
++  box-shadow: var(--focus-ring);
++  outline: none;
++}
++
+ .eval-history-item-grid {
+   display: grid;
+   gap: var(--sp-sm) var(--sp-md);
+@@ -1391,3 +1437,548 @@
+     grid-template-columns: 1fr;
+   }
+ }
++
++/* ===== Generating Card (Step 2 AI generation) ===== */
++
++.eval-gen-card {
++  background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 6%, var(--bg-card)) 0%, var(--bg-card) 100%);
++  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border-card));
++  border-radius: var(--radius-md, 8px);
++  display: grid;
++  gap: var(--sp-sm);
++  padding: var(--sp-md) var(--sp-lg);
++}
++
++.eval-gen-card-header {
++  align-items: center;
++  display: flex;
++  gap: var(--sp-sm);
++}
++
++.eval-gen-card-icon {
++  animation: eval-gen-spin 2s linear infinite;
++  font-size: 1.3em;
++}
++
++@keyframes eval-gen-spin {
++  from { transform: rotate(0deg); }
++  to { transform: rotate(360deg); }
++}
++
++.eval-gen-card-text {
++  display: flex;
++  flex: 1;
++  flex-direction: column;
++  gap: 2px;
++}
++
++.eval-gen-card-text strong {
++  font-size: var(--text-sm);
++}
++
++.eval-gen-card-text small {
++  color: var(--text-muted);
++  font-size: var(--text-xs);
++}
++
++.eval-gen-card-elapsed {
++  background: color-mix(in srgb, var(--primary) 12%, transparent);
++  border-radius: var(--radius-sm);
++  color: var(--primary);
++  font-size: var(--text-xs);
++  font-variant-numeric: tabular-nums;
++  font-weight: 600;
++  padding: 2px 8px;
++  white-space: nowrap;
++}
++
++.eval-gen-card-bar {
++  background: color-mix(in srgb, var(--primary) 10%, var(--bg-input));
++  border-radius: 4px;
++  height: 4px;
++  overflow: hidden;
++  position: relative;
++}
++
++.eval-gen-card-bar-shimmer {
++  animation: eval-gen-shimmer 1.5s ease-in-out infinite;
++  background: linear-gradient(90deg, transparent 0%, var(--primary) 50%, transparent 100%);
++  border-radius: 4px;
++  height: 100%;
++  opacity: 0.7;
++  position: absolute;
++  width: 40%;
++}
++
++@keyframes eval-gen-shimmer {
++  0% { left: -40%; }
++  100% { left: 100%; }
++}
++
++/* ===== Stage Milestone Bar ===== */
++
++.eval-milestone-bar {
++  align-items: flex-start;
++  display: flex;
++  gap: 0;
++  justify-content: space-between;
++  padding: var(--sp-md) var(--sp-lg);
++  position: relative;
++}
++
++.eval-milestone-line {
++  background: var(--border-card);
++  height: 2px;
++  left: calc(var(--sp-lg) + 16px);
++  position: absolute;
++  right: calc(var(--sp-lg) + 16px);
++  top: calc(var(--sp-md) + 15px);
++  z-index: 0;
++}
++
++.eval-milestone-item {
++  align-items: center;
++  display: flex;
++  flex-direction: column;
++  gap: 6px;
++  position: relative;
++  z-index: 1;
++}
++
++.eval-milestone-circle {
++  align-items: center;
++  background: var(--bg-input);
++  border: 2px solid var(--border-card);
++  border-radius: 50%;
++  color: var(--text-muted);
++  display: flex;
++  font-size: 12px;
++  font-weight: 700;
++  height: 32px;
++  justify-content: center;
++  transition: all 0.3s ease;
++  width: 32px;
++}
++
++.eval-milestone-label {
++  color: var(--text-muted);
++  font-size: var(--text-xs);
++  max-width: 80px;
++  text-align: center;
++  transition: color 0.3s ease;
++  white-space: nowrap;
++}
++
++/* Done state */
++.eval-milestone-done .eval-milestone-circle {
++  background: var(--success, #52c41a);
++  border-color: var(--success, #52c41a);
++  color: #fff;
++}
++
++.eval-milestone-done .eval-milestone-label {
++  color: var(--success, #52c41a);
++  font-weight: 600;
++}
++
++/* Active state */
++.eval-milestone-active .eval-milestone-circle {
++  animation: eval-milestone-pulse 1.8s ease-in-out infinite;
++  background: #3b82f6;
++  border-color: #3b82f6;
++  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.25);
++  color: #fff;
++}
++
++.eval-milestone-active .eval-milestone-label {
++  color: #3b82f6;
++  font-weight: 600;
++}
++
++@keyframes eval-milestone-pulse {
++  0%, 100% { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.3); }
++  50% { box-shadow: 0 0 0 8px rgba(59, 130, 246, 0.12); }
++}
++
++.eval-milestone-stats {
++  color: var(--text-muted);
++  font-size: 10px;
++  font-variant-numeric: tabular-nums;
++}
++
++/* ===== Overall Progress Section ===== */
++
++.eval-milestone-progress-section {
++  display: grid;
++  gap: 6px;
++  padding: 0 var(--sp-lg) var(--sp-md);
++}
++
++.eval-milestone-progress-header {
++  align-items: baseline;
++  display: flex;
++  gap: var(--sp-sm);
++  justify-content: space-between;
++}
++
++.eval-milestone-progress-title {
++  font-size: var(--text-sm);
++  font-weight: 600;
++}
++
++.eval-milestone-progress-meta {
++  color: var(--text-muted);
++  font-size: var(--text-xs);
++  font-variant-numeric: tabular-nums;
++}
++
++.eval-milestone-progress-bar {
++  background: color-mix(in srgb, var(--primary) 10%, var(--bg-input));
++  border-radius: 4px;
++  height: 6px;
++  overflow: hidden;
++  position: relative;
++}
++
++.eval-milestone-progress-fill {
++  background: var(--primary);
++  border-radius: 4px;
++  height: 100%;
++}
++
++.eval-milestone-progress-shimmer {
++  animation: eval-gen-shimmer 1.5s ease-in-out infinite;
++  background: linear-gradient(90deg, transparent 0%, var(--primary) 50%, transparent 100%);
++  border-radius: 4px;
++  height: 100%;
++  opacity: 0.5;
++  position: absolute;
++  top: 0;
++  width: 40%;
++}
++
++.eval-milestone-progress-percent {
++  color: var(--text-muted);
++  font-size: var(--text-xs);
++  font-variant-numeric: tabular-nums;
++  font-weight: 600;
++  text-align: right;
++}
++
++/* ===== Case Sub-Progress ===== */
++
++.eval-milestone-case-section {
++  border-top: 1px solid var(--border-card);
++  display: grid;
++  gap: 8px;
++  padding: var(--sp-md) var(--sp-lg);
++}
++
++.eval-milestone-case-header {
++  align-items: baseline;
++  display: flex;
++  gap: var(--sp-sm);
++  justify-content: space-between;
++}
++
++.eval-milestone-case-counter {
++  color: var(--primary);
++  font-size: var(--text-xs);
++  font-variant-numeric: tabular-nums;
++  font-weight: 600;
++}
++
++.eval-milestone-case-bar {
++  height: 4px;
++}
++
++.eval-milestone-case-fill {
++  background: var(--success, #52c41a);
++}
++
++.eval-milestone-case-grid {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 4px;
++  margin-top: 4px;
++}
++
++.eval-milestone-case-dot {
++  border-radius: 3px;
++  height: 10px;
++  transition: background 0.2s ease;
++  width: 10px;
++}
++
++.eval-milestone-case-pass {
++  background: var(--success, #52c41a);
++}
++
++.eval-milestone-case-fail {
++  background: var(--danger, #ff4d4f);
++}
++
++.eval-milestone-case-running {
++  animation: eval-milestone-pulse 1.2s ease-in-out infinite;
++  background: var(--primary);
++}
++
++.eval-milestone-case-pending {
++  background: var(--border-card);
++}
++
++/* ===== Scorecard (.eval-sc-*) ===== */
++
++.eval-sc {
++  background: var(--surface-primary, var(--bg-card));
++  border: 1px solid var(--border-subtle, var(--border-card));
++  border-radius: var(--radius-md, 12px);
++  display: grid;
++  gap: 0;
++  padding: var(--sp-lg);
++}
++
++.eval-sc-header {
++  align-items: center;
++  display: flex;
++  flex-wrap: wrap;
++  gap: var(--sp-md);
++}
++
++/* CSS Stars */
++.eval-sc-stars {
++  display: flex;
++  gap: 2px;
++}
++
++.eval-sc-star {
++  background: color-mix(in srgb, var(--border-card) 60%, transparent);
++  clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
++  display: inline-block;
++  height: 24px;
++  transition: background 0.25s ease, filter 0.25s ease;
++  width: 24px;
++}
++
++.eval-sc-star-filled {
++  background: linear-gradient(135deg, #fbbf24, #f59e0b);
++  filter: drop-shadow(0 1px 2px rgba(245, 166, 35, 0.35));
++}
++
++.eval-sc-score {
++  font-size: 24px;
++  font-variant-numeric: tabular-nums;
++  font-weight: 700;
++}
++
++.eval-sc-score-max {
++  font-size: var(--text-sm);
++  font-weight: 400;
++  margin-left: 4px;
++  opacity: 0.6;
++}
++
++.eval-sc-score-label {
++  color: var(--text-muted);
++  font-size: var(--text-sm);
++}
++
++/* Confidence warning */
++.eval-sc-warning {
++  background: var(--warning-surface, rgba(250, 173, 20, 0.1));
++  border: 1px solid var(--warning-border, rgba(250, 173, 20, 0.3));
++  border-radius: var(--radius-sm, 6px);
++  color: var(--warning-text, #faad14);
++  font-size: var(--text-xs);
++  margin-top: var(--sp-sm);
++  padding: 6px 12px;
++}
++
++/* Section spacing */
++.eval-sc-section {
++  margin-top: var(--sp-md);
++}
++
++.eval-sc-section-title {
++  font-size: var(--text-sm);
++  font-weight: 600;
++  margin-bottom: 6px;
++}
++
++/* Dimension grid */
++.eval-sc-dim-grid {
++  display: grid;
++  gap: var(--sp-sm);
++  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
++}
++
++.eval-sc-dim-item {
++  align-items: center;
++  background: var(--surface-secondary, rgba(255, 255, 255, 0.04));
++  border: 1px solid transparent;
++  border-radius: var(--radius-sm, 8px);
++  cursor: default;
++  display: flex;
++  justify-content: space-between;
++  padding: 8px 12px;
++  transition: background 0.2s ease, border-color 0.2s ease;
++}
++
++.eval-sc-dim-item:hover {
++  background: var(--bg-card-hover, rgba(255, 255, 255, 0.08));
++  border-color: var(--border-card);
++}
++
++.eval-sc-dim-label {
++  color: var(--text-secondary);
++  font-size: var(--text-xs);
++}
++
++.eval-sc-dim-score {
++  font-size: 16px;
++  font-variant-numeric: tabular-nums;
++  font-weight: 600;
++}
++
++/* Score colors */
++.eval-sc-good { color: var(--success, #52c41a); }
++.eval-sc-warn { color: var(--warning-text, #faad14); }
++.eval-sc-bad  { color: var(--danger, #ff4d4f); }
++
++/* Comparator grid */
++.eval-sc-comparator-grid {
++  display: grid;
++  font-size: var(--text-xs);
++  gap: 6px;
++  grid-template-columns: repeat(3, 1fr);
++}
++
++.eval-sc-comp-improved {
++  background: color-mix(in srgb, var(--success, #52c41a) 10%, transparent);
++  border-radius: var(--radius-sm, 4px);
++  color: var(--success, #52c41a);
++  padding: 4px 8px;
++}
++
++.eval-sc-comp-regressed {
++  background: color-mix(in srgb, var(--danger, #ff4d4f) 10%, transparent);
++  border-radius: var(--radius-sm, 4px);
++  color: var(--danger, #ff4d4f);
++  padding: 4px 8px;
++}
++
++.eval-sc-comp-unchanged {
++  background: var(--surface-secondary, rgba(255, 255, 255, 0.04));
++  border-radius: var(--radius-sm, 4px);
++  padding: 4px 8px;
++}
++
++.eval-sc-comp-delta {
++  color: var(--text-muted);
++  font-size: var(--text-xs);
++  margin-top: 4px;
++}
++
++/* Analyzer / Suggestions list */
++.eval-sc-list {
++  font-size: var(--text-xs);
++  line-height: 1.6;
++  margin: 0;
++  opacity: 0.85;
++  padding-left: 18px;
++}
++
++/* ===== Result Tabs ===== */
++
++.eval-result-tabs {
++  border-bottom: 1px solid var(--border-card);
++  display: flex;
++  gap: 0;
++  margin-bottom: var(--sp-md);
++}
++
++.eval-result-tab {
++  background: none;
++  border: none;
++  border-bottom: 2px solid transparent;
++  color: var(--text-muted);
++  cursor: pointer;
++  font-size: var(--text-sm);
++  font-weight: 500;
++  padding: var(--sp-sm) var(--sp-md);
++  transition: color 0.2s ease, border-color 0.2s ease;
++}
++
++.eval-result-tab:hover {
++  color: var(--text-primary);
++}
++
++.eval-result-tab-active {
++  border-bottom-color: var(--primary);
++  color: var(--primary);
++  font-weight: 600;
++}
++
++/* ===== Pass / Fail Badges ===== */
++
++.eval-badge-pass,
++.eval-badge-fail {
++  border-radius: 10px;
++  display: inline-block;
++  font-size: var(--text-xs);
++  font-weight: 600;
++  line-height: 1;
++  min-width: 28px;
++  padding: 3px 8px;
++  text-align: center;
++}
++
++.eval-badge-pass {
++  background: color-mix(in srgb, var(--success, #52c41a) 12%, transparent);
++  color: var(--success, #52c41a);
++}
++
++.eval-badge-fail {
++  background: color-mix(in srgb, var(--danger, #ff4d4f) 12%, transparent);
++  color: var(--danger, #ff4d4f);
++}
++
++/* ===== SVG Checkmark in Milestones ===== */
++
++.eval-milestone-check {
++  height: 16px;
++  width: 16px;
++}
++
++/* ===== Global Polish ===== */
++
++.chart-card {
++  transition: box-shadow 0.2s ease, border-color 0.2s ease;
++}
++
++.chart-card:hover {
++  box-shadow: var(--shadow-card-hover, 0 4px 12px rgba(0, 0, 0, 0.08));
++}
++
++.btn {
++  cursor: pointer;
++}
++
++/* ===== Reduced Motion ===== */
++
++@media (prefers-reduced-motion: reduce) {
++  .eval-milestone-active .eval-milestone-circle,
++  .eval-milestone-case-running,
++  .eval-gen-card-icon,
++  .eval-gen-card-bar-shimmer,
++  .eval-milestone-progress-shimmer {
++    animation: none !important;
++  }
++
++  .eval-sc-star,
++  .eval-sc-dim-item,
++  .eval-result-tab,
++  .chart-card {
++    transition: none !important;
++  }
++}
+diff --git a/src/pages/EvalPage.tsx b/src/pages/EvalPage.tsx
+index 39ddb99..9620119 100644
+--- a/src/pages/EvalPage.tsx
++++ b/src/pages/EvalPage.tsx
+@@ -31,6 +31,7 @@ import {
+ import KpiCard from "../components/KpiCard";
+ import { useI18n } from "../i18n/I18nProvider";
+ import type { MessageKey } from "../i18n/messages";
++import EvalFloatingModal from "./eval/components/EvalFloatingModal";
+ import { useTheme } from "../theme/ThemeProvider";
+ import "./EvalPage.css";
+ 
+@@ -3366,7 +3367,9 @@ export default function EvalPage({ skills }: Props) {
+         </article>
+       )}
+ 
+-      {showSamples && (triggerDraftRows.length > 0 || functionalDraftRows.length > 0) && (
++      <EvalFloatingModal
++        open={showSamples && (triggerDraftRows.length > 0 || functionalDraftRows.length > 0)}
++      >
+         <div
+           className="eval-samples-modal-backdrop"
+           role="dialog"
+@@ -3614,9 +3617,9 @@ export default function EvalPage({ skills }: Props) {
+             </div>
+           </article>
+         </div>
+-      )}
++      </EvalFloatingModal>
+ 
+-      {showHistory && selectedSkill && (
++      <EvalFloatingModal open={showHistory && Boolean(selectedSkill)}>
+         <div
+           className="eval-history-modal-backdrop"
+           role="dialog"
+@@ -3791,7 +3794,7 @@ export default function EvalPage({ skills }: Props) {
+             </div>
+           </article>
+         </div>
+-      )}
++      </EvalFloatingModal>
+ 
+       {showReviewView && report?.mode === "full" && (
+         <>
+diff --git a/src/pages/GitPage.css b/src/pages/GitPage.css
+index 92e5794..109c711 100644
+--- a/src/pages/GitPage.css
++++ b/src/pages/GitPage.css
+@@ -59,7 +59,7 @@
+ }
+ 
+ .git-add-drawer-overlay {
+-  background: color-mix(in srgb, var(--surface-base) 50%, #0b1224);
++  background: color-mix(in srgb, var(--surface-base) 50%, var(--overlay-scrim));
+   border: 0;
+   cursor: pointer;
+   inset: 0;
+@@ -83,7 +83,7 @@
+ .git-add-drawer-panel {
+   animation: git-drawer-enter 180ms ease-out;
+   border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+-  box-shadow: -20px 0 36px rgba(15, 23, 42, 0.24);
++  box-shadow: var(--shadow-drawer);
+   display: grid;
+   gap: var(--sp-sm);
+   grid-template-rows: auto 1fr;
+@@ -115,7 +115,7 @@
+ }
+ 
+ .git-guide-overlay {
+-  background: color-mix(in srgb, var(--surface-base) 55%, #0b1224);
++  background: color-mix(in srgb, var(--surface-base) 55%, var(--overlay-scrim));
+   border: 0;
+   cursor: pointer;
+   inset: 0;
+@@ -164,7 +164,7 @@
+ }
+ 
+ .git-guide-error {
+-  color: color-mix(in srgb, var(--danger, #c2410c) 78%, var(--text-secondary));
++  color: color-mix(in srgb, var(--danger) 78%, var(--text-secondary));
+   font-size: var(--text-sm);
+   margin: 0;
+ }
+@@ -226,7 +226,7 @@
+ }
+ 
+ .git-guide-code {
+-  background: color-mix(in srgb, var(--surface-soft) 85%, #0f172a 10%);
++  background: color-mix(in srgb, var(--surface-soft) 85%, var(--bg-primary) 10%);
+   border: 1px solid var(--stroke-default);
+   border-radius: var(--radius-md);
+   margin: 0;
+@@ -268,7 +268,11 @@
+ }
+ 
+ .git-repo-card {
+-  background: linear-gradient(180deg, rgba(124, 146, 255, 0.07), rgba(124, 146, 255, 0.01));
++  background: linear-gradient(
++    180deg,
++    color-mix(in srgb, var(--accent) 12%, transparent),
++    color-mix(in srgb, var(--accent) 2%, transparent)
++  );
+   border: 1px solid var(--border-card);
+   border-radius: var(--radius-md);
+   display: grid;
+@@ -319,7 +323,7 @@
+ }
+ 
+ .git-repo-card-error {
+-  color: color-mix(in srgb, var(--danger, #c2410c) 75%, var(--text-secondary));
++  color: color-mix(in srgb, var(--danger) 75%, var(--text-secondary));
+ }
+ 
+ .git-repo-card-actions {
+@@ -512,7 +516,7 @@
+ }
+ 
+ .git-ignore-overlay {
+-  background: color-mix(in srgb, var(--surface-base) 55%, #0b1224);
++  background: color-mix(in srgb, var(--surface-base) 55%, var(--overlay-scrim));
+   border: 0;
+   cursor: pointer;
+   inset: 0;
+@@ -580,17 +584,17 @@
+   align-items: center;
+   display: flex;
+   gap: 6px;
+-  min-height: 26px;
++  min-height: var(--control-height);
+ }
+ 
+ .git-ignore-expand,
+ .git-ignore-expand-placeholder {
+   align-items: center;
+   display: inline-flex;
+-  flex: 0 0 18px;
+-  height: 18px;
++  flex: 0 0 var(--control-height);
++  height: var(--control-height);
+   justify-content: center;
+-  width: 18px;
++  width: var(--control-height);
+ }
+ 
+ .git-ignore-expand {
+@@ -803,15 +807,15 @@
+ }
+ 
+ .git-recent-tag.is-pushed {
+-  background: color-mix(in srgb, #16a34a 16%, transparent);
+-  border-color: color-mix(in srgb, #16a34a 34%, var(--stroke-soft));
+-  color: color-mix(in srgb, #0f5132 70%, var(--text-secondary));
++  background: color-mix(in srgb, var(--success) 16%, transparent);
++  border-color: color-mix(in srgb, var(--success) 34%, var(--stroke-soft));
++  color: color-mix(in srgb, var(--success) 72%, var(--text-secondary));
+ }
+ 
+ .git-recent-tag.is-pending {
+-  background: color-mix(in srgb, #f59e0b 12%, transparent);
+-  border-color: color-mix(in srgb, #f59e0b 34%, var(--stroke-soft));
+-  color: color-mix(in srgb, #92400e 65%, var(--text-secondary));
++  background: color-mix(in srgb, var(--warning) 12%, transparent);
++  border-color: color-mix(in srgb, var(--warning) 34%, var(--stroke-soft));
++  color: color-mix(in srgb, var(--warning) 65%, var(--text-secondary));
+ }
+ 
+ .git-recent-summary {
+@@ -827,7 +831,7 @@
+ }
+ 
+ .git-graph-overlay {
+-  background: color-mix(in srgb, var(--surface-base) 55%, #0b1224);
++  background: color-mix(in srgb, var(--surface-base) 55%, var(--overlay-scrim));
+   border: 0;
+   cursor: pointer;
+   inset: 0;
+@@ -904,7 +908,7 @@
+ }
+ 
+ .git-graph-edge.is-merge {
+-  stroke: color-mix(in srgb, #0ea5e9 72%, var(--stroke-default));
++  stroke: color-mix(in srgb, var(--accent) 72%, var(--stroke-default));
+ }
+ 
+ .git-graph-node {
+@@ -912,13 +916,13 @@
+ }
+ 
+ .git-graph-node.is-pushed {
+-  fill: color-mix(in srgb, #22c55e 84%, #ffffff 16%);
+-  stroke: color-mix(in srgb, #15803d 84%, #000000 16%);
++  fill: color-mix(in srgb, var(--success) 84%, var(--bg-card) 16%);
++  stroke: color-mix(in srgb, var(--success) 84%, var(--text-primary) 16%);
+ }
+ 
+ .git-graph-node.is-pending {
+-  fill: color-mix(in srgb, #f59e0b 84%, #ffffff 16%);
+-  stroke: color-mix(in srgb, #b45309 84%, #000000 16%);
++  fill: color-mix(in srgb, var(--warning) 84%, var(--bg-card) 16%);
++  stroke: color-mix(in srgb, var(--warning) 84%, var(--text-primary) 16%);
+ }
+ 
+ .git-graph-content {
+@@ -953,8 +957,8 @@
+ }
+ 
+ .git-graph-merge {
+-  background: color-mix(in srgb, #0ea5e9 14%, transparent);
+-  border-color: color-mix(in srgb, #0ea5e9 30%, var(--stroke-soft));
++  background: color-mix(in srgb, var(--accent) 14%, transparent);
++  border-color: color-mix(in srgb, var(--accent) 30%, var(--stroke-soft));
+ }
+ 
+ .git-graph-summary {
+@@ -1016,10 +1020,10 @@
+ }
+ 
+ .git-ignore-dirty-tag {
+-  background: color-mix(in srgb, #f59e0b 14%, transparent);
+-  border: 1px solid color-mix(in srgb, #f59e0b 38%, var(--stroke-soft));
++  background: color-mix(in srgb, var(--warning) 14%, transparent);
++  border: 1px solid color-mix(in srgb, var(--warning) 38%, var(--stroke-soft));
+   border-radius: var(--radius-pill);
+-  color: color-mix(in srgb, #92400e 70%, var(--text-secondary));
++  color: color-mix(in srgb, var(--warning) 70%, var(--text-secondary));
+   font-size: 11px;
+   font-weight: 700;
+   padding: 2px 8px;
+diff --git a/src/pages/GitPage.tsx b/src/pages/GitPage.tsx
+index 8317e24..73028cb 100644
+--- a/src/pages/GitPage.tsx
++++ b/src/pages/GitPage.tsx
+@@ -27,6 +27,7 @@ import {
+   type GitStatus,
+ } from "../api/tauri";
+ import { useI18n } from "../i18n/I18nProvider";
++import GitFloatingModal from "./git/components/GitFloatingModal";
+ import "./GitPage.css";
+ 
+ function inferRepositoryName(url: string): string {
+@@ -1548,8 +1549,7 @@ export default function GitPage() {
+         </article>
+       )}
+ 
+-      {guideOpen && (
+-        <>
++      <GitFloatingModal open={guideOpen}>
+           <button
+             type="button"
+             className="git-guide-overlay"
+@@ -1604,11 +1604,9 @@ export default function GitPage() {
+               </div>
+             </article>
+           </aside>
+-        </>
+-      )}
++      </GitFloatingModal>
+ 
+-      {graphOpen && (
+-        <>
++      <GitFloatingModal open={graphOpen}>
+           <button
+             type="button"
+             className="git-graph-overlay"
+@@ -1743,11 +1741,9 @@ export default function GitPage() {
+               </div>
+             </article>
+           </aside>
+-        </>
+-      )}
++      </GitFloatingModal>
+ 
+-      {ignoreSelectorOpen && (
+-        <>
++      <GitFloatingModal open={ignoreSelectorOpen}>
+           <button
+             type="button"
+             className="git-ignore-overlay"
+@@ -1814,8 +1810,7 @@ export default function GitPage() {
+               </div>
+             </article>
+           </aside>
+-        </>
+-      )}
++      </GitFloatingModal>
+     </div>
+   );
+ }
+diff --git a/src/pages/SettingsPage.css b/src/pages/SettingsPage.css
+index 18be818..d6428b1 100644
+--- a/src/pages/SettingsPage.css
++++ b/src/pages/SettingsPage.css
+@@ -102,9 +102,9 @@
+ }
+ 
+ .settings-vscode-installed.is-installed {
+-  background: rgba(16, 185, 129, 0.12);
+-  border: 1px solid rgba(16, 185, 129, 0.35);
+-  color: #059669;
++  background: color-mix(in srgb, var(--success) 12%, transparent);
++  border: 1px solid color-mix(in srgb, var(--success) 35%, var(--border-card));
++  color: var(--success);
+ }
+ 
+ .settings-vscode-installed.is-not-installed {
+@@ -114,14 +114,14 @@
+ }
+ 
+ .settings-vscode-uninstall-btn {
+-  background: #dc2626;
+-  border-color: #dc2626;
+-  color: #fff;
++  background: var(--danger);
++  border-color: var(--danger);
++  color: var(--accent-contrast);
+ }
+ 
+ .settings-vscode-uninstall-btn:hover:not(:disabled) {
+-  background: #b91c1c;
+-  border-color: #b91c1c;
++  background: color-mix(in srgb, var(--danger) 88%, var(--text-primary));
++  border-color: color-mix(in srgb, var(--danger) 88%, var(--text-primary));
+ }
+ 
+ .settings-vscode-uninstall-btn-disabled {
+@@ -130,6 +130,188 @@
+   color: var(--text-muted);
+ }
+ 
++/* Model Group Cards */
++.settings-model-group-card {
++  background: var(--bg-panel);
++  border: 1px solid var(--border-card);
++  border-radius: var(--radius-md, 8px);
++  display: grid;
++  gap: var(--sp-sm);
++  padding: var(--sp-md);
++  transition: box-shadow 0.15s ease;
++}
++
++.settings-model-group-card.is-dragging {
++  cursor: grabbing;
++  opacity: 0.6;
++}
++
++.settings-model-group-card:hover {
++  box-shadow: var(--shadow-card);
++}
++
++.settings-model-group-header {
++  align-items: center;
++  appearance: none;
++  background: none;
++  border: 0;
++  color: inherit;
++  cursor: pointer;
++  display: flex;
++  font: inherit;
++  gap: var(--sp-sm);
++  padding: 0;
++  text-align: left;
++  width: 100%;
++}
++
++.settings-model-group-drag-handle {
++  color: var(--text-muted);
++  cursor: grab;
++  font-size: 16px;
++  user-select: none;
++}
++
++.settings-model-group-header-name {
++  flex: 1;
++  font-weight: 600;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.settings-model-group-header-meta {
++  align-items: center;
++  display: flex;
++  gap: var(--sp-xs);
++}
++
++.settings-model-group-model-count {
++  background: var(--bg-card);
++  border-radius: var(--radius-sm);
++  color: var(--text-secondary);
++  font-size: 11px;
++  padding: 2px 6px;
++}
++
++.settings-model-group-badge-ok {
++  color: var(--success);
++  font-weight: 700;
++}
++
++.settings-model-group-badge-fail {
++  color: var(--danger);
++  font-weight: 700;
++}
++
++.settings-model-group-badge-testing {
++  color: var(--text-secondary);
++  animation: pulse-opacity 1s infinite;
++}
++
++@keyframes pulse-opacity {
++  0%, 100% { opacity: 1; }
++  50% { opacity: 0.3; }
++}
++
++.settings-model-group-chevron {
++  color: var(--text-muted);
++  font-size: 10px;
++  transition: transform 0.15s ease;
++}
++
++.settings-model-group-chevron.is-open {
++  transform: rotate(90deg);
++}
++
++.settings-model-group-expanded-toolbar {
++  align-items: center;
++  display: flex;
++  gap: var(--sp-sm);
++}
++
++.settings-model-group-name-input {
++  flex: 1;
++  font-weight: 600;
++}
++
++.settings-model-group-remove-btn {
++  color: var(--danger);
++  font-size: var(--text-sm);
++}
++
++.settings-model-group-remove-btn:hover:not(:disabled) {
++  background: color-mix(in srgb, var(--danger) 8%, transparent);
++}
++
++.settings-model-group-fields {
++  display: grid;
++  gap: var(--sp-sm);
++}
++
++.settings-model-group-gateway-toggle {
++  align-items: center;
++  color: var(--text-secondary);
++  display: inline-flex;
++  font-size: var(--text-sm);
++  font-weight: 400;
++  gap: var(--sp-xs);
++  margin-left: var(--sp-md);
++}
++
++.settings-model-group-gateway-toggle input[type="checkbox"] {
++  accent-color: var(--accent);
++}
++
++.settings-model-group-add-model-btn {
++  font-size: var(--text-sm);
++  margin-left: var(--sp-sm);
++}
++
++.settings-model-group-model-row {
++  align-items: center;
++  display: flex;
++  gap: var(--sp-sm);
++}
++
++.settings-model-group-model-row.is-dragging {
++  opacity: 0.5;
++}
++
++.settings-model-group-model-row .field-input {
++  flex: 1;
++}
++
++.settings-model-group-model-drag {
++  color: var(--text-muted);
++  cursor: grab;
++  font-size: 14px;
++  user-select: none;
++}
++
++.settings-model-group-footer {
++  align-items: center;
++  border-top: 1px solid var(--border-card);
++  display: flex;
++  gap: var(--sp-sm);
++  padding-top: var(--sp-sm);
++}
++
++.settings-model-group-test-ok {
++  color: var(--success);
++  font-size: var(--text-sm);
++  font-weight: 600;
++}
++
++.settings-model-group-test-fail {
++  color: var(--danger);
++  font-size: var(--text-sm);
++  max-width: 400px;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
+ @media (max-width: 900px) {
+   .settings-row {
+     align-items: stretch;
+diff --git a/src/pages/SettingsPage.tsx b/src/pages/SettingsPage.tsx
+index 7b9d323..b06743e 100644
+--- a/src/pages/SettingsPage.tsx
++++ b/src/pages/SettingsPage.tsx
+@@ -1,16 +1,18 @@
+-import { useEffect, useState } from "react";
++import { useEffect, useState, useCallback, useRef } from "react";
+ import { getVersion } from "@tauri-apps/api/app";
+ import { open } from "@tauri-apps/plugin-dialog";
+ 
+ import {
+   evalGetConfig,
+   evalSaveConfig,
++  evalTestConnection,
+   getVscodeExtensionStatus,
+   installVscodeExtension,
+   syncVscodeSkillsRoot,
+   uninstallVscodeExtension,
+   type CostCurrency,
+   type EvalConfig,
++  type ModelGroup,
+   type UpdateSettings,
+   onboardingGetState,
+   onboardingSetSkillsDir,
+@@ -50,6 +52,12 @@ function normalizeCostCurrency(value: string | undefined): CostCurrency {
+   return value === "CNY" ? "CNY" : "USD";
+ }
+ 
++function makeGroupId(): string {
++  return `g-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
++}
++
++type TestStatus = { state: "idle" | "testing" | "success" | "fail"; message?: string };
++
+ export default function SettingsPage({
+   onSkillsDirChanged,
+   updaterSettings,
+@@ -63,15 +71,13 @@ export default function SettingsPage({
+   const { themeMode, setThemeMode } = useTheme();
+   const [skillsDir, setSkillsDir] = useState("");
+   const [importMode, setImportMode] = useState("manual");
+-  const [apiConfig, setApiConfig] = useState<EvalConfig>({
+-    apiKey: "",
+-    provider: "openai-compatible",
+-    sampleModel: "gpt-4o-mini",
+-    runModel: "gpt-4o-mini",
+-    costCurrency: "USD",
+-  });
++  const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]);
++  const [costCurrency, setCostCurrency] = useState<CostCurrency>("USD");
+   const [busy, setBusy] = useState(false);
+   const [apiBusy, setApiBusy] = useState(false);
++  const [testStatuses, setTestStatuses] = useState<Record<string, TestStatus>>({});
++  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
++  const dragHandleActive = useRef<string | null>(null);
+   const [vscodeInstalled, setVscodeInstalled] = useState<boolean | null>(null);
+   const [vscodeInstallBusy, setVscodeInstallBusy] = useState(false);
+   const [vscodeUninstallBusy, setVscodeUninstallBusy] = useState(false);
+@@ -91,14 +97,8 @@ export default function SettingsPage({
+       .then(([state, mode, evalConfig, version, vscodeStatus]) => {
+         setSkillsDir(state.skillsDir);
+         setImportMode(mode);
+-        setApiConfig({
+-          apiKey: evalConfig.apiKey,
+-          provider: evalConfig.provider || "openai-compatible",
+-          baseUrl: evalConfig.baseUrl,
+-          sampleModel: evalConfig.sampleModel || evalConfig.defaultModel || "gpt-4o-mini",
+-          runModel: evalConfig.runModel || evalConfig.defaultModel || "gpt-4o-mini",
+-          costCurrency: normalizeCostCurrency(evalConfig.costCurrency),
+-        });
++        setModelGroups(evalConfig.modelGroups ?? []);
++        setCostCurrency(normalizeCostCurrency(evalConfig.costCurrency));
+         setAppVersion(version);
+         if (vscodeStatus) {
+           setVscodeInstalled(vscodeStatus.installed);
+@@ -168,16 +168,19 @@ export default function SettingsPage({
+     setApiBusy(true);
+     setStatus(t("settings.evalConfig.saving"));
+     try {
++      // Derive flat fields from first group for backward compat
++      const first = modelGroups[0];
+       const normalized: EvalConfig = {
+-        apiKey: apiConfig.apiKey.trim(),
++        apiKey: first?.apiKey ?? "",
+         provider: "openai-compatible",
+-        baseUrl: apiConfig.baseUrl?.trim() || undefined,
+-        sampleModel: apiConfig.sampleModel.trim() || "gpt-4o-mini",
+-        runModel: apiConfig.runModel.trim() || "gpt-4o-mini",
+-        costCurrency: normalizeCostCurrency(apiConfig.costCurrency),
++        baseUrl: first?.baseUrl || undefined,
++        sampleModel: first?.models[0] ?? "gpt-4o-mini",
++        runModel: first?.models[0] ?? "gpt-4o-mini",
++        judgeModel: "",
++        costCurrency,
++        modelGroups,
+       };
+       await evalSaveConfig(normalized);
+-      setApiConfig(normalized);
+       setStatus(t("settings.evalConfig.saved"));
+     } catch (error: unknown) {
+       setStatus(`${t("settings.evalConfig.failed")}: ${String(error)}`);
+@@ -186,6 +189,93 @@ export default function SettingsPage({
+     }
+   }
+ 
++  function updateGroup(id: string, patch: Partial<ModelGroup>) {
++    setModelGroups((prev) => prev.map((g) => (g.id === id ? { ...g, ...patch } : g)));
++  }
++
++  function addModelToGroup(groupId: string) {
++    setModelGroups((prev) =>
++      prev.map((g) =>
++        g.id === groupId ? { ...g, models: [...g.models, ""] } : g,
++      ),
++    );
++  }
++
++  function removeModelFromGroup(groupId: string, modelIndex: number) {
++    setModelGroups((prev) =>
++      prev.map((g) =>
++        g.id === groupId
++          ? { ...g, models: g.models.filter((_, i) => i !== modelIndex) }
++          : g,
++      ),
++    );
++  }
++
++  function updateModelInGroup(groupId: string, modelIndex: number, value: string) {
++    setModelGroups((prev) =>
++      prev.map((g) =>
++        g.id === groupId
++          ? { ...g, models: g.models.map((m, i) => (i === modelIndex ? value : m)) }
++          : g,
++      ),
++    );
++  }
++
++  async function handleTestConnection(group: ModelGroup) {
++    const model = group.models[0];
++    if (!group.baseUrl || !model) return;
++    setTestStatuses((prev) => ({ ...prev, [group.id]: { state: "testing" } }));
++    try {
++      const result = await evalTestConnection(
++        group.baseUrl,
++        group.isGateway ? undefined : group.apiKey,
++        model,
++      );
++      setTestStatuses((prev) => ({
++        ...prev,
++        [group.id]: {
++          state: result.success ? "success" : "fail",
++          message: result.message,
++        },
++      }));
++    } catch (error: unknown) {
++      setTestStatuses((prev) => ({
++        ...prev,
++        [group.id]: { state: "fail", message: String(error) },
++      }));
++    }
++  }
++
++  const handleMoveGroup = useCallback((fromIdx: number, toIdx: number) => {
++    setModelGroups((prev) => {
++      const copy = [...prev];
++      const [moved] = copy.splice(fromIdx, 1);
++      copy.splice(toIdx, 0, moved);
++      return copy;
++    });
++  }, []);
++
++  function handleMoveModel(groupId: string, fromIdx: number, toIdx: number) {
++    setModelGroups((prev) =>
++      prev.map((g) => {
++        if (g.id !== groupId) return g;
++        const copy = [...g.models];
++        const [moved] = copy.splice(fromIdx, 1);
++        copy.splice(toIdx, 0, moved);
++        return { ...g, models: copy };
++      }),
++    );
++  }
++
++  function toggleGroupExpanded(id: string) {
++    setExpandedGroups((prev) => {
++      const next = new Set(prev);
++      if (next.has(id)) next.delete(id);
++      else next.add(id);
++      return next;
++    });
++  }
++
+   async function handleInstallVscodeExtension() {
+     if (!skillsDir.trim()) {
+       const message = formatStatusError("skills dir is required", t);
+@@ -258,8 +348,12 @@ export default function SettingsPage({
+       <section className="chart-card settings-card">
+         <h2 className="chart-title">{t("onboard.step3.skillsDir")}</h2>
+         <p className="settings-help">{t("onboard.step1.desc")}</p>
++        <label className="field-label" htmlFor="settings-skills-dir-input">
++          {t("onboard.step3.skillsDir")}
++        </label>
+         <div className="settings-row">
+           <input
++            id="settings-skills-dir-input"
+             className="field-input settings-path-input"
+             value={skillsDir}
+             onChange={(e) => setSkillsDir(e.target.value)}
+@@ -445,82 +539,238 @@ export default function SettingsPage({
+       <section className="chart-card settings-card">
+         <h2 className="chart-title">{t("settings.evalConfig.title")}</h2>
+         <p className="settings-help">{t("settings.evalConfig.help")}</p>
+-        <div className="field">
+-          <label className="field-label">{t("settings.evalConfig.apiKey")}</label>
+-          <input
+-            className="field-input"
+-            type="password"
+-            value={apiConfig.apiKey}
+-            onChange={(e) =>
+-              setApiConfig((prev) => ({
+-                ...prev,
+-                apiKey: e.target.value,
+-              }))
+-            }
+-            placeholder="sk-..."
+-            autoComplete="off"
+-            disabled={busy || apiBusy}
+-          />
+-        </div>
+-        <div className="field">
+-          <label className="field-label">{t("settings.evalConfig.baseUrl")}</label>
+-          <input
+-            className="field-input"
+-            value={apiConfig.baseUrl ?? ""}
+-            onChange={(e) =>
+-              setApiConfig((prev) => ({
+-                ...prev,
+-                baseUrl: e.target.value,
+-              }))
+-            }
+-            placeholder="https://api.openai.com/v1"
+-            autoComplete="off"
+-            disabled={busy || apiBusy}
+-          />
+-        </div>
+-        <div className="field">
+-          <label className="field-label">{t("settings.evalConfig.sampleModel")}</label>
+-          <input
+-            className="field-input"
+-            value={apiConfig.sampleModel}
+-            onChange={(e) =>
+-              setApiConfig((prev) => ({
+-                ...prev,
+-                sampleModel: e.target.value,
+-              }))
+-            }
+-            placeholder="gpt-4o-mini"
+-            autoComplete="off"
+-            disabled={busy || apiBusy}
+-          />
+-        </div>
+-        <div className="field">
+-          <label className="field-label">{t("settings.evalConfig.runModel")}</label>
+-          <input
+-            className="field-input"
+-            value={apiConfig.runModel}
+-            onChange={(e) =>
+-              setApiConfig((prev) => ({
++
++        {modelGroups.map((group, groupIdx) => {
++          const ts = testStatuses[group.id] ?? { state: "idle" as const };
++          const isExpanded = expandedGroups.has(group.id);
++          return (
++            <div
++              key={group.id}
++              className={`settings-model-group-card${isExpanded ? " is-expanded" : ""}`}
++              draggable
++              onDragStart={(e) => {
++                if (dragHandleActive.current !== `group:${groupIdx}`) {
++                  e.preventDefault();
++                  return;
++                }
++                e.dataTransfer.setData("groupIdx", String(groupIdx));
++                e.dataTransfer.effectAllowed = "move";
++              }}
++              onDragEnd={() => { dragHandleActive.current = null; }}
++              onDragOver={(e) => e.preventDefault()}
++              onDrop={(e) => {
++                const from = parseInt(e.dataTransfer.getData("groupIdx"), 10);
++                if (!isNaN(from) && from !== groupIdx) handleMoveGroup(from, groupIdx);
++              }}
++            >
++              <button
++                type="button"
++                className="settings-model-group-header"
++                onClick={() => toggleGroupExpanded(group.id)}
++              >
++                <span
++                  className="settings-model-group-drag-handle"
++                  title="Drag"
++                  onClick={(e) => e.stopPropagation()}
++                  onMouseDown={() => { dragHandleActive.current = `group:${groupIdx}`; }}
++                  onMouseUp={() => { dragHandleActive.current = null; }}
++                >☰</span>
++                <span className="settings-model-group-header-name">{group.name || `模型组 ${groupIdx + 1}`}</span>
++                <span className="settings-model-group-header-meta">
++                  {group.models.length > 0 && (
++                    <span className="settings-model-group-model-count">{group.models.length} models</span>
++                  )}
++                  {ts.state === "success" && <span className="settings-model-group-badge-ok">✓</span>}
++                  {ts.state === "fail" && <span className="settings-model-group-badge-fail">✗</span>}
++                  {ts.state === "testing" && <span className="settings-model-group-badge-testing">…</span>}
++                </span>
++                <span className={`settings-model-group-chevron${isExpanded ? " is-open" : ""}`}>▶</span>
++              </button>
++
++              {isExpanded && (
++                <>
++                  <div className="settings-model-group-expanded-toolbar">
++                    <input
++                      className="field-input settings-model-group-name-input"
++                      value={group.name}
++                      onChange={(e) => updateGroup(group.id, { name: e.target.value })}
++                      placeholder={t("settings.modelGroup.groupName" as MessageKey)}
++                      disabled={busy || apiBusy}
++                      onClick={(e) => e.stopPropagation()}
++                      draggable={false}
++                    />
++                    <button
++                      type="button"
++                      className="btn btn-ghost settings-model-group-remove-btn"
++                      onClick={() => setModelGroups((prev) => prev.filter((g) => g.id !== group.id))}
++                      disabled={busy || apiBusy}
++                    >
++                      {t("settings.modelGroup.removeGroup" as MessageKey)}
++                    </button>
++                  </div>
++
++                  <div className="settings-model-group-fields">
++                    <div className="field">
++                      <label className="field-label">{t("settings.modelGroup.url" as MessageKey)}</label>
++                      <input
++                        className="field-input"
++                        value={group.baseUrl}
++                        onChange={(e) => updateGroup(group.id, { baseUrl: e.target.value })}
++                        placeholder="https://api.openai.com/v1"
++                        disabled={busy || apiBusy}
++                        draggable={false}
++                      />
++                    </div>
++                    <div className="field">
++                      <label className="field-label">
++                        {t("settings.modelGroup.apiKey" as MessageKey)}
++                        <label className="settings-model-group-gateway-toggle">
++                          <input
++                            type="checkbox"
++                            checked={group.isGateway}
++                            onChange={(e) => updateGroup(group.id, { isGateway: e.target.checked })}
++                            disabled={busy || apiBusy}
++                          />
++                          <span>{t("settings.modelGroup.gateway" as MessageKey)}</span>
++                        </label>
++                      </label>
++                      {!group.isGateway && (
++                        <input
++                          className="field-input"
++                          type="password"
++                          value={group.apiKey}
++                          onChange={(e) => updateGroup(group.id, { apiKey: e.target.value })}
++                          placeholder="sk-..."
++                          autoComplete="off"
++                          disabled={busy || apiBusy}
++                          draggable={false}
++                        />
++                      )}
++                    </div>
++
++                    <div className="field">
++                      <label className="field-label">
++                        Models
++                        <button
++                          type="button"
++                          className="btn btn-ghost settings-model-group-add-model-btn"
++                          onClick={() => addModelToGroup(group.id)}
++                          disabled={busy || apiBusy}
++                        >
++                          + {t("settings.modelGroup.addModel" as MessageKey)}
++                        </button>
++                      </label>
++                      {group.models.length === 0 && (
++                        <p className="settings-help">{t("settings.modelGroup.emptyModels" as MessageKey)}</p>
++                      )}
++                      {group.models.map((model, mi) => (
++                        <div
++                          key={mi}
++                          className="settings-model-group-model-row"
++                          draggable
++                          onDragStart={(e) => {
++                            if (dragHandleActive.current !== `model:${group.id}:${mi}`) {
++                              e.preventDefault();
++                              return;
++                            }
++                            e.stopPropagation();
++                            e.dataTransfer.setData("modelDrag", JSON.stringify({ groupId: group.id, idx: mi }));
++                            e.dataTransfer.effectAllowed = "move";
++                          }}
++                          onDragEnd={() => { dragHandleActive.current = null; }}
++                          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
++                          onDrop={(e) => {
++                            e.stopPropagation();
++                            try {
++                              const data = JSON.parse(e.dataTransfer.getData("modelDrag"));
++                              if (data.groupId === group.id && data.idx !== mi) {
++                                handleMoveModel(group.id, data.idx, mi);
++                              }
++                            } catch { /* group-level drop */ }
++                          }}
++                        >
++                          <span
++                            className="settings-model-group-model-drag"
++                            title="Drag"
++                            onMouseDown={() => { dragHandleActive.current = `model:${group.id}:${mi}`; }}
++                            onMouseUp={() => { dragHandleActive.current = null; }}
++                          >≡</span>
++                          <input
++                            className="field-input"
++                            value={model}
++                            onChange={(e) => updateModelInGroup(group.id, mi, e.target.value)}
++                            placeholder={t("settings.modelGroup.modelPlaceholder" as MessageKey)}
++                            disabled={busy || apiBusy}
++                            draggable={false}
++                          />
++                          <button
++                            type="button"
++                            className="btn btn-ghost"
++                            onClick={() => removeModelFromGroup(group.id, mi)}
++                            disabled={busy || apiBusy}
++                          >
++                            {t("settings.modelGroup.removeModel" as MessageKey)}
++                          </button>
++                        </div>
++                      ))}
++                    </div>
++                  </div>
++
++                  <div className="settings-model-group-footer">
++                    <button
++                      type="button"
++                      className="btn btn-ghost"
++                      onClick={() => void handleTestConnection(group)}
++                      disabled={busy || apiBusy || ts.state === "testing" || !group.baseUrl || group.models.length === 0}
++                    >
++                      {ts.state === "testing"
++                        ? t("settings.modelGroup.testing" as MessageKey)
++                        : t("settings.modelGroup.testConnection" as MessageKey)}
++                    </button>
++                    {ts.state === "success" && (
++                      <span className="settings-model-group-test-ok">{t("settings.modelGroup.testSuccess" as MessageKey)}</span>
++                    )}
++                    {ts.state === "fail" && (
++                      <span className="settings-model-group-test-fail" title={ts.message}>
++                        {t("settings.modelGroup.testFailed" as MessageKey)}: {ts.message?.slice(0, 80)}
++                      </span>
++                    )}
++                  </div>
++                </>
++              )}
++            </div>
++          );
++        })}
++
++        <div className="settings-row">
++          <button
++            type="button"
++            className="btn btn-ghost"
++            onClick={() =>
++              setModelGroups((prev) => [
+                 ...prev,
+-                runModel: e.target.value,
+-              }))
++                {
++                  id: makeGroupId(),
++                  name: `模型组 ${prev.length + 1}`,
++                  baseUrl: "",
++                  apiKey: "",
++                  isGateway: false,
++                  models: [],
++                },
++              ])
+             }
+-            placeholder="gpt-4o-mini"
+-            autoComplete="off"
+             disabled={busy || apiBusy}
+-          />
++          >
++            + {t("settings.modelGroup.addGroup" as MessageKey)}
++          </button>
+         </div>
++
+         <div className="field">
+           <label className="field-label">{t("settings.evalConfig.costCurrency")}</label>
+           <select
+             className="filter-select settings-eval-currency-select"
+-            value={apiConfig.costCurrency}
+-            onChange={(e) =>
+-              setApiConfig((prev) => ({
+-                ...prev,
+-                costCurrency: normalizeCostCurrency(e.target.value),
+-              }))
+-            }
++            value={costCurrency}
++            onChange={(e) => setCostCurrency(normalizeCostCurrency(e.target.value))}
+             disabled={busy || apiBusy}
+           >
+             <option value="USD">{t("settings.evalConfig.costCurrency.usd")}</option>
+@@ -528,6 +778,7 @@ export default function SettingsPage({
+           </select>
+           <p className="settings-help">{t("settings.evalConfig.costCurrency.help")}</p>
+         </div>
++
+         <div className="settings-row">
+           <button
+             type="button"
+diff --git a/src/pages/SkillsPage.tsx b/src/pages/SkillsPage.tsx
+index 624cba8..f896b1e 100644
+--- a/src/pages/SkillsPage.tsx
++++ b/src/pages/SkillsPage.tsx
+@@ -1,4 +1,4 @@
+-import { useCallback, useEffect, useMemo, useState } from "react";
++import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+ 
+ import {
+   evalListHistory,
+@@ -14,6 +14,7 @@ import {
+ import SkillCard from "../components/SkillCard";
+ import SkillEditor from "../components/SkillEditor";
+ import { IconRefresh, IconSearch } from "../components/icons";
++import useDialogA11y from "../components/useDialogA11y";
+ import {
+   compareSkillNamesByMode,
+   type SkillInsightWindow,
+@@ -41,6 +42,8 @@ type GroupedSkills = {
+   skills: SkillMeta[];
+ };
+ 
++const INSIGHT_WINDOWS: SkillInsightWindow[] = [7, 30, 90];
++
+ export default function SkillsPage({ skills, onRefresh }: Props) {
+   const { t, locale } = useI18n();
+   const preferChineseTaxonomy = locale.toLowerCase().startsWith("zh");
+@@ -55,12 +58,13 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
+   const [insights, setInsights] = useState<SkillInsight[]>([]);
+   const [insightsLoading, setInsightsLoading] = useState(false);
+   const [insightWindow, setInsightWindow] = useState<7 | 30 | 90>(30);
+-  const [sortMode, setSortMode] = useState<"name" | "usage" | "eval">("eval");
++  const [sortMode, setSortMode] = useState<"name" | "usage" | "eval">("name");
+   const [detailSkillName, setDetailSkillName] = useState<string | null>(null);
+   const [detailLogs, setDetailLogs] = useState<LogEntry[]>([]);
+   const [detailEvalHistory, setDetailEvalHistory] = useState<EvalHistoryEntry[]>([]);
+   const [detailLoading, setDetailLoading] = useState(false);
+   const [detailStatus, setDetailStatus] = useState("");
++  const detailCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+ 
+   const controller = useSkillsPageController({ onRefresh, t });
+ 
+@@ -258,6 +262,12 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
+     setDetailLoading(false);
+   }
+ 
++  const { dialogRef: detailDialogRef } = useDialogA11y({
++    open: Boolean(detailSkillName),
++    onClose: handleCloseInsightDetail,
++    initialFocusRef: detailCloseButtonRef,
++  });
++
+   async function handleDeleteSkill(skill: SkillMeta) {
+     const confirmed = window.confirm(t("skill.delete.confirm", { name: skill.name }));
+     if (!confirmed) return;
+@@ -312,6 +322,24 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
+     }
+   }
+ 
++  const handleInsightWindowKeyDown = useCallback(
++    (event: KeyboardEvent<HTMLButtonElement>, window: SkillInsightWindow) => {
++      const currentIndex = INSIGHT_WINDOWS.indexOf(window);
++      if (currentIndex < 0) return;
++
++      if (event.key === "ArrowRight") {
++        event.preventDefault();
++        const next = INSIGHT_WINDOWS[(currentIndex + 1) % INSIGHT_WINDOWS.length];
++        setInsightWindow(next);
++      } else if (event.key === "ArrowLeft") {
++        event.preventDefault();
++        const next = INSIGHT_WINDOWS[(currentIndex - 1 + INSIGHT_WINDOWS.length) % INSIGHT_WINDOWS.length];
++        setInsightWindow(next);
++      }
++    },
++    [],
++  );
++
+   return (
+     <div className="page animate-fadein skills-page">
+       <header className="page-header skills-page-header page-header-grid">
+@@ -327,12 +355,16 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
+         <div className="skills-header-actions page-header-actions-grid">
+           <div className="skills-actions-row skills-actions-row-primary page-header-actions-row">
+             <div className="skills-insight-window-switch" role="tablist" aria-label={t("skills.insights.window.label")}>
+-              {[7, 30, 90].map((window) => (
++              {INSIGHT_WINDOWS.map((window) => (
+                 <button
+                   key={`insight-window-${window}`}
+                   type="button"
++                  role="tab"
++                  aria-selected={insightWindow === window}
++                  tabIndex={insightWindow === window ? 0 : -1}
+                   className={`btn btn-ghost skills-insight-window-btn ${insightWindow === window ? "active" : ""}`}
+-                  onClick={() => setInsightWindow(window as SkillInsightWindow)}
++                  onClick={() => setInsightWindow(window)}
++                  onKeyDown={(event) => handleInsightWindowKeyDown(event, window)}
+                 >
+                   {t("skills.insights.window.option", { days: window })}
+                 </button>
+@@ -364,6 +396,7 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
+               <IconSearch size={16} />
+               <input
+                 className="search-input"
++                aria-label={t("skills.search")}
+                 placeholder={t("skills.search")}
+                 value={search}
+                 onChange={(e) => setSearch(e.target.value)}
+@@ -496,12 +529,17 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
+       {detailSkillName && (
+         <div
+           className="skills-insight-detail-overlay"
+-          role="dialog"
+-          aria-modal="true"
+-          aria-label={t("skills.insights.detail.title", { skill: detailSkillName })}
+           onClick={handleCloseInsightDetail}
+         >
+-          <article className="skills-insight-detail-panel" onClick={(event) => event.stopPropagation()}>
++          <article
++            ref={detailDialogRef}
++            className="skills-insight-detail-panel"
++            role="dialog"
++            aria-modal="true"
++            aria-label={t("skills.insights.detail.title", { skill: detailSkillName })}
++            tabIndex={-1}
++            onClick={(event) => event.stopPropagation()}
++          >
+             <header className="skills-insight-detail-header">
+               <div>
+                 <h2 className="skills-insight-detail-title">
+@@ -511,7 +549,12 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
+                   {t("skills.insights.detail.subtitle", { days: insightWindow })}
+                 </p>
+               </div>
+-              <button className="btn btn-ghost" onClick={handleCloseInsightDetail}>
++              <button
++                ref={detailCloseButtonRef}
++                type="button"
++                className="btn btn-ghost"
++                onClick={handleCloseInsightDetail}
++              >
+                 {t("skills.insights.detail.close")}
+               </button>
+             </header>
+diff --git a/src/pages/ToolsPage.css b/src/pages/ToolsPage.css
+index 7db9429..b4114ee 100644
+--- a/src/pages/ToolsPage.css
++++ b/src/pages/ToolsPage.css
+@@ -45,13 +45,14 @@
+ }
+ 
+ .tools-header-btn {
+-  min-height: 42px;
++  min-height: 44px;
+ }
+ 
+ .tools-grid {
+   display: grid;
+   gap: var(--sp-lg);
+-  grid-template-columns: repeat(auto-fill, minmax(520px, 1fr));
++  grid-template-columns: repeat(auto-fill, minmax(clamp(300px, 38vw, 420px), 1fr));
++  align-items: stretch;
+ }
+ 
+ .tools-sections {
+@@ -77,8 +78,10 @@
+   border: 1px solid var(--border-card);
+   border-radius: 18px;
+   box-shadow: var(--shadow-card);
+-  display: grid;
++  display: flex;
++  flex-direction: column;
+   gap: var(--sp-sm);
++  height: 100%;
+   padding: var(--sp-md);
+   transition:
+     border-color var(--transition),
+@@ -98,13 +101,13 @@
+ 
+ .tool-card-header {
+   align-items: flex-start;
+-  display: flex;
+-  justify-content: space-between;
++  display: grid;
+   gap: var(--sp-md);
++  grid-template-columns: minmax(0, 1fr) auto;
+ }
+ 
+ .tool-card-identity {
+-  align-items: center;
++  align-items: flex-start;
+   display: flex;
+   gap: var(--sp-md);
+   min-width: 0;
+@@ -152,10 +155,11 @@
+ }
+ 
+ .tool-card-title-row {
+-  align-items: center;
++  align-items: flex-start;
+   display: flex;
+   flex-wrap: wrap;
+   gap: 6px;
++  row-gap: 8px;
+ }
+ 
+ .tool-card-title {
+@@ -172,21 +176,23 @@
+ 
+ .tool-card-toggle-wrap {
+   align-items: center;
+-  display: flex;
++  display: grid;
++  gap: var(--sp-xs);
++  grid-template-columns: minmax(0, 1fr) auto;
+   flex-shrink: 0;
+-  gap: 6px;
+ }
+ 
+ .tool-card-toggles {
+-  display: flex;
+-  flex-wrap: wrap;
+-  gap: 10px;
+-  justify-content: flex-end;
++  display: grid;
++  gap: var(--sp-xs);
++  min-width: 168px;
+ }
+ 
+ .tool-switch-label {
+   color: var(--text-secondary);
+   font-size: 12px;
++  line-height: 1.2;
++  white-space: nowrap;
+   text-align: right;
+ }
+ 
+@@ -224,7 +230,7 @@
+   cursor: pointer;
+   display: inline-flex;
+   flex-shrink: 0;
+-  height: 40px;
++  height: 44px;
+   justify-content: flex-start;
+   padding: 4px;
+   transition: background var(--transition), border-color var(--transition);
+@@ -320,9 +326,9 @@
+   cursor: pointer;
+   display: inline-flex;
+   flex-shrink: 0;
+-  height: 40px;
++  height: 44px;
+   justify-content: center;
+-  width: 40px;
++  width: 44px;
+ }
+ 
+ .tool-path-picker:hover:not(:disabled) {
+@@ -337,48 +343,78 @@
+ }
+ 
+ .tool-card-footer {
+-  align-items: center;
+-  display: flex;
+-  flex-wrap: wrap;
++  border-top: 1px solid var(--border-card);
++  display: grid;
+   gap: var(--sp-sm);
+-  justify-content: space-between;
++  padding-top: var(--sp-sm);
+ }
+ 
+ .tool-card-meta {
+   color: var(--text-secondary);
+-  display: flex;
+-  flex-wrap: wrap;
++  display: grid;
+   font-size: var(--text-sm);
+-  gap: var(--sp-sm);
++  gap: 2px var(--sp-md);
++  grid-template-columns: repeat(2, minmax(0, 1fr));
++}
++
++.tool-card-meta span {
++  min-width: 0;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
+ }
+ 
+ .tool-card-flags {
++  align-content: flex-start;
+   display: flex;
+   flex-wrap: wrap;
+   gap: var(--sp-xs);
++  min-height: 64px;
+ }
+ 
+ .tool-card-actions {
++  align-items: stretch;
+   display: flex;
+   flex-wrap: wrap;
+   gap: var(--sp-sm);
+   justify-content: flex-end;
++  margin-top: auto;
+ }
+ 
+ .tool-card-action-btn {
+-  min-height: 40px;
++  flex: 1 1 140px;
++  height: 44px;
++  min-width: 0;
+ }
+ 
+ .tool-card-health-actions {
+   align-items: center;
+   display: flex;
+-  flex-wrap: wrap;
++  flex-wrap: nowrap;
+   gap: var(--sp-xs);
++  min-height: 44px;
++  min-width: 0;
++}
++
++.tool-card-health-actions.is-placeholder {
++  pointer-events: none;
++  visibility: hidden;
+ }
+ 
+ .tool-card-health-reason {
+   color: var(--text-muted);
+   font-size: var(--text-xs);
++  flex: 1 1 auto;
++  min-width: 0;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.tool-card-health-placeholder {
++  display: block;
++  height: 1px;
++  width: 1px;
+ }
+ 
+ .tools-form-card {
+@@ -394,7 +430,7 @@
+ }
+ 
+ .tools-form-hide-btn {
+-  min-height: 40px;
++  min-height: 44px;
+ }
+ 
+ .tools-form-grid {
+@@ -461,11 +497,21 @@
+ 
+   .tool-card-header {
+     align-items: stretch;
+-    flex-direction: column;
++    grid-template-columns: 1fr;
++  }
++
++  .tool-card-toggles {
++    min-width: 0;
++    width: 100%;
++  }
++
++  .tool-card-toggle-wrap {
++    grid-template-columns: auto auto;
++    justify-content: space-between;
+   }
+ 
+   .tool-switch {
+-    align-self: flex-end;
++    justify-self: end;
+   }
+ 
+   .tool-path-row {
+@@ -480,4 +526,29 @@
+   .tool-card-actions {
+     justify-content: flex-start;
+   }
++
++  .tool-card-action-btn {
++    flex-basis: 100%;
++  }
++
++  .tool-card-meta {
++    grid-template-columns: 1fr;
++  }
++
++  .tool-card-flags {
++    min-height: 0;
++  }
++
++  .tool-card-health-actions {
++    flex-wrap: wrap;
++    min-height: 0;
++  }
++
++  .tool-card-health-actions.is-placeholder {
++    display: none;
++  }
++
++  .tool-card-health-reason {
++    white-space: normal;
++  }
+ }
+diff --git a/src/pages/skills/SkillConflictDrawer.tsx b/src/pages/skills/SkillConflictDrawer.tsx
+index f31109c..78b6073 100644
+--- a/src/pages/skills/SkillConflictDrawer.tsx
++++ b/src/pages/skills/SkillConflictDrawer.tsx
+@@ -1,4 +1,6 @@
++import { useRef } from "react";
+ import type { SkillConflictDetail } from "../../api/tauri";
++import useDialogA11y from "../../components/useDialogA11y";
+ import { IconClose } from "../../components/icons";
+ import type { MessageKey } from "../../i18n/messages";
+ import { useConflictDiffView } from "./useConflictDiffView";
+@@ -45,6 +47,12 @@ export default function SkillConflictDrawer({
+   onResolveConflict,
+ }: Props) {
+   const { baseline, hiddenMatchedCount, conflicts, computingDiff } = useConflictDiffView(conflictDetail);
++  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
++  const { dialogRef } = useDialogA11y({
++    open: Boolean(activeConflictSkill),
++    onClose,
++    initialFocusRef: closeButtonRef,
++  });
+ 
+   if (!activeConflictSkill) {
+     return null;
+@@ -53,10 +61,12 @@ export default function SkillConflictDrawer({
+   return (
+     <div className="skills-conflict-overlay" onClick={onClose}>
+       <aside
++        ref={dialogRef}
+         className="skills-conflict-drawer"
+         role="dialog"
+         aria-modal="true"
+         aria-label={t("skills.conflict.drawer.aria", { skill: activeConflictSkill })}
++        tabIndex={-1}
+         onClick={(e) => e.stopPropagation()}
+       >
+         <header className="skills-conflict-header">
+@@ -66,6 +76,7 @@ export default function SkillConflictDrawer({
+           <div className="skills-conflict-actions">
+             <span className="skills-conflict-status">{conflictStatus}</span>
+             <button
++              ref={closeButtonRef}
+               type="button"
+               className="btn btn-ghost"
+               onClick={onClose}
+diff --git a/src/pages/tools/ToolCard.tsx b/src/pages/tools/ToolCard.tsx
+index 8409b44..dbc913c 100644
+--- a/src/pages/tools/ToolCard.tsx
++++ b/src/pages/tools/ToolCard.tsx
+@@ -245,27 +245,31 @@ export default function ToolCard({
+         </div>
+       </footer>
+ 
+-      {healthNeedsFix && (
+-        <div className="tool-card-health-actions">
+-          <button
+-            type="button"
+-            className="btn btn-ghost tool-card-action-btn"
+-            onClick={onManualSync}
+-            disabled={busy || syncingCurrentTool}
+-          >
+-            {t("tools.routerHealth.reapply")}
+-          </button>
+-          <button
+-            type="button"
+-            className="btn btn-ghost tool-card-action-btn"
+-            onClick={() => setPathsOpen(true)}
+-            disabled={busy || savingCurrentTool}
+-          >
+-            {t("tools.routerHealth.openPath")}
+-          </button>
+-          <span className="tool-card-health-reason">{routerHealth.reason}</span>
+-        </div>
+-      )}
++      <div className={`tool-card-health-actions ${healthNeedsFix ? "" : "is-placeholder"}`.trim()} aria-hidden={!healthNeedsFix}>
++        {healthNeedsFix ? (
++          <>
++            <button
++              type="button"
++              className="btn btn-ghost tool-card-action-btn"
++              onClick={onManualSync}
++              disabled={busy || syncingCurrentTool}
++            >
++              {t("tools.routerHealth.reapply")}
++            </button>
++            <button
++              type="button"
++              className="btn btn-ghost tool-card-action-btn"
++              onClick={() => setPathsOpen(true)}
++              disabled={busy || savingCurrentTool}
++            >
++              {t("tools.routerHealth.openPath")}
++            </button>
++            <span className="tool-card-health-reason">{routerHealth.reason}</span>
++          </>
++        ) : (
++          <span className="tool-card-health-placeholder" />
++        )}
++      </div>
+ 
+       <div className="tool-card-actions">
+         {installed && (
+diff --git a/src/styles/primitives.css b/src/styles/primitives.css
+index c713d43..1c52530 100644
+--- a/src/styles/primitives.css
++++ b/src/styles/primitives.css
+@@ -49,7 +49,7 @@
+ 
+ .page-title {
+   color: var(--text-primary);
+-  font-size: var(--text-xl);
++  font-size: var(--type-display);
+   font-weight: 700;
+   margin: 0;
+ }
+diff --git a/src/styles/tokens.css b/src/styles/tokens.css
+index fc66068..a4ff2b4 100644
+--- a/src/styles/tokens.css
++++ b/src/styles/tokens.css
+@@ -15,18 +15,18 @@
+   --border-active: #4f7df0;
+   --text-primary: #172239;
+   --text-secondary: #42506b;
+-  --text-muted: #66738c;
++  --text-muted: #5b6880;
+   --accent: #3f7cff;
+   --accent-hover: #356fe2;
+   --accent-light: rgba(63, 124, 255, 0.14);
+   --accent-strong: #2d66d3;
+   --accent-contrast: #ffffff;
+-  --success: #1fa870;
+-  --success-bg: rgba(31, 168, 112, 0.14);
+-  --warning: #d98a28;
+-  --warning-bg: rgba(217, 138, 40, 0.15);
+-  --danger: #df5d70;
+-  --danger-bg: rgba(223, 93, 112, 0.14);
++  --success: #0f7250;
++  --success-bg: rgba(15, 114, 80, 0.1);
++  --warning: #8c5a00;
++  --warning-bg: rgba(140, 90, 0, 0.1);
++  --danger: #b23a4d;
++  --danger-bg: rgba(178, 58, 77, 0.1);
+   --focus-ring: 0 0 0 3px rgba(63, 124, 255, 0.28);
+ 
+   /* Decorative tones */
+@@ -87,6 +87,7 @@
+   --text-md: 1rem;
+   --text-lg: 1.125rem;
+   --text-xl: clamp(1.35rem, 1.08rem + 0.84vw, 1.5rem);
++  --type-display: clamp(1.48rem, 1.1rem + 1.12vw, 1.78rem);
+ 
+   /* Spacing scale */
+   --sp-2xs: 2px;
+@@ -97,6 +98,7 @@
+   --sp-xl: 24px;
+   --sp-2xl: 32px;
+   --sp-3xl: 40px;
++  --card-rhythm-gap: clamp(14px, 1.2vw, 20px);
+ 
+   /* Radius */
+   --radius-sm: 8px;
+@@ -110,7 +112,7 @@
+   --shadow-drawer: -20px 0 44px rgba(23, 34, 57, 0.24);
+ 
+   /* Layout */
+-  --control-height: 40px;
++  --control-height: 44px;
+   --control-height-compact: 32px;
+   --control-height-touch: 44px;
+   --status-bar-height: 52px;
+@@ -127,10 +129,12 @@
+   --filter-min-width-sm: 130px;
+   --filter-min-width-md: 170px;
+   --capsule-option-min-width: 52px;
+-  --drawer-min-width: 540px;
++  --drawer-min-width: clamp(320px, 72vw, 420px);
+   --editor-meta-textarea-min-height: 88px;
+   --editor-pane-min-height: 320px;
+   --rules-editor-min-height: 400px;
++  --chart-height-tall: clamp(300px, 36vw, 380px);
++  --chart-height-medium: clamp(272px, 32vw, 344px);
+ 
+   /* Motion */
+   --transition-fast: 0.15s ease;

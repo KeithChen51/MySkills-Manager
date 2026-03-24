@@ -60,7 +60,7 @@ test("trigger eval engine validates trigger dataset schema before running", () =
 });
 
 test("Rust eval backend exposes run_eval_pipeline command", () => {
-  const source = read("src-tauri/src/evals.rs");
+  const source = read("src-tauri/src/evals/mod.rs");
   assert.ok(
     source.includes("pub async fn run_eval_pipeline"),
     "evals.rs should expose run_eval_pipeline command",
@@ -78,7 +78,7 @@ test("quick mode skips functional execution and hides functional visualization",
     "quick mode should hide functional chart and table",
   );
 
-  const backend = read("src-tauri/src/evals.rs");
+  const backend = read("src-tauri/src/evals/mod.rs");
   assert.ok(
     backend.includes("skipped_functional_output("),
     "backend should generate skipped functional placeholder for quick mode",
@@ -313,7 +313,7 @@ test("Eval flow uses step color blocks and does not mark step 3 done before repo
 });
 
 test("Rust eval backend uses adaptive timeout instead of fixed 300s cap", () => {
-  const source = read("src-tauri/src/evals.rs");
+  const source = read("src-tauri/src/evals/mod.rs");
   assert.ok(
     source.includes("timeout_secs_for_case_count"),
     "eval backend should compute timeout based on dataset size",

@@ -147,7 +147,7 @@ export default function LogsPage({ skills }: Props) {
                   <td>{formatLogTimestamp(log.ts, locale)}</td>
                   <td>{log.skill}</td>
                   <td>{log.tool}</td>
-                  <td className="cwd-cell">{log.cwd}</td>
+                  <td className="cwd-cell" title={log.cwd}>{log.cwd}</td>
                 </tr>
               ))
             )}

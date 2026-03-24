@@ -1,5 +1,11 @@
 .kpi {
-  background: var(--bg-card);
+  background:
+    linear-gradient(
+      165deg,
+      color-mix(in srgb, var(--bg-card) 84%, var(--prism-aqua-bg) 16%) 0%,
+      var(--bg-card) 68%
+    ),
+    var(--bg-card);
   border: 1px solid var(--border-card);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-card);
@@ -18,15 +24,17 @@
 
 .kpi-label {
   color: var(--text-secondary);
-  font-size: var(--text-xs);
+  font-size: var(--typo-meta-size);
   font-weight: 600;
+  line-height: var(--typo-meta-line);
 }
 
 .kpi-dimension {
   color: var(--text-secondary);
-  font-size: 0.72rem;
+  font-size: var(--typo-meta-size);
   font-weight: 600;
   letter-spacing: 0.01em;
+  line-height: var(--typo-meta-line);
 }
 
 .kpi-help-icon {
@@ -37,7 +45,7 @@
   color: var(--text-secondary);
   cursor: help;
   display: inline-flex;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 700;
   height: 1.2rem;
   justify-content: center;
@@ -49,7 +57,24 @@
 .kpi-value {
   color: var(--text-primary);
   font-family: var(--font-heading);
-  font-size: clamp(1.4rem, 1rem + 1.5vw, 2rem);
+  font-size: clamp(1.36rem, 1rem + 1.24vw, 1.92rem);
   font-weight: 700;
   line-height: 1;
+  letter-spacing: 0.006em;
+}
+
+.kpi-value.default {
+  color: var(--text-primary);
+}
+
+.kpi-value.positive {
+  color: var(--success);
+}
+
+.kpi-value.negative {
+  color: var(--danger);
+}
+
+.kpi-value.neutral {
+  color: var(--text-secondary);
 }

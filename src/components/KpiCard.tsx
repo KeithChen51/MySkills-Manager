@@ -1,13 +1,22 @@
+import type { ReactNode } from "react";
+
 import "./KpiCard.css";
 
 type Props = {
     label: string;
-    value: string | number;
+    value: ReactNode;
     dimension?: string;
     description?: string;
+    valueTone?: "default" | "positive" | "negative" | "neutral";
 };
 
-export default function KpiCard({ label, value, dimension, description }: Props) {
+export default function KpiCard({
+    label,
+    value,
+    dimension,
+    description,
+    valueTone = "default",
+}: Props) {
     const tooltip = [dimension, description].filter(Boolean).join(" - ");
 
     return (
@@ -26,7 +35,7 @@ export default function KpiCard({ label, value, dimension, description }: Props)
                 )}
             </div>
             {dimension && <span className="kpi-dimension">{dimension}</span>}
-            <strong className="kpi-value">{value}</strong>
+            <strong className={`kpi-value ${valueTone}`}>{value}</strong>
         </div>
     );
 }

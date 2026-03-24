@@ -43,7 +43,7 @@
 }
 
 .cwd-cell {
-  max-width: 420px;
+  max-width: clamp(220px, 36vw, 360px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
