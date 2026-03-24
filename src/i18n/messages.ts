@@ -649,6 +649,9 @@ const enMessages = {
     "One-click sample generation uses the sample model selected in this step.",
   "eval.config.runModel": "Run Model",
   "eval.config.runModelHint": "Model for executing evaluation test cases.",
+  "eval.config.modelGroupSource": "Linked Model Group: {group}",
+  "eval.config.modelGroupMissing":
+    "This model is not listed in any model group. It will use the current fallback connection settings.",
   "eval.config.maxParallelArms": "Parallel Arms",
   "eval.config.triggerMaxWorkers": "Trigger Worker Threads",
   "eval.config.functionalMaxWorkers": "Functional Worker Threads",
@@ -1678,6 +1681,8 @@ const zhMessages: Partial<Record<MessageKey, string>> = {
   "eval.config.generationModelHint": "一键生成样例将使用本步骤选择的模型。",
   "eval.config.runModel": "运行模型",
   "eval.config.runModelHint": "用于执行评测用例的模型。",
+  "eval.config.modelGroupSource": "关联模型组：{group}",
+  "eval.config.modelGroupMissing": "该模型未在任何模型组中定义，将使用当前回退连接配置。",
   "eval.config.maxParallelArms": "并行任务臂数",
   "eval.config.triggerMaxWorkers": "触发评测线程数",
   "eval.config.functionalMaxWorkers": "功能评测线程数",

@@ -153,16 +153,36 @@ function deriveLegacyConfigFromGroups(
   groups: ModelGroup[],
   fallback: EvalConfig,
 ): Pick<EvalConfig, "apiKey" | "baseUrl" | "sampleModel" | "runModel"> {
-  const primary = groups.find((group) => group.models.length > 0) ?? groups[0];
-  const primaryModel = primary?.models[0]?.trim() || "";
+  const normalizedGroups = groups.map((group) => ({
+    ...group,
+    models: group.models.map((model) => model.trim()).filter(Boolean),
+  }));
+  const pickModel = (preferred: string): string => {
+    const normalized = preferred.trim();
+    if (normalized) {
+      const matched = normalizedGroups.some((group) => group.models.includes(normalized));
+      if (matched) {
+        return normalized;
+      }
+    }
+    return normalizedGroups.find((group) => group.models.length > 0)?.models[0] || "";
+  };
+
   const fallbackSample = fallback.sampleModel.trim();
   const fallbackRun = fallback.runModel.trim();
-  const model = primaryModel || fallbackRun || fallbackSample || "gpt-4o-mini";
+  const sampleModel = pickModel(fallbackSample) || fallbackSample || "gpt-4o-mini";
+  const runModel = pickModel(fallbackRun) || sampleModel;
+  const primary =
+    normalizedGroups.find((group) => group.models.includes(runModel)) ??
+    normalizedGroups.find((group) => group.models.includes(sampleModel)) ??
+    normalizedGroups.find((group) => group.models.length > 0) ??
+    normalizedGroups[0];
+
   return {
     apiKey: primary ? (primary.isGateway ? "" : primary.apiKey.trim()) : fallback.apiKey.trim(),
     baseUrl: primary?.baseUrl.trim() || fallback.baseUrl?.trim() || undefined,
-    sampleModel: model,
-    runModel: model,
+    sampleModel,
+    runModel,
   };
 }
 

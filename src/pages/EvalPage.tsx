@@ -25,6 +25,7 @@ import {
   evalGetStoragePaths,
   evalListHistory,
   evalLoadHistory,
+  evalSaveConfig,
   evalSaveDataset,
   onboardingGetState,
   runEvalPipeline,
@@ -36,6 +37,7 @@ import {
   type EvalPipelineProgressEvent,
   type EvalSampleGenerationTimingEntry,
   type EvalStoragePaths,
+  type ModelGroup,
   type SkillMeta,
 } from "../api/tauri";
 import KpiCard from "../components/KpiCard";
@@ -95,6 +97,12 @@ type TriggerBucketKey =
   | "negative_trigger"
   | "boundary_ambiguous"
   | "adjacent_skill_confusion";
+
+type ModelCatalogItem = {
+  model: string;
+  groupId: string;
+  groupName: string;
+};
 
 type EvalView = "setup" | "running" | "review" | "result";
 
@@ -175,9 +183,47 @@ const TRIGGER_BUCKET_OPTIONS: Array<{ key: TriggerBucketKey; labelKey: string }>
 ];
 const DEFAULT_TRIGGER_SAMPLE_COUNT = TRIGGER_BUCKET_OPTIONS.length * TRIGGER_BUCKET_MIN_SAMPLES;
 const BASE_SAMPLE_GENERATION_OVERHEAD_SECONDS = 4;
+const EVAL_MODEL_DATALIST_ID = "eval-model-catalog";
 
 function normalizeModelKey(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function buildModelCatalog(groups: ModelGroup[] | undefined): ModelCatalogItem[] {
+  const out: ModelCatalogItem[] = [];
+  const seen = new Set<string>();
+  for (const group of groups ?? []) {
+    const groupId = group.id?.trim() || "";
+    const groupName = group.name?.trim() || groupId || "Group";
+    for (const rawModel of group.models ?? []) {
+      const model = rawModel.trim();
+      if (!model) continue;
+      const key = model.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ model, groupId, groupName });
+    }
+  }
+  return out;
+}
+
+function findModelCatalogItem(catalog: ModelCatalogItem[], value: string): ModelCatalogItem | null {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  return catalog.find((item) => item.model.toLowerCase() === normalized) ?? null;
+}
+
+function findModelGroupByModel(groups: ModelGroup[], value: string): ModelGroup | null {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  return (
+    groups.find((group) => (group.models ?? []).some((item) => item.trim().toLowerCase() === normalized)) ??
+    null
+  );
 }
 
 function estimateModelSpeedSecondsPerCase(model: string): number {
@@ -496,6 +542,7 @@ export default function EvalPage({ skills }: Props) {
   const [evalMode, setEvalMode] = useState<EvalMode>("full");
   const [sampleModel, setSampleModel] = useState("gpt-4o-mini");
   const [model, setModel] = useState("gpt-4o-mini");
+  const [evalModelGroups, setEvalModelGroups] = useState<ModelGroup[]>([]);
   const [maxParallelArmsInput, setMaxParallelArmsInput] = useState("2");
   const [triggerMaxWorkersInput, setTriggerMaxWorkersInput] = useState("6");
   const [functionalMaxWorkersInput, setFunctionalMaxWorkersInput] = useState("3");
@@ -584,6 +631,15 @@ export default function EvalPage({ skills }: Props) {
   const selectedSkillMeta = useMemo(
     () => skills.find((item) => item.name === selectedSkill),
     [skills, selectedSkill],
+  );
+  const modelCatalog = useMemo(() => buildModelCatalog(evalModelGroups), [evalModelGroups]);
+  const sampleModelCatalogItem = useMemo(
+    () => findModelCatalogItem(modelCatalog, sampleModel),
+    [modelCatalog, sampleModel],
+  );
+  const runModelCatalogItem = useMemo(
+    () => findModelCatalogItem(modelCatalog, model),
+    [modelCatalog, model],
   );
   const selectedModulesForRun = useMemo<EvalModuleKey[]>(
     () => (evalMode === "quick" ? [] : selectedModules),
@@ -677,11 +733,60 @@ export default function EvalPage({ skills }: Props) {
     }
   }, []);
 
+  const syncEvalConnectionForSelectedModels = useCallback(async () => {
+    const runModelTrimmed = model.trim();
+    const sampleModelTrimmed = sampleModel.trim();
+    if (!runModelTrimmed && !sampleModelTrimmed) {
+      return;
+    }
+
+    const config = await evalGetConfig();
+    const groups = config.modelGroups ?? [];
+    const selectedGroup =
+      findModelGroupByModel(groups, runModelTrimmed) ??
+      findModelGroupByModel(groups, sampleModelTrimmed);
+
+    const nextSampleModel = sampleModelTrimmed || config.sampleModel;
+    const nextRunModel = runModelTrimmed || config.runModel;
+
+    let changed = false;
+    const nextConfig = {
+      ...config,
+      sampleModel: nextSampleModel,
+      runModel: nextRunModel,
+    };
+    if (nextSampleModel !== config.sampleModel || nextRunModel !== config.runModel) {
+      changed = true;
+    }
+
+    if (selectedGroup) {
+      const nextBaseUrl = selectedGroup.baseUrl.trim();
+      const currentBaseUrl = (config.baseUrl ?? "").trim();
+      if (nextBaseUrl && currentBaseUrl !== nextBaseUrl) {
+        nextConfig.baseUrl = nextBaseUrl;
+        changed = true;
+      }
+
+      // Keep existing key when gateway mode is enabled to avoid breaking strict key checks.
+      const nextApiKey = selectedGroup.isGateway ? config.apiKey.trim() : selectedGroup.apiKey.trim();
+      if (nextApiKey && nextApiKey !== config.apiKey.trim()) {
+        nextConfig.apiKey = nextApiKey;
+        changed = true;
+      }
+    }
+
+    setEvalModelGroups(groups);
+    if (changed) {
+      await evalSaveConfig(nextConfig);
+    }
+  }, [model, sampleModel]);
+
   useEffect(() => {
     void evalGetConfig()
       .then((config) => {
         const sample = (config.sampleModel || config.defaultModel || "").trim();
         const run = (config.runModel || config.defaultModel || "").trim();
+        setEvalModelGroups(config.modelGroups ?? []);
         if (sample) {
           setSampleModel(sample);
         }
@@ -1229,6 +1334,13 @@ export default function EvalPage({ skills }: Props) {
       return;
     }
 
+    try {
+      await syncEvalConnectionForSelectedModels();
+    } catch (error: unknown) {
+      setStatus(`${t("eval.error.runFailed")}: ${String(error)}`);
+      return;
+    }
+
     setGenerating(true);
     setProgressEvent(null);
     setProgressElapsedMs(0);
@@ -1420,6 +1532,14 @@ export default function EvalPage({ skills }: Props) {
         : costCurrency === "CNY"
           ? budgetInputValue / USD_TO_CNY_RATE
           : budgetInputValue;
+
+    try {
+      await syncEvalConnectionForSelectedModels();
+    } catch (error: unknown) {
+      setStatus(`${t("eval.error.runFailed")}: ${String(error)}`);
+      return;
+    }
+
     const runId = `eval-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
     setRunning(true);
@@ -3805,7 +3925,15 @@ export default function EvalPage({ skills }: Props) {
                   value={sampleModel}
                   onChange={(e) => setSampleModel(e.target.value)}
                   placeholder={t("eval.config.model.placeholder")}
+                  list={EVAL_MODEL_DATALIST_ID}
                 />
+                {sampleModelCatalogItem ? (
+                  <p className="eval-path-hint">
+                    {t("eval.config.modelGroupSource", { group: sampleModelCatalogItem.groupName })}
+                  </p>
+                ) : sampleModel.trim() ? (
+                  <p className="eval-path-hint">{t("eval.config.modelGroupMissing")}</p>
+                ) : null}
               </div>
 
               <div className="field eval-field-wide">
@@ -3936,7 +4064,15 @@ export default function EvalPage({ skills }: Props) {
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
                   placeholder={t("eval.config.model.placeholder")}
+                  list={EVAL_MODEL_DATALIST_ID}
                 />
+                {runModelCatalogItem ? (
+                  <p className="eval-path-hint">
+                    {t("eval.config.modelGroupSource", { group: runModelCatalogItem.groupName })}
+                  </p>
+                ) : model.trim() ? (
+                  <p className="eval-path-hint">{t("eval.config.modelGroupMissing")}</p>
+                ) : null}
               </div>
 
               <div className="field">
@@ -4025,6 +4161,17 @@ export default function EvalPage({ skills }: Props) {
                 </div>
               </div>
             </>
+          )}
+          {modelCatalog.length > 0 && (
+            <datalist id={EVAL_MODEL_DATALIST_ID}>
+              {modelCatalog.map((item) => (
+                <option
+                  key={`${item.groupId}-${item.model}`}
+                  value={item.model}
+                  label={`${item.groupName}`}
+                />
+              ))}
+            </datalist>
           )}
         </div>
         </article>
