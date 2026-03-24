@@ -252,7 +252,6 @@ export default function SettingsPage({
   const [appVersion, setAppVersion] = useState("-");
   const [status, setStatus] = useState("");
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
-  const dragHandleActiveRef = useRef<string | null>(null);
 
   const normalizedApiConfig = useMemo(() => normalizeEvalConfigDraft(apiConfig), [apiConfig]);
   const basicDirty = useMemo(
@@ -460,24 +459,6 @@ export default function SettingsPage({
     }));
   }
 
-  function moveGroup(fromIndex: number, toIndex: number) {
-    setModelGroups((previous) => {
-      if (
-        fromIndex < 0 ||
-        toIndex < 0 ||
-        fromIndex >= previous.length ||
-        toIndex >= previous.length ||
-        fromIndex === toIndex
-      ) {
-        return previous;
-      }
-      const next = [...previous];
-      const [picked] = next.splice(fromIndex, 1);
-      next.splice(toIndex, 0, picked);
-      return next;
-    });
-  }
-
   function removeGroup(groupId: string) {
     setModelGroups((previous) => previous.filter((group) => group.id !== groupId));
     setTestStatuses((previous) => {
@@ -529,27 +510,6 @@ export default function SettingsPage({
           ? { ...group, models: group.models.filter((_, index) => index !== modelIndex) }
           : group,
       ),
-    );
-  }
-
-  function moveModelInGroup(groupId: string, fromIndex: number, toIndex: number) {
-    setModelGroups((previous) =>
-      previous.map((group) => {
-        if (group.id !== groupId) return group;
-        if (
-          fromIndex < 0 ||
-          toIndex < 0 ||
-          fromIndex >= group.models.length ||
-          toIndex >= group.models.length ||
-          fromIndex === toIndex
-        ) {
-          return group;
-        }
-        const nextModels = [...group.models];
-        const [picked] = nextModels.splice(fromIndex, 1);
-        nextModels.splice(toIndex, 0, picked);
-        return { ...group, models: nextModels };
-      }),
     );
   }
 
@@ -904,30 +864,7 @@ export default function SettingsPage({
             const isCollapsed = collapsedGroups[group.id] ?? false;
             const groupContentId = `settings-model-group-content-${group.id}`;
             return (
-              <article
-                className="settings-model-group"
-                key={group.id}
-                draggable
-                onDragStart={(event) => {
-                  if (dragHandleActiveRef.current !== `group:${groupIndex}`) {
-                    event.preventDefault();
-                    return;
-                  }
-                  event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData("groupIdx", String(groupIndex));
-                }}
-                onDragEnd={() => {
-                  dragHandleActiveRef.current = null;
-                }}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  const from = Number.parseInt(event.dataTransfer.getData("groupIdx"), 10);
-                  if (Number.isFinite(from) && from !== groupIndex) {
-                    moveGroup(from, groupIndex);
-                  }
-                }}
-              >
+              <article className="settings-model-group" key={group.id}>
                 <div className="settings-model-group-head">
                   <h4 className="settings-model-group-title">{groupTitle}</h4>
                   <div className="settings-model-group-head-meta">
@@ -945,26 +882,6 @@ export default function SettingsPage({
                     )}
                   </div>
                   <div className="settings-model-group-actions">
-                    <button
-                      type="button"
-                      className="btn btn-ghost settings-model-group-drag"
-                      title={t("settings.modelGroup.dragGroup")}
-                      onMouseDown={() => {
-                        dragHandleActiveRef.current = `group:${groupIndex}`;
-                      }}
-                      onMouseUp={() => {
-                        dragHandleActiveRef.current = null;
-                      }}
-                      onMouseLeave={() => {
-                        if (!dragHandleActiveRef.current?.startsWith("group:")) {
-                          return;
-                        }
-                        dragHandleActiveRef.current = null;
-                      }}
-                      disabled={busy || apiBusy}
-                    >
-                      ≡
-                    </button>
                     <button
                       type="button"
                       className="btn btn-ghost settings-model-group-toggle"
@@ -1061,71 +978,7 @@ export default function SettingsPage({
                     ) : (
                       <div className="settings-model-list">
                         {group.models.map((model, modelIndex) => (
-                          <div
-                            className="settings-model-row"
-                            key={`${group.id}-${modelIndex}`}
-                            draggable
-                            onDragStart={(event) => {
-                              if (dragHandleActiveRef.current !== `model:${group.id}:${modelIndex}`) {
-                                event.preventDefault();
-                                return;
-                              }
-                              event.dataTransfer.effectAllowed = "move";
-                              event.dataTransfer.setData(
-                                "modelDrag",
-                                JSON.stringify({ groupId: group.id, index: modelIndex }),
-                              );
-                            }}
-                            onDragEnd={() => {
-                              dragHandleActiveRef.current = null;
-                            }}
-                            onDragOver={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                            }}
-                            onDrop={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              const raw = event.dataTransfer.getData("modelDrag");
-                              if (!raw) return;
-                              try {
-                                const payload = JSON.parse(raw) as {
-                                  groupId?: string;
-                                  index?: number;
-                                };
-                                if (
-                                  payload.groupId === group.id &&
-                                  Number.isFinite(payload.index) &&
-                                  typeof payload.index === "number" &&
-                                  payload.index !== modelIndex
-                                ) {
-                                  moveModelInGroup(group.id, payload.index, modelIndex);
-                                }
-                              } catch {
-                                // ignore malformed drag payload
-                              }
-                            }}
-                          >
-                            <button
-                              type="button"
-                              className="btn btn-ghost settings-model-row-drag"
-                              title={t("settings.modelGroup.dragModel")}
-                              onMouseDown={() => {
-                                dragHandleActiveRef.current = `model:${group.id}:${modelIndex}`;
-                              }}
-                              onMouseUp={() => {
-                                dragHandleActiveRef.current = null;
-                              }}
-                              onMouseLeave={() => {
-                                if (!dragHandleActiveRef.current?.startsWith(`model:${group.id}:`)) {
-                                  return;
-                                }
-                                dragHandleActiveRef.current = null;
-                              }}
-                              disabled={busy || apiBusy}
-                            >
-                              ⋮⋮
-                            </button>
+                          <div className="settings-model-row" key={`${group.id}-${modelIndex}`}>
                             <input
                               className="field-input"
                               value={model}
@@ -1349,3 +1202,4 @@ export default function SettingsPage({
     </div>
   );
 }
+

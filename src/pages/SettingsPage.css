@@ -384,32 +384,6 @@
   gap: 6px;
 }
 
-.settings-model-group-drag,
-.settings-model-row-drag {
-  align-items: center;
-  display: inline-flex;
-  font-size: var(--text-xs);
-  justify-content: center;
-  min-height: 28px;
-  min-width: 28px;
-  padding: 0;
-  user-select: none;
-}
-
-.settings-model-group-drag {
-  cursor: grab;
-}
-
-.settings-model-row-drag {
-  cursor: grab;
-  flex: 0 0 auto;
-}
-
-.settings-model-group-drag:active,
-.settings-model-row-drag:active {
-  cursor: grabbing;
-}
-
 .settings-model-group-toggle-icon {
   transition: transform var(--transition-fast);
 }
@@ -421,6 +395,10 @@
 .settings-model-group-content {
   display: grid;
   gap: var(--sp-sm);
+}
+
+.settings-model-group-content[hidden] {
+  display: none;
 }
 
 .settings-model-list {
