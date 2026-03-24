@@ -51,6 +51,8 @@ const DEFAULT_API_CONFIG: EvalConfig = {
   sampleModel: "gpt-4o-mini",
   runModel: "gpt-4o-mini",
   judgeModel: "",
+  sampleModelGroupId: undefined,
+  runModelGroupId: undefined,
   costCurrency: "USD",
   modelGroups: [],
 };
@@ -189,6 +191,17 @@ function deriveLegacyConfigFromGroups(
 function normalizeEvalConfigDraft(config: EvalConfig): EvalConfig {
   const modelGroups = normalizeModelGroups(config.modelGroups);
   const legacy = deriveLegacyConfigFromGroups(modelGroups, config);
+  const normalizeGroupId = (value: string | undefined): string | undefined => {
+    const normalized = value?.trim() ?? "";
+    if (!normalized) return undefined;
+    return modelGroups.some((group) => group.id === normalized) ? normalized : undefined;
+  };
+  const resolveByModel = (modelName: string): string | undefined =>
+    modelGroups.find((group) => group.models.includes(modelName))?.id;
+  const sampleModelGroupId =
+    normalizeGroupId(config.sampleModelGroupId) ?? resolveByModel(legacy.sampleModel);
+  const runModelGroupId =
+    normalizeGroupId(config.runModelGroupId) ?? resolveByModel(legacy.runModel);
   return {
     apiKey: legacy.apiKey,
     provider: "openai-compatible",
@@ -196,6 +209,8 @@ function normalizeEvalConfigDraft(config: EvalConfig): EvalConfig {
     sampleModel: legacy.sampleModel,
     runModel: legacy.runModel,
     judgeModel: config.judgeModel?.trim() || "",
+    sampleModelGroupId,
+    runModelGroupId,
     costCurrency: normalizeCostCurrency(config.costCurrency),
     modelGroups,
   };

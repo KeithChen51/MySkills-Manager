@@ -746,6 +746,13 @@ fn normalize_cost_currency(value: &str) -> String {
     }
 }
 
+fn normalize_optional_group_id(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(std::string::ToString::to_string)
+}
+
 fn sanitize_eval_config(raw: RawEvalConfig) -> EvalConfig {
     let sample_model = normalize_model(
         raw.sample_model
@@ -795,6 +802,13 @@ fn sanitize_eval_config(raw: RawEvalConfig) -> EvalConfig {
         raw.model_groups
     };
 
+    let sample_model_group_id =
+        normalize_optional_group_id(raw.sample_model_group_id.as_deref())
+            .filter(|id| model_groups.iter().any(|group| group.id.trim() == id));
+    let run_model_group_id =
+        normalize_optional_group_id(raw.run_model_group_id.as_deref())
+            .filter(|id| model_groups.iter().any(|group| group.id.trim() == id));
+
     EvalConfig {
         api_key: raw.api_key.unwrap_or_default().trim().to_string(),
         provider: normalize_provider(raw.provider.as_deref().unwrap_or(DEFAULT_PROVIDER)),
@@ -803,6 +817,8 @@ fn sanitize_eval_config(raw: RawEvalConfig) -> EvalConfig {
         run_model: run_model.clone(),
         default_model: run_model,
         judge_model,
+        sample_model_group_id,
+        run_model_group_id,
         cost_currency: normalize_cost_currency(
             raw.cost_currency
                 .as_deref()
@@ -5731,6 +5747,8 @@ pub fn eval_save_config(
     run_model: Option<String>,
     default_model: Option<String>,
     judge_model: Option<String>,
+    sample_model_group_id: Option<String>,
+    run_model_group_id: Option<String>,
     cost_currency: Option<String>,
     model_groups: Option<Vec<ModelGroup>>,
 ) -> Result<EvalMutationResult, String> {
@@ -5769,6 +5787,12 @@ pub fn eval_save_config(
         .filter(|s| !s.is_empty())
         .unwrap_or("")
         .to_string();
+    let normalized_sample_model_group_id =
+        normalize_optional_group_id(sample_model_group_id.as_deref())
+            .filter(|id| groups.iter().any(|group| group.id.trim() == id));
+    let normalized_run_model_group_id =
+        normalize_optional_group_id(run_model_group_id.as_deref())
+            .filter(|id| groups.iter().any(|group| group.id.trim() == id));
     let config = EvalConfig {
         api_key: effective_api_key.trim().to_string(),
         provider: normalize_provider(provider.as_deref().unwrap_or(DEFAULT_PROVIDER)),
@@ -5777,6 +5801,8 @@ pub fn eval_save_config(
         run_model: normalized_run_model.clone(),
         default_model: normalized_run_model,
         judge_model: normalized_judge_model,
+        sample_model_group_id: normalized_sample_model_group_id,
+        run_model_group_id: normalized_run_model_group_id,
         cost_currency: normalize_cost_currency(
             cost_currency.as_deref().unwrap_or(DEFAULT_COST_CURRENCY),
         ),
@@ -6375,6 +6401,8 @@ mod tests {
             run_model: " gpt-4.1 ".to_string(),
             default_model: " gpt-4.1 ".to_string(),
             judge_model: " gpt-4.1-mini ".to_string(),
+            sample_model_group_id: None,
+            run_model_group_id: None,
             cost_currency: " cny ".to_string(),
             model_groups: Vec::new(),
         };

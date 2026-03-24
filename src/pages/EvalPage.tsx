@@ -56,6 +56,7 @@ type HistoryRefreshMode = "replace" | "append";
 type HistoryReviewTone = "pass" | "pending" | "warn";
 type ResultFilter = "all" | "fail" | "pass";
 type TriggerPanelKey = "clean" | "complex";
+type EvalConnectionTarget = "sample" | "run";
 
 type ResultPanelState = {
   chartExpanded: boolean;
@@ -207,6 +208,14 @@ function buildModelCatalog(groups: ModelGroup[] | undefined): ModelCatalogItem[]
   return out;
 }
 
+function resolveModelGroupName(group: ModelGroup): string {
+  const trimmedName = group.name?.trim() ?? "";
+  if (trimmedName) return trimmedName;
+  const trimmedId = group.id?.trim() ?? "";
+  if (trimmedId) return trimmedId;
+  return "Group";
+}
+
 function findModelCatalogItem(catalog: ModelCatalogItem[], value: string): ModelCatalogItem | null {
   const normalized = value.trim().toLowerCase();
   if (!normalized) {
@@ -215,15 +224,33 @@ function findModelCatalogItem(catalog: ModelCatalogItem[], value: string): Model
   return catalog.find((item) => item.model.toLowerCase() === normalized) ?? null;
 }
 
-function findModelGroupByModel(groups: ModelGroup[], value: string): ModelGroup | null {
+function findModelGroupsByModel(groups: ModelGroup[], value: string): ModelGroup[] {
   const normalized = value.trim().toLowerCase();
   if (!normalized) {
+    return [];
+  }
+  return groups.filter((group) =>
+    (group.models ?? []).some((item) => item.trim().toLowerCase() === normalized),
+  );
+}
+
+function resolvePreferredModelGroup(
+  groups: ModelGroup[],
+  value: string,
+  preferredGroupId?: string | null,
+): ModelGroup | null {
+  const candidates = findModelGroupsByModel(groups, value);
+  if (candidates.length === 0) {
     return null;
   }
-  return (
-    groups.find((group) => (group.models ?? []).some((item) => item.trim().toLowerCase() === normalized)) ??
-    null
-  );
+  const normalizedPreferred = preferredGroupId?.trim() ?? "";
+  if (normalizedPreferred) {
+    const matched = candidates.find((group) => group.id === normalizedPreferred);
+    if (matched) {
+      return matched;
+    }
+  }
+  return candidates[0] ?? null;
 }
 
 function estimateModelSpeedSecondsPerCase(model: string): number {
@@ -543,6 +570,8 @@ export default function EvalPage({ skills }: Props) {
   const [sampleModel, setSampleModel] = useState("gpt-4o-mini");
   const [model, setModel] = useState("gpt-4o-mini");
   const [evalModelGroups, setEvalModelGroups] = useState<ModelGroup[]>([]);
+  const [sampleModelGroupId, setSampleModelGroupId] = useState("");
+  const [runModelGroupId, setRunModelGroupId] = useState("");
   const [maxParallelArmsInput, setMaxParallelArmsInput] = useState("2");
   const [triggerMaxWorkersInput, setTriggerMaxWorkersInput] = useState("6");
   const [functionalMaxWorkersInput, setFunctionalMaxWorkersInput] = useState("3");
@@ -641,6 +670,30 @@ export default function EvalPage({ skills }: Props) {
     () => findModelCatalogItem(modelCatalog, model),
     [modelCatalog, model],
   );
+  const sampleModelGroupOptions = useMemo(
+    () => findModelGroupsByModel(evalModelGroups, sampleModel),
+    [evalModelGroups, sampleModel],
+  );
+  const runModelGroupOptions = useMemo(
+    () => findModelGroupsByModel(evalModelGroups, model),
+    [evalModelGroups, model],
+  );
+  const resolvedSampleModelGroup = useMemo(
+    () => resolvePreferredModelGroup(evalModelGroups, sampleModel, sampleModelGroupId),
+    [evalModelGroups, sampleModel, sampleModelGroupId],
+  );
+  const resolvedRunModelGroup = useMemo(
+    () => resolvePreferredModelGroup(evalModelGroups, model, runModelGroupId),
+    [evalModelGroups, model, runModelGroupId],
+  );
+  const sampleModelGroupHint = useMemo(
+    () => resolvedSampleModelGroup?.name?.trim() || sampleModelCatalogItem?.groupName || "",
+    [resolvedSampleModelGroup, sampleModelCatalogItem],
+  );
+  const runModelGroupHint = useMemo(
+    () => resolvedRunModelGroup?.name?.trim() || runModelCatalogItem?.groupName || "",
+    [resolvedRunModelGroup, runModelCatalogItem],
+  );
   const selectedModulesForRun = useMemo<EvalModuleKey[]>(
     () => (evalMode === "quick" ? [] : selectedModules),
     [evalMode, selectedModules],
@@ -733,7 +786,7 @@ export default function EvalPage({ skills }: Props) {
     }
   }, []);
 
-  const syncEvalConnectionForSelectedModels = useCallback(async () => {
+  const syncEvalConnectionForSelectedModels = useCallback(async (target: EvalConnectionTarget) => {
     const runModelTrimmed = model.trim();
     const sampleModelTrimmed = sampleModel.trim();
     if (!runModelTrimmed && !sampleModelTrimmed) {
@@ -742,20 +795,37 @@ export default function EvalPage({ skills }: Props) {
 
     const config = await evalGetConfig();
     const groups = config.modelGroups ?? [];
+    const preferredModel = target === "sample" ? sampleModelTrimmed : runModelTrimmed;
+    const preferredGroupId = target === "sample" ? sampleModelGroupId : runModelGroupId;
     const selectedGroup =
-      findModelGroupByModel(groups, runModelTrimmed) ??
-      findModelGroupByModel(groups, sampleModelTrimmed);
+      resolvePreferredModelGroup(groups, preferredModel, preferredGroupId) ??
+      resolvePreferredModelGroup(
+        groups,
+        target === "sample" ? runModelTrimmed : sampleModelTrimmed,
+        target === "sample" ? runModelGroupId : sampleModelGroupId,
+      );
 
     const nextSampleModel = sampleModelTrimmed || config.sampleModel;
     const nextRunModel = runModelTrimmed || config.runModel;
+    const nextSampleModelGroupId =
+      resolvePreferredModelGroup(groups, nextSampleModel, sampleModelGroupId)?.id;
+    const nextRunModelGroupId =
+      resolvePreferredModelGroup(groups, nextRunModel, runModelGroupId)?.id;
 
     let changed = false;
     const nextConfig = {
       ...config,
       sampleModel: nextSampleModel,
       runModel: nextRunModel,
+      sampleModelGroupId: nextSampleModelGroupId,
+      runModelGroupId: nextRunModelGroupId,
     };
-    if (nextSampleModel !== config.sampleModel || nextRunModel !== config.runModel) {
+    if (
+      nextSampleModel !== config.sampleModel ||
+      nextRunModel !== config.runModel ||
+      (nextSampleModelGroupId ?? "") !== (config.sampleModelGroupId ?? "") ||
+      (nextRunModelGroupId ?? "") !== (config.runModelGroupId ?? "")
+    ) {
       changed = true;
     }
 
@@ -779,20 +849,33 @@ export default function EvalPage({ skills }: Props) {
     if (changed) {
       await evalSaveConfig(nextConfig);
     }
-  }, [model, sampleModel]);
+  }, [model, sampleModel, runModelGroupId, sampleModelGroupId]);
 
   useEffect(() => {
     void evalGetConfig()
       .then((config) => {
         const sample = (config.sampleModel || config.defaultModel || "").trim();
         const run = (config.runModel || config.defaultModel || "").trim();
-        setEvalModelGroups(config.modelGroups ?? []);
+        const groups = config.modelGroups ?? [];
+        setEvalModelGroups(groups);
         if (sample) {
           setSampleModel(sample);
         }
         if (run) {
           setModel(run);
         }
+        const sampleGroupId = resolvePreferredModelGroup(
+          groups,
+          sample,
+          config.sampleModelGroupId,
+        )?.id;
+        const runGroupId = resolvePreferredModelGroup(
+          groups,
+          run,
+          config.runModelGroupId,
+        )?.id;
+        setSampleModelGroupId(sampleGroupId ?? "");
+        setRunModelGroupId(runGroupId ?? "");
         setCostCurrency(normalizeCostCurrency(config.costCurrency));
       })
       .catch(() => {
@@ -809,6 +892,42 @@ export default function EvalPage({ skills }: Props) {
       });
     void refreshSampleTimingHistory();
   }, [refreshSampleTimingHistory]);
+
+  useEffect(() => {
+    const candidates = findModelGroupsByModel(evalModelGroups, sampleModel);
+    if (candidates.length === 0) {
+      if (sampleModelGroupId) {
+        setSampleModelGroupId("");
+      }
+      return;
+    }
+    if (sampleModelGroupId && candidates.some((group) => group.id === sampleModelGroupId)) {
+      return;
+    }
+    if (candidates.length === 1) {
+      setSampleModelGroupId(candidates[0].id);
+      return;
+    }
+    setSampleModelGroupId("");
+  }, [evalModelGroups, sampleModel, sampleModelGroupId]);
+
+  useEffect(() => {
+    const candidates = findModelGroupsByModel(evalModelGroups, model);
+    if (candidates.length === 0) {
+      if (runModelGroupId) {
+        setRunModelGroupId("");
+      }
+      return;
+    }
+    if (runModelGroupId && candidates.some((group) => group.id === runModelGroupId)) {
+      return;
+    }
+    if (candidates.length === 1) {
+      setRunModelGroupId(candidates[0].id);
+      return;
+    }
+    setRunModelGroupId("");
+  }, [evalModelGroups, model, runModelGroupId]);
 
   useEffect(() => {
     if (!selectedSkill) {
@@ -1335,7 +1454,7 @@ export default function EvalPage({ skills }: Props) {
     }
 
     try {
-      await syncEvalConnectionForSelectedModels();
+      await syncEvalConnectionForSelectedModels("sample");
     } catch (error: unknown) {
       setStatus(`${t("eval.error.runFailed")}: ${String(error)}`);
       return;
@@ -1534,7 +1653,7 @@ export default function EvalPage({ skills }: Props) {
           : budgetInputValue;
 
     try {
-      await syncEvalConnectionForSelectedModels();
+      await syncEvalConnectionForSelectedModels("run");
     } catch (error: unknown) {
       setStatus(`${t("eval.error.runFailed")}: ${String(error)}`);
       return;
@@ -3927,13 +4046,32 @@ export default function EvalPage({ skills }: Props) {
                   placeholder={t("eval.config.model.placeholder")}
                   list={EVAL_MODEL_DATALIST_ID}
                 />
-                {sampleModelCatalogItem ? (
+                {sampleModelGroupHint ? (
                   <p className="eval-path-hint">
-                    {t("eval.config.modelGroupSource", { group: sampleModelCatalogItem.groupName })}
+                    {t("eval.config.modelGroupSource", { group: sampleModelGroupHint })}
                   </p>
                 ) : sampleModel.trim() ? (
                   <p className="eval-path-hint">{t("eval.config.modelGroupMissing")}</p>
                 ) : null}
+                {sampleModelGroupOptions.length > 1 && (
+                  <>
+                    <label className="field-label">{t("eval.config.generationModelGroup")}</label>
+                    <select
+                      className="filter-select"
+                      value={sampleModelGroupId}
+                      onChange={(event) => setSampleModelGroupId(event.target.value)}
+                      disabled={running || generating}
+                    >
+                      <option value="">{t("eval.config.modelGroupSelect.auto")}</option>
+                      {sampleModelGroupOptions.map((group) => (
+                        <option key={`sample-group-${group.id}`} value={group.id}>
+                          {resolveModelGroupName(group)}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="eval-path-hint">{t("eval.config.modelGroupAmbiguous")}</p>
+                  </>
+                )}
               </div>
 
               <div className="field eval-field-wide">
@@ -4066,13 +4204,32 @@ export default function EvalPage({ skills }: Props) {
                   placeholder={t("eval.config.model.placeholder")}
                   list={EVAL_MODEL_DATALIST_ID}
                 />
-                {runModelCatalogItem ? (
+                {runModelGroupHint ? (
                   <p className="eval-path-hint">
-                    {t("eval.config.modelGroupSource", { group: runModelCatalogItem.groupName })}
+                    {t("eval.config.modelGroupSource", { group: runModelGroupHint })}
                   </p>
                 ) : model.trim() ? (
                   <p className="eval-path-hint">{t("eval.config.modelGroupMissing")}</p>
                 ) : null}
+                {runModelGroupOptions.length > 1 && (
+                  <>
+                    <label className="field-label">{t("eval.config.runModelGroup")}</label>
+                    <select
+                      className="filter-select"
+                      value={runModelGroupId}
+                      onChange={(event) => setRunModelGroupId(event.target.value)}
+                      disabled={running}
+                    >
+                      <option value="">{t("eval.config.modelGroupSelect.auto")}</option>
+                      {runModelGroupOptions.map((group) => (
+                        <option key={`run-group-${group.id}`} value={group.id}>
+                          {resolveModelGroupName(group)}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="eval-path-hint">{t("eval.config.modelGroupAmbiguous")}</p>
+                  </>
+                )}
               </div>
 
               <div className="field">

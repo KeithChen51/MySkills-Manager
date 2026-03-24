@@ -477,6 +477,8 @@ export type EvalConfig = {
   runModel: string;
   defaultModel?: string;
   judgeModel?: string;
+  sampleModelGroupId?: string;
+  runModelGroupId?: string;
   costCurrency: CostCurrency;
   modelGroups?: ModelGroup[];
 };
@@ -1717,6 +1719,10 @@ export async function evalSaveConfig(config: EvalConfig): Promise<SetupMutationR
     default_model: config.runModel,
     judgeModel: config.judgeModel ?? "",
     judge_model: config.judgeModel ?? "",
+    sampleModelGroupId: config.sampleModelGroupId ?? "",
+    sample_model_group_id: config.sampleModelGroupId ?? "",
+    runModelGroupId: config.runModelGroupId ?? "",
+    run_model_group_id: config.runModelGroupId ?? "",
     costCurrency: config.costCurrency,
     cost_currency: config.costCurrency,
     modelGroups: config.modelGroups ?? [],

@@ -655,6 +655,11 @@ const enMessages = {
   "eval.config.modelGroupSource": "Linked Model Group: {group}",
   "eval.config.modelGroupMissing":
     "This model is not listed in any model group. It will use the current fallback connection settings.",
+  "eval.config.generationModelGroup": "Generation Model Group",
+  "eval.config.runModelGroup": "Run Model Group",
+  "eval.config.modelGroupSelect.auto": "Auto (by model)",
+  "eval.config.modelGroupAmbiguous":
+    "This model exists in multiple groups. Choose one to avoid connection ambiguity.",
   "eval.config.maxParallelArms": "Parallel Arms",
   "eval.config.triggerMaxWorkers": "Trigger Worker Threads",
   "eval.config.functionalMaxWorkers": "Functional Worker Threads",
@@ -1686,6 +1691,10 @@ const zhMessages: Partial<Record<MessageKey, string>> = {
   "eval.config.runModelHint": "用于执行评测用例的模型。",
   "eval.config.modelGroupSource": "关联模型组：{group}",
   "eval.config.modelGroupMissing": "该模型未在任何模型组中定义，将使用当前回退连接配置。",
+  "eval.config.generationModelGroup": "样本模型组",
+  "eval.config.runModelGroup": "运行模型组",
+  "eval.config.modelGroupSelect.auto": "自动（按模型匹配）",
+  "eval.config.modelGroupAmbiguous": "该模型存在于多个模型组，请选择一个以避免连接歧义。",
   "eval.config.maxParallelArms": "并行任务臂数",
   "eval.config.triggerMaxWorkers": "触发评测线程数",
   "eval.config.functionalMaxWorkers": "功能评测线程数",
