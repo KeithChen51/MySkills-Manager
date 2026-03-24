@@ -109,6 +109,9 @@ const enMessages = {
   "settings.modelGroup.emptyModels": "No models added yet",
   "settings.modelGroup.expand": "Expand",
   "settings.modelGroup.collapse": "Collapse",
+  "settings.modelGroup.dragGroup": "Drag group",
+  "settings.modelGroup.dragModel": "Drag model",
+  "settings.modelGroup.modelCount": "{count} models",
   "settings.importMode.title": "Skills Import Mode",
   "settings.importMode.help": "Choose how to handle newly discovered skills from tools.",
   "settings.importMode.manual": "Manual - sync from Skills page when needed",
@@ -2138,6 +2141,9 @@ const zhMessages: Partial<Record<MessageKey, string>> = {
   "settings.modelGroup.emptyModels": "尚未添加模型",
   "settings.modelGroup.expand": "展开",
   "settings.modelGroup.collapse": "收起",
+  "settings.modelGroup.dragGroup": "拖拽模型组",
+  "settings.modelGroup.dragModel": "拖拽模型",
+  "settings.modelGroup.modelCount": "{count} 个模型",
 };
 
 export const messages: Record<Locale, Record<MessageKey, string>> = {

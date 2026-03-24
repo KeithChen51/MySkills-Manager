@@ -353,9 +353,61 @@
   gap: var(--sp-xs);
 }
 
+.settings-model-group-head-meta {
+  align-items: center;
+  color: var(--text-secondary);
+  display: inline-flex;
+  font-size: var(--text-xs);
+  gap: var(--sp-xs);
+}
+
+.settings-model-group-model-count {
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border-card) 88%, transparent);
+  padding: 2px 8px;
+}
+
+.settings-model-group-status-ok {
+  color: var(--success);
+}
+
+.settings-model-group-status-fail {
+  color: var(--danger);
+}
+
+.settings-model-group-status-testing {
+  color: var(--text-secondary);
+}
+
 .settings-model-group-toggle {
   align-items: center;
   gap: 6px;
+}
+
+.settings-model-group-drag,
+.settings-model-row-drag {
+  align-items: center;
+  display: inline-flex;
+  font-size: var(--text-xs);
+  justify-content: center;
+  min-height: 28px;
+  min-width: 28px;
+  padding: 0;
+  user-select: none;
+}
+
+.settings-model-group-drag {
+  cursor: grab;
+}
+
+.settings-model-row-drag {
+  cursor: grab;
+  flex: 0 0 auto;
+}
+
+.settings-model-group-drag:active,
+.settings-model-row-drag:active {
+  cursor: grabbing;
 }
 
 .settings-model-group-toggle-icon {
