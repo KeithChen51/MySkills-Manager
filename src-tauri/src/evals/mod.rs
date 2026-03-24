@@ -6374,7 +6374,9 @@ mod tests {
             sample_model: " gpt-4.1-mini ".to_string(),
             run_model: " gpt-4.1 ".to_string(),
             default_model: " gpt-4.1 ".to_string(),
+            judge_model: " gpt-4.1-mini ".to_string(),
             cost_currency: " cny ".to_string(),
+            model_groups: Vec::new(),
         };
         write_eval_config_with_home(&home, &config).expect("write eval config");
         let loaded = read_eval_config_with_home(&home).expect("read eval config");
@@ -6387,6 +6389,9 @@ mod tests {
         assert_eq!(loaded.sample_model, "gpt-4.1-mini");
         assert_eq!(loaded.run_model, "gpt-4.1");
         assert_eq!(loaded.default_model, "gpt-4.1");
+        assert_eq!(loaded.judge_model, "gpt-4.1-mini");
+        assert!(!loaded.model_groups.is_empty());
+        assert_eq!(loaded.model_groups[0].base_url, "https://api.openai.com/v1");
         assert_eq!(loaded.cost_currency, "CNY");
     }
 
