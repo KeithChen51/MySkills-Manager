@@ -22,6 +22,10 @@ TRIGGER_BUCKETS = (
 )
 TRIGGER_BUCKET_MIN = 12
 FUNCTIONAL_MIN = 24
+SAMPLE_GEN_REQUEST_RETRIES = 4
+TRIGGER_BATCH_SIZE = 8
+FUNCTIONAL_BATCH_SIZE = 8
+BATCH_ATTEMPTS = 3
 
 
 def _normalize_trigger_bucket(value: Any, should_trigger: bool) -> str:
@@ -40,6 +44,11 @@ def _normalize_trigger_bucket(value: Any, should_trigger: bool) -> str:
 _extract_json_object = extract_json_object
 
 
+def _is_gateway_timeout_error(error: Exception) -> bool:
+    text = str(error).lower()
+    return "llm http 504" in text or "gateway time-out" in text or "timed out" in text
+
+
 def _request_openai_compatible(
     api_key: str,
     model: str,
@@ -48,15 +57,21 @@ def _request_openai_compatible(
     request_timeout_secs: int,
 ) -> str:
     """Backward-compatible wrapper using unified LLMClient."""
+    effective_timeout = max(30, int(request_timeout_secs))
     client = LLMClient(
         api_key=api_key, model=model, base_url=base_url,
-        timeout_secs=max(30, int(request_timeout_secs)),
+        timeout_secs=effective_timeout,
     )
     messages = [
         {"role": "system", "content": "You generate strict JSON test data. Output JSON only."},
         {"role": "user", "content": prompt},
     ]
-    response = client.chat_completion(messages, temperature=0.4)
+    response = client.chat_completion_with_retry(
+        messages,
+        temperature=0.35,
+        max_retries=SAMPLE_GEN_REQUEST_RETRIES,
+        timeout_override=effective_timeout,
+    )
     return str(response["content"])
 
 
@@ -102,6 +117,128 @@ def _validate_trigger_cases(cases: Any, total_count: int) -> list[dict[str, Any]
     return ordered[:total_count]
 
 
+def _build_trigger_bucket_prompt(
+    skill_name: str,
+    skill_content: str,
+    bucket: str,
+    bucket_count: int,
+    attempt: int,
+) -> str:
+    extra = ""
+    if attempt > 0:
+        extra = "\nImportant: previous output was invalid. Keep strict JSON and required count."
+    trigger_hint = ""
+    if bucket == "positive_trigger":
+        trigger_hint = "All cases should_trigger must be true."
+    elif bucket == "negative_trigger":
+        trigger_hint = "All cases should_trigger must be false."
+    else:
+        trigger_hint = "Each case must include a boolean should_trigger."
+
+    return f"""
+Generate TRIGGER evaluation samples for skill `{skill_name}`.
+
+Skill content:
+---
+{skill_content}
+---
+
+Output JSON object with exactly ONE top-level key:
+- trigger: array of objects with fields query (string), should_trigger (boolean), test_bucket (string)
+
+Requirements:
+- trigger length >= {bucket_count}
+- each case test_bucket must be "{bucket}"
+- {trigger_hint}
+- Do not include explanations, markdown, or extra keys.
+{extra}
+""".strip()
+
+
+def _validate_trigger_bucket_cases(cases: Any, bucket: str, bucket_count: int) -> list[dict[str, Any]]:
+    if not isinstance(cases, list):
+        raise ValueError("trigger must be an array")
+    cleaned: list[dict[str, Any]] = []
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        query = case.get("query")
+        should_trigger = case.get("should_trigger")
+        if not isinstance(query, str) or not query.strip() or not isinstance(should_trigger, bool):
+            continue
+        normalized_bucket = _normalize_trigger_bucket(case.get("test_bucket"), should_trigger)
+        if normalized_bucket != bucket:
+            continue
+        if bucket == "positive_trigger" and not should_trigger:
+            continue
+        if bucket == "negative_trigger" and should_trigger:
+            continue
+        cleaned.append(
+            {
+                "query": query.strip(),
+                "should_trigger": should_trigger,
+                "test_bucket": bucket,
+            }
+        )
+    if len(cleaned) < bucket_count:
+        raise ValueError(f"trigger bucket {bucket} has fewer than required {bucket_count} cases")
+    return cleaned[:bucket_count]
+
+
+def _generate_trigger_in_batches(
+    args: argparse.Namespace,
+    skill_excerpt: str,
+    trigger_count: int,
+    request_timeout_secs: int,
+) -> list[dict[str, Any]]:
+    required: dict[str, int] = {bucket: TRIGGER_BUCKET_MIN for bucket in TRIGGER_BUCKETS}
+    remaining = max(0, trigger_count - TRIGGER_BUCKET_MIN * len(TRIGGER_BUCKETS))
+    index = 0
+    while remaining > 0:
+        bucket = TRIGGER_BUCKETS[index % len(TRIGGER_BUCKETS)]
+        required[bucket] += 1
+        remaining -= 1
+        index += 1
+
+    aggregated: list[dict[str, Any]] = []
+    for bucket in TRIGGER_BUCKETS:
+        target = required[bucket]
+        produced = 0
+        while produced < target:
+            batch_target = min(TRIGGER_BATCH_SIZE, target - produced)
+            batch_error: Exception | None = None
+            for attempt in range(BATCH_ATTEMPTS):
+                try:
+                    prompt = _build_trigger_bucket_prompt(
+                        skill_name=args.skill_name,
+                        skill_content=skill_excerpt,
+                        bucket=bucket,
+                        bucket_count=batch_target,
+                        attempt=attempt,
+                    )
+                    response_text = _request_openai_compatible(
+                        api_key=args.api_key.strip(),
+                        model=args.model.strip(),
+                        base_url=(args.base_url or "").strip() or None,
+                        prompt=prompt,
+                        request_timeout_secs=request_timeout_secs,
+                    )
+                    payload = _extract_json_object(response_text)
+                    batch = _validate_trigger_bucket_cases(payload.get("trigger"), bucket, batch_target)
+                    aggregated.extend(batch)
+                    produced += len(batch)
+                    break
+                except Exception as exc:
+                    batch_error = exc
+                    continue
+            else:
+                raise batch_error or ValueError(f"trigger batch generation failed for {bucket}")
+
+    if len(aggregated) < trigger_count:
+        raise ValueError("trigger batch generation returned insufficient cases")
+    return aggregated[:trigger_count]
+
+
 def _validate_functional_cases(cases: Any, total_count: int) -> list[dict[str, Any]]:
     if not isinstance(cases, list):
         raise ValueError("functional must be an array")
@@ -144,6 +281,60 @@ def _validate_functional_cases(cases: Any, total_count: int) -> list[dict[str, A
     if len(out) < total_count:
         raise ValueError("functional cases are fewer than requested")
     return out[:total_count]
+
+
+def _dedupe_case_id(case_id: str, seen_ids: set[str]) -> str:
+    next_id = case_id
+    if next_id in seen_ids:
+        suffix = 2
+        while f"{next_id}-{suffix}" in seen_ids:
+            suffix += 1
+        next_id = f"{next_id}-{suffix}"
+    seen_ids.add(next_id)
+    return next_id
+
+
+def _generate_functional_in_batches(
+    args: argparse.Namespace,
+    skill_excerpt: str,
+    functional_count: int,
+    request_timeout_secs: int,
+) -> list[dict[str, Any]]:
+    aggregated: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    while len(aggregated) < functional_count:
+        batch_target = min(FUNCTIONAL_BATCH_SIZE, functional_count - len(aggregated))
+        batch_error: Exception | None = None
+        for attempt in range(BATCH_ATTEMPTS):
+            try:
+                prompt = _build_functional_prompt(
+                    skill_name=args.skill_name,
+                    skill_content=skill_excerpt,
+                    functional_count=batch_target,
+                    attempt=attempt,
+                )
+                response_text = _request_openai_compatible(
+                    api_key=args.api_key.strip(),
+                    model=args.model.strip(),
+                    base_url=(args.base_url or "").strip() or None,
+                    prompt=prompt,
+                    request_timeout_secs=request_timeout_secs,
+                )
+                payload = _extract_json_object(response_text)
+                batch = _validate_functional_cases(payload.get("functional"), batch_target)
+                for case in batch:
+                    normalized = dict(case)
+                    normalized["id"] = _dedupe_case_id(str(case["id"]), seen_ids)
+                    aggregated.append(normalized)
+                    if len(aggregated) >= functional_count:
+                        break
+                break
+            except Exception as exc:
+                batch_error = exc
+                continue
+        else:
+            raise batch_error or ValueError("functional batch generation failed")
+    return aggregated[:functional_count]
 
 
 def _build_trigger_prompt(
@@ -217,7 +408,7 @@ def _generate_trigger(
     trigger_count: int,
     request_timeout_secs: int,
 ) -> list[dict[str, Any]]:
-    """Generate trigger cases with 2-attempt retry."""
+    """Generate trigger cases with fallback to bucketed batches on gateway timeout."""
     last_error: Exception | None = None
     for attempt in range(2):
         try:
@@ -239,6 +430,8 @@ def _generate_trigger(
         except Exception as exc:
             last_error = exc
             continue
+    if last_error is not None and _is_gateway_timeout_error(last_error):
+        return _generate_trigger_in_batches(args, skill_excerpt, trigger_count, request_timeout_secs)
     raise last_error or ValueError("trigger generation failed")
 
 
@@ -248,7 +441,7 @@ def _generate_functional(
     functional_count: int,
     request_timeout_secs: int,
 ) -> list[dict[str, Any]]:
-    """Generate functional cases with 2-attempt retry."""
+    """Generate functional cases with fallback to chunked batches on gateway timeout."""
     last_error: Exception | None = None
     for attempt in range(2):
         try:
@@ -270,6 +463,8 @@ def _generate_functional(
         except Exception as exc:
             last_error = exc
             continue
+    if last_error is not None and _is_gateway_timeout_error(last_error):
+        return _generate_functional_in_batches(args, skill_excerpt, functional_count, request_timeout_secs)
     raise last_error or ValueError("functional generation failed")
 
 
@@ -277,8 +472,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     provider = (args.provider or "openai-compatible").strip()
     if provider != "openai-compatible":
         return {"status": "error", "message": f"Unsupported provider: {provider}"}
-    if not args.api_key.strip():
-        return {"status": "error", "message": "API key is required"}
 
     try:
         skill_content = args.skill_path.read_text(encoding="utf-8")
@@ -290,7 +483,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     trigger_count = max(TRIGGER_BUCKET_MIN * len(TRIGGER_BUCKETS), int(args.trigger_count))
     functional_count = max(FUNCTIONAL_MIN, int(args.functional_count))
     request_timeout_secs = max(30, int(getattr(args, "request_timeout_secs", 180)))
-    skill_excerpt = skill_content[:12000]
+    # Keep enough context while avoiding oversized prompts that are prone to gateway timeout.
+    skill_excerpt = skill_content[:9000]
 
     try:
         # Phase 1: generate trigger cases (separate API call)

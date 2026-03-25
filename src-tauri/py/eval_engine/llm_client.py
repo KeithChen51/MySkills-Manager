@@ -100,6 +100,46 @@ def classify_error(error: Exception) -> str:
     return "runtime"
 
 
+RETRYABLE_HTTP_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 524}
+NON_RETRYABLE_HTTP_CODES = {400, 401, 403, 404, 405, 410, 422}
+
+
+def _condense_http_error_details(raw_text: str, max_len: int = 220) -> str:
+    """Strip HTML/noise from upstream error body and keep a short summary."""
+    cleaned = re.sub(r"<[^>]+>", " ", raw_text)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        cleaned = "No response body"
+    if len(cleaned) > max_len:
+        return cleaned[: max_len - 3] + "..."
+    return cleaned
+
+
+def _extract_http_code_from_message(message: str) -> int | None:
+    match = re.search(r"LLM HTTP (\d{3})", message)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _should_retry_exception(error: Exception) -> bool:
+    message = str(error)
+    code = _extract_http_code_from_message(message)
+    if code is not None:
+        if code in NON_RETRYABLE_HTTP_CODES:
+            return False
+        if code in RETRYABLE_HTTP_CODES:
+            return True
+    lowered = message.lower()
+    return any(
+        token in lowered
+        for token in ("timed out", "timeout", "temporarily unavailable", "connection reset", "eof")
+    )
+
+
 # ---------------------------------------------------------------------------
 # Unified LLM Client
 # ---------------------------------------------------------------------------
@@ -128,8 +168,6 @@ class LLMClient:
 
         if self.provider != "openai-compatible":
             raise ValueError(f"Unsupported provider: {self.provider}")
-        if not self.api_key:
-            raise ValueError("API key is required")
         if not self.model:
             raise ValueError("Model is required")
 
@@ -153,14 +191,14 @@ class LLMClient:
             "messages": messages,
         }
         body = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         request = urllib.request.Request(
             endpoint,
             data=body,
             method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
+            headers=headers,
         )
         effective_timeout = timeout_override or self.timeout_secs
         started = time.perf_counter()
@@ -172,7 +210,7 @@ class LLMClient:
         except socket.timeout as exc:
             raise RuntimeError(f"LLM request timed out after {effective_timeout}s: {exc}") from exc
         except urllib.error.HTTPError as exc:
-            details = exc.read().decode("utf-8", errors="replace")
+            details = _condense_http_error_details(exc.read().decode("utf-8", errors="replace"))
             raise RuntimeError(f"LLM HTTP {exc.code}: {details}") from exc
         except urllib.error.URLError as exc:
             if isinstance(exc.reason, (TimeoutError, socket.timeout)):
@@ -232,6 +270,8 @@ class LLMClient:
                 )
             except Exception as exc:
                 last_error = exc
+                if not _should_retry_exception(exc):
+                    break
                 if attempt < max_retries - 1:
                     time.sleep(min(2 ** attempt, 8))
         raise RuntimeError(f"LLM request failed after {max_retries} attempts: {last_error}") from last_error

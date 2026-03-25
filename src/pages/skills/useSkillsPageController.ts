@@ -20,6 +20,35 @@ type Params = {
   t: Translate;
 };
 
+export type MissingSkillSource = {
+  skillName: string;
+  sourceId: string;
+  sourceName: string;
+};
+
+function collectMissingSkillSources(overview: LocalSkillsOverview | null): MissingSkillSource[] {
+  if (!overview) return [];
+  const dedup = new Map<string, MissingSkillSource>();
+  for (const tool of overview.tools) {
+    for (const skill of tool.skills) {
+      if (skill.inMySkills || skill.hashConflictsMySkills) {
+        continue;
+      }
+      if (dedup.has(skill.name)) {
+        continue;
+      }
+      dedup.set(skill.name, {
+        skillName: skill.name,
+        sourceId: tool.toolId,
+        sourceName: tool.toolName,
+      });
+    }
+  }
+  return Array.from(dedup.values()).sort((left, right) =>
+    left.skillName.localeCompare(right.skillName),
+  );
+}
+
 function describeConflictDetail(detail: SkillConflictDetail, t: Translate) {
   const summary = summarizeConflictDetail(detail);
 
@@ -54,6 +83,8 @@ function buildOverviewSummary(overview: LocalSkillsOverview, t: Translate) {
 
 export function useSkillsPageController({ onRefresh, t }: Params) {
   const [overviewBusy, setOverviewBusy] = useState(false);
+  const [overviewSyncBusy, setOverviewSyncBusy] = useState(false);
+  const [overviewSyncingSkillName, setOverviewSyncingSkillName] = useState<string | null>(null);
   const [overviewStatus, setOverviewStatus] = useState("");
   const [overview, setOverview] = useState<LocalSkillsOverview | null>(null);
 
@@ -65,6 +96,10 @@ export function useSkillsPageController({ onRefresh, t }: Params) {
 
   const conflictSkillNames = useMemo(() => {
     return selectConflictSkillNames(overview);
+  }, [overview]);
+
+  const missingSkillSources = useMemo(() => {
+    return collectMissingSkillSources(overview);
   }, [overview]);
 
   async function handleLocalOverview() {
@@ -117,6 +152,98 @@ export function useSkillsPageController({ onRefresh, t }: Params) {
     setConflictStatus("");
   }
 
+  async function refreshOverviewAfterSync() {
+    const refreshedOverview = await setupLocalSkillsOverview();
+    setOverview(refreshedOverview);
+    onRefresh();
+    return refreshedOverview;
+  }
+
+  async function handleSyncMissingSkill(source: MissingSkillSource) {
+    if (!source.skillName || !source.sourceId) {
+      return;
+    }
+    setOverviewSyncBusy(true);
+    setOverviewSyncingSkillName(source.skillName);
+    setOverviewStatus(
+      t("skills.overview.sync.single.start", {
+        skill: source.skillName,
+        source: source.sourceName,
+      }),
+    );
+    try {
+      await setupResolveSkillConflict(source.skillName, source.sourceId);
+      const refreshed = await refreshOverviewAfterSync();
+      setOverviewStatus(
+        t("skills.overview.sync.single.done", {
+          skill: source.skillName,
+          source: source.sourceName,
+          missing: refreshed.missingInMySkills,
+        }),
+      );
+    } catch (e: unknown) {
+      setOverviewStatus(String(e));
+    } finally {
+      setOverviewSyncBusy(false);
+      setOverviewSyncingSkillName(null);
+    }
+  }
+
+  async function handleSyncAllMissingSkills() {
+    if (missingSkillSources.length === 0) {
+      setOverviewStatus(t("skills.overview.sync.none"));
+      return;
+    }
+
+    setOverviewSyncBusy(true);
+    setOverviewStatus(t("skills.overview.sync.start", { count: missingSkillSources.length }));
+
+    let imported = 0;
+    let failed = 0;
+    let firstError = "";
+
+    for (const source of missingSkillSources) {
+      setOverviewSyncingSkillName(source.skillName);
+      try {
+        await setupResolveSkillConflict(source.skillName, source.sourceId);
+        imported += 1;
+      } catch (error: unknown) {
+        failed += 1;
+        if (!firstError) {
+          firstError = String(error);
+        }
+      }
+    }
+
+    try {
+      const refreshed = await refreshOverviewAfterSync();
+      if (failed === 0) {
+        setOverviewStatus(
+          t("skills.overview.sync.done", {
+            imported,
+            detected: missingSkillSources.length,
+            skipped: 0,
+            missing: refreshed.missingInMySkills,
+          }),
+        );
+      } else {
+        setOverviewStatus(
+          t("skills.overview.sync.partial", {
+            imported,
+            failed,
+            missing: refreshed.missingInMySkills,
+            error: firstError,
+          }),
+        );
+      }
+    } catch (e: unknown) {
+      setOverviewStatus(String(e));
+    } finally {
+      setOverviewSyncBusy(false);
+      setOverviewSyncingSkillName(null);
+    }
+  }
+
   async function handleResolveConflict(sourceId: string) {
     if (!conflictDetail) return;
     const source = conflictDetail.variants.find((variant) => variant.sourceId === sourceId);
@@ -148,8 +275,11 @@ export function useSkillsPageController({ onRefresh, t }: Params) {
 
   return {
     overviewBusy,
+    overviewSyncBusy,
+    overviewSyncingSkillName,
     overviewStatus,
     overview,
+    missingSkillSources,
     conflictSkillNames,
     activeConflictSkill,
     conflictDetailBusy,
@@ -157,6 +287,8 @@ export function useSkillsPageController({ onRefresh, t }: Params) {
     conflictStatus,
     conflictDetail,
     handleLocalOverview,
+    handleSyncMissingSkill,
+    handleSyncAllMissingSkills,
     handleOpenConflictResolver,
     handleCloseConflictResolver,
     handleResolveConflict,

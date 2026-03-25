@@ -1,4 +1,4 @@
-import { mkdir, copyFile, access, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, copyFile, access, readFile, readdir, rm, cp } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -45,6 +45,18 @@ async function removeStaleSetupFiles(releaseDir, keepFileName) {
   }
 }
 
+async function syncPortablePythonRuntime(projectRoot, releaseDir) {
+  const sourcePyDir = path.join(projectRoot, "src-tauri", "py");
+  const targetPyDir = path.join(releaseDir, "py");
+  await ensureFileExists(
+    sourcePyDir,
+    "Missing src-tauri/py. Cannot prepare portable eval runtime.",
+  );
+  await rm(targetPyDir, { recursive: true, force: true });
+  await cp(sourcePyDir, targetPyDir, { recursive: true, force: true });
+  return targetPyDir;
+}
+
 export async function syncReleaseArtifacts(options = {}) {
   const projectRoot = options.projectRoot ?? path.resolve(__dirname, "..");
   const releaseDir = options.releaseDir ?? path.join(projectRoot, "release");
@@ -77,6 +89,7 @@ export async function syncReleaseArtifacts(options = {}) {
 
   const targetExe = path.join(releaseDir, "Skillar.exe");
   const targetSetupExe = path.join(releaseDir, setupExeName);
+  const targetPyDir = await syncPortablePythonRuntime(projectRoot, releaseDir);
 
   await copyFile(sourceExe, targetExe);
   await copyFile(sourceSetupExe, targetSetupExe);
@@ -87,6 +100,7 @@ export async function syncReleaseArtifacts(options = {}) {
     releaseDir,
     targetExe,
     targetSetupExe,
+    targetPyDir,
   };
 }
 
@@ -94,6 +108,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
   syncReleaseArtifacts()
     .then((result) => {
       console.log(`Prepared launcher: ${result.targetExe}`);
+      console.log(`Prepared portable py runtime: ${result.targetPyDir}`);
       console.log(`Prepared installer: ${result.targetSetupExe}`);
     })
     .catch((error) => {

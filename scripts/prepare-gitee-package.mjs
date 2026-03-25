@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile, cp } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -326,6 +326,17 @@ export async function prepareGiteePackage(options = {}) {
   await copyFile(sourceExe, targetExe);
   await copyFile(setupExePath, targetSetupExe);
   await copyFile(signaturePath, targetSetupSig);
+  const sourcePortablePyDir = path.join(projectRoot, "release", "py");
+  const targetPortablePyDir = path.join(giteeDir, "py");
+  let copiedPortablePyDir = false;
+  try {
+    await access(sourcePortablePyDir);
+    await rm(targetPortablePyDir, { recursive: true, force: true });
+    await cp(sourcePortablePyDir, targetPortablePyDir, { recursive: true, force: true });
+    copiedPortablePyDir = true;
+  } catch {
+    copiedPortablePyDir = false;
+  }
 
   const updaterBaseUrl = resolveGiteeReleaseBaseUrl(packageVersion, {
     explicitBaseUrl: giteeReleaseBaseUrl,
@@ -355,6 +366,7 @@ export async function prepareGiteePackage(options = {}) {
     targetExe,
     targetSetupExe,
     targetSetupSig,
+    targetPortablePyDir: copiedPortablePyDir ? targetPortablePyDir : null,
     latestJsonPath,
     updaterBaseUrl,
     usingPlaceholderUpdaterBaseUrl: updaterBaseUrl.includes("<owner>/<repo>"),
@@ -372,6 +384,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
       console.log(`- Skillar.exe: ${result.targetExe}`);
       console.log(`- Setup exe  : ${result.targetSetupExe}`);
       console.log(`- Setup sig  : ${result.targetSetupSig}`);
+      if (result.targetPortablePyDir) {
+        console.log(`- portable py: ${result.targetPortablePyDir}`);
+      } else {
+        console.warn("- portable py: release/py not found, skipped");
+      }
       console.log(`- latest.json: ${result.latestJsonPath}`);
       console.log(`- Base URL   : ${result.updaterBaseUrl}`);
       if (result.usingPlaceholderUpdaterBaseUrl) {

@@ -480,9 +480,14 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
       <SkillsOverviewPanel
         overview={controller.overview}
         overviewStatus={controller.overviewStatus}
+        overviewSyncBusy={controller.overviewSyncBusy}
+        overviewSyncingSkillName={controller.overviewSyncingSkillName}
+        missingSkillSources={controller.missingSkillSources}
         conflictDetailBusy={controller.conflictDetailBusy}
         conflictSkillNames={controller.conflictSkillNames}
         t={t}
+        onSyncMissingSkills={() => void controller.handleSyncAllMissingSkills()}
+        onSyncMissingSkill={(source) => void controller.handleSyncMissingSkill(source)}
         onOpenConflictResolver={(skillName) => void controller.handleOpenConflictResolver(skillName)}
       />
 

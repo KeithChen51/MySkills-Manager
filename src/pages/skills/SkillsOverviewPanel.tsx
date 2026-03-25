@@ -1,23 +1,34 @@
 import type { LocalSkillsOverview } from "../../api/tauri";
 import type { MessageKey } from "../../i18n/messages";
+import type { MissingSkillSource } from "./useSkillsPageController";
 
 type Translate = (key: MessageKey, params?: Record<string, string | number>) => string;
 
 type Props = {
   overview: LocalSkillsOverview | null;
   overviewStatus: string;
+  overviewSyncBusy: boolean;
+  overviewSyncingSkillName: string | null;
+  missingSkillSources: MissingSkillSource[];
   conflictDetailBusy: boolean;
   conflictSkillNames: string[];
   t: Translate;
+  onSyncMissingSkills: () => void;
+  onSyncMissingSkill: (source: MissingSkillSource) => void;
   onOpenConflictResolver: (skillName: string) => void;
 };
 
 export default function SkillsOverviewPanel({
   overview,
   overviewStatus,
+  overviewSyncBusy,
+  overviewSyncingSkillName,
+  missingSkillSources,
   conflictDetailBusy,
   conflictSkillNames,
   t,
+  onSyncMissingSkills,
+  onSyncMissingSkill,
   onOpenConflictResolver,
 }: Props) {
   if (!overviewStatus && !overview) {
@@ -47,6 +58,18 @@ export default function SkillsOverviewPanel({
             <span className="skills-overview-tag matched">{t("skills.overview.legend.matched")}</span>
             <span className="skills-overview-tag missing">{t("skills.overview.legend.missing")}</span>
             <span className="skills-overview-tag conflict">{t("skills.overview.legend.conflict")}</span>
+          </div>
+          <div className="skills-overview-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={onSyncMissingSkills}
+              disabled={overviewSyncBusy || missingSkillSources.length === 0}
+            >
+              {overviewSyncBusy
+                ? t("skills.overview.sync.button.busy")
+                : t("skills.overview.sync.button", { count: missingSkillSources.length })}
+            </button>
           </div>
           {overview.duplicateNames.length > 0 && (
             <div className="skills-overview-duplicates">
@@ -108,6 +131,28 @@ export default function SkillsOverviewPanel({
                           {skill.name}
                         </button>
                       );
+                    }
+
+                    if (!skill.inMySkills) {
+                      const source = missingSkillSources.find(
+                        (item) => item.skillName === skill.name && item.sourceId === tool.toolId,
+                      );
+                      if (source) {
+                        const syncingCurrent = overviewSyncingSkillName === source.skillName;
+                        return (
+                          <button
+                            type="button"
+                            key={`${tool.toolId}-${skill.name}`}
+                            className={`skills-overview-tag ${stateClass} skills-overview-sync-btn`}
+                            onClick={() => onSyncMissingSkill(source)}
+                            disabled={conflictDetailBusy || overviewSyncBusy}
+                            title={t("skills.overview.sync.single.button")}
+                          >
+                            {skill.name}
+                            {syncingCurrent ? ` · ${t("skills.overview.sync.single.busy")}` : ""}
+                          </button>
+                        );
+                      }
                     }
 
                     return (

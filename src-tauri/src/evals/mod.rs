@@ -8,6 +8,8 @@ use std::io::Write;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Arc;
@@ -39,6 +41,8 @@ const MAX_EVAL_WORKERS: usize = 16;
 const DEFAULT_REVIEW_QUEUE_LIMIT: usize = 30;
 const DEFAULT_SAMPLE_TIMING_HISTORY_LIMIT: usize = 80;
 const MAX_SAMPLE_TIMING_HISTORY_LIMIT: usize = 500;
+#[cfg(windows)]
+const CREATE_NO_WINDOW_FLAG: u32 = 0x08000000;
 const TRIGGER_BUCKET_MIN_SAMPLES: usize = 12;
 const TRIGGER_BUCKET_POSITIVE: &str = "positive_trigger";
 const TRIGGER_BUCKET_NEGATIVE: &str = "negative_trigger";
@@ -746,13 +750,6 @@ fn normalize_cost_currency(value: &str) -> String {
     }
 }
 
-fn normalize_optional_group_id(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .map(std::string::ToString::to_string)
-}
-
 fn sanitize_eval_config(raw: RawEvalConfig) -> EvalConfig {
     let sample_model = normalize_model(
         raw.sample_model
@@ -802,13 +799,6 @@ fn sanitize_eval_config(raw: RawEvalConfig) -> EvalConfig {
         raw.model_groups
     };
 
-    let sample_model_group_id =
-        normalize_optional_group_id(raw.sample_model_group_id.as_deref())
-            .filter(|id| model_groups.iter().any(|group| group.id.trim() == id));
-    let run_model_group_id =
-        normalize_optional_group_id(raw.run_model_group_id.as_deref())
-            .filter(|id| model_groups.iter().any(|group| group.id.trim() == id));
-
     EvalConfig {
         api_key: raw.api_key.unwrap_or_default().trim().to_string(),
         provider: normalize_provider(raw.provider.as_deref().unwrap_or(DEFAULT_PROVIDER)),
@@ -817,8 +807,6 @@ fn sanitize_eval_config(raw: RawEvalConfig) -> EvalConfig {
         run_model: run_model.clone(),
         default_model: run_model,
         judge_model,
-        sample_model_group_id,
-        run_model_group_id,
         cost_currency: normalize_cost_currency(
             raw.cost_currency
                 .as_deref()
@@ -854,14 +842,7 @@ fn write_eval_config_with_home(home: &Path, config: &EvalConfig) -> Result<(), S
 }
 
 fn require_eval_config_with_api_key(home: &Path) -> Result<EvalConfig, String> {
-    let config = read_eval_config_with_home(home)?;
-    if config.api_key.trim().is_empty() {
-        return Err(
-            "Eval API key is not configured. Please set it in Settings -> API Configuration."
-                .to_string(),
-        );
-    }
-    Ok(config)
+    read_eval_config_with_home(home)
 }
 
 fn path_to_utf8(path: &Path) -> Result<String, String> {
@@ -1146,6 +1127,14 @@ fn detect_python_runtime(workdir: &Path) -> Result<PythonRuntime, String> {
     ))
 }
 
+#[cfg(windows)]
+fn configure_eval_engine_command(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW_FLAG);
+}
+
+#[cfg(not(windows))]
+fn configure_eval_engine_command(_command: &mut Command) {}
+
 fn run_eval_engine(
     args: &[String],
     control: Option<&Arc<EvalRunControl>>,
@@ -1160,7 +1149,8 @@ fn run_eval_engine(
     let workdir = resolve_python_workdir()?;
     let runtime = detect_python_runtime(&workdir)?;
     let runtime_name = runtime_label(&runtime);
-    let mut child = Command::new(runtime.command)
+    let mut command = Command::new(runtime.command);
+    command
         .args(runtime.pre_args)
         .arg("-m")
         .arg("eval_engine")
@@ -1170,7 +1160,9 @@ fn run_eval_engine(
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .current_dir(&workdir)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_eval_engine_command(&mut command);
+    let mut child = command
         .spawn()
         .map_err(|e| format!("Failed to launch eval_engine via {runtime_name}: {e}"))?;
 
@@ -5747,8 +5739,6 @@ pub fn eval_save_config(
     run_model: Option<String>,
     default_model: Option<String>,
     judge_model: Option<String>,
-    sample_model_group_id: Option<String>,
-    run_model_group_id: Option<String>,
     cost_currency: Option<String>,
     model_groups: Option<Vec<ModelGroup>>,
 ) -> Result<EvalMutationResult, String> {
@@ -5787,12 +5777,6 @@ pub fn eval_save_config(
         .filter(|s| !s.is_empty())
         .unwrap_or("")
         .to_string();
-    let normalized_sample_model_group_id =
-        normalize_optional_group_id(sample_model_group_id.as_deref())
-            .filter(|id| groups.iter().any(|group| group.id.trim() == id));
-    let normalized_run_model_group_id =
-        normalize_optional_group_id(run_model_group_id.as_deref())
-            .filter(|id| groups.iter().any(|group| group.id.trim() == id));
     let config = EvalConfig {
         api_key: effective_api_key.trim().to_string(),
         provider: normalize_provider(provider.as_deref().unwrap_or(DEFAULT_PROVIDER)),
@@ -5801,8 +5785,6 @@ pub fn eval_save_config(
         run_model: normalized_run_model.clone(),
         default_model: normalized_run_model,
         judge_model: normalized_judge_model,
-        sample_model_group_id: normalized_sample_model_group_id,
-        run_model_group_id: normalized_run_model_group_id,
         cost_currency: normalize_cost_currency(
             cost_currency.as_deref().unwrap_or(DEFAULT_COST_CURRENCY),
         ),
@@ -6400,11 +6382,7 @@ mod tests {
             sample_model: " gpt-4.1-mini ".to_string(),
             run_model: " gpt-4.1 ".to_string(),
             default_model: " gpt-4.1 ".to_string(),
-            judge_model: " gpt-4.1-mini ".to_string(),
-            sample_model_group_id: None,
-            run_model_group_id: None,
             cost_currency: " cny ".to_string(),
-            model_groups: Vec::new(),
         };
         write_eval_config_with_home(&home, &config).expect("write eval config");
         let loaded = read_eval_config_with_home(&home).expect("read eval config");
@@ -6417,9 +6395,6 @@ mod tests {
         assert_eq!(loaded.sample_model, "gpt-4.1-mini");
         assert_eq!(loaded.run_model, "gpt-4.1");
         assert_eq!(loaded.default_model, "gpt-4.1");
-        assert_eq!(loaded.judge_model, "gpt-4.1-mini");
-        assert!(!loaded.model_groups.is_empty());
-        assert_eq!(loaded.model_groups[0].base_url, "https://api.openai.com/v1");
         assert_eq!(loaded.cost_currency, "CNY");
     }
 

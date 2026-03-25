@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use serde_yaml::{Mapping, Value as YamlValue};
 
+const MAX_SKILL_DISCOVERY_DEPTH: usize = 2;
+
 #[derive(Debug, Serialize, Clone)]
 pub struct SkillMeta {
     pub name: String,
@@ -138,6 +140,46 @@ fn split_frontmatter(raw: &str) -> Result<(Mapping, String), String> {
             .map_err(|e| format!("Invalid YAML frontmatter: {e}"))?
     };
     Ok((frontmatter, body))
+}
+
+fn discover_skill_dirs_recursive(
+    current: &Path,
+    depth: usize,
+    out: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(current).map_err(|e| format!("Read root dir failed: {e}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Read entry failed: {e}"))?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+
+        if path.join("SKILL.md").exists() {
+            out.push(path);
+            continue;
+        }
+
+        if depth < MAX_SKILL_DISCOVERY_DEPTH {
+            discover_skill_dirs_recursive(&path, depth + 1, out)?;
+        }
+    }
+    Ok(())
+}
+
+fn discover_skill_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut dirs = Vec::<PathBuf>::new();
+    discover_skill_dirs_recursive(root, 1, &mut dirs)?;
+    dirs.sort();
+    dirs.dedup();
+    Ok(dirs)
 }
 
 fn build_markdown(frontmatter: &Mapping, body: &str) -> Result<String, String> {
@@ -354,25 +396,16 @@ fn yaml_get_taxonomy(map: &Mapping) -> Option<SkillTaxonomy> {
 }
 
 fn locate_skill_dir(root: &Path, name: &str) -> Result<PathBuf, String> {
-    let entries = fs::read_dir(root).map_err(|e| format!("Read root dir failed: {e}"))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Read entry failed: {e}"))?;
-        let entry_path = entry.path();
-        if !entry_path.is_dir() {
-            continue;
-        }
-        let skill_file = entry_path.join("SKILL.md");
-        if !skill_file.exists() {
-            continue;
-        }
-
-        let raw =
-            fs::read_to_string(&skill_file).map_err(|e| format!("Read SKILL.md failed: {e}"))?;
-        let (frontmatter, _) = split_frontmatter(&raw)?;
-        let skill_name = yaml_get_string(&frontmatter, "name")
-            .unwrap_or_else(|| entry.file_name().to_string_lossy().to_string());
-        if skill_name == name || entry.file_name().to_string_lossy() == name {
-            return Ok(entry_path);
+    for skill in list_skills(root)? {
+        let directory = PathBuf::from(skill.directory);
+        if skill.name == name
+            || directory
+                .file_name()
+                .and_then(|segment| segment.to_str())
+                .map(|segment| segment == name)
+                .unwrap_or(false)
+        {
+            return Ok(directory);
         }
     }
 
@@ -489,24 +522,21 @@ fn rescan_shape_tags_with_home_and_root(
 ) -> Result<SkillShapeTagScanResult, String> {
     let mut entries = HashMap::<String, SkillShapeTagRegistryEntry>::new();
     if root.exists() {
-        let root_entries = fs::read_dir(root).map_err(|e| format!("Read root dir failed: {e}"))?;
-        for entry in root_entries {
-            let entry = entry.map_err(|e| format!("Read entry failed: {e}"))?;
-            let entry_path = entry.path();
-            if !entry_path.is_dir() {
-                continue;
-            }
-            let file_path = entry_path.join("SKILL.md");
-            if !file_path.exists() {
-                continue;
-            }
+        for skill_dir in discover_skill_dirs(root)? {
+            let file_path = skill_dir.join("SKILL.md");
             let raw =
                 fs::read_to_string(&file_path).map_err(|e| format!("Read SKILL.md failed: {e}"))?;
             let (frontmatter, _) = split_frontmatter(&raw)?;
             let skill_name = yaml_get_string(&frontmatter, "name")
-                .unwrap_or_else(|| entry.file_name().to_string_lossy().to_string());
+                .or_else(|| {
+                    skill_dir
+                        .file_name()
+                        .and_then(|segment| segment.to_str())
+                        .map(std::string::ToString::to_string)
+                })
+                .unwrap_or_default();
             let key = normalize_skill_path_key(&file_path);
-            let tags = infer_software_taxonomy_tags(&entry_path);
+            let tags = infer_software_taxonomy_tags(&skill_dir);
             let updated_at = chrono::Utc::now().to_rfc3339();
             entries.insert(
                 key,
@@ -589,24 +619,20 @@ fn list_skills_with_home(root: &Path, home: &Path) -> Result<Vec<SkillMeta>, Str
     let taxonomy_overrides = load_taxonomy_overrides(home);
     let shape_tag_overrides = load_shape_tag_overrides(home);
     let mut out = Vec::new();
-    let entries = fs::read_dir(root).map_err(|e| format!("Read root dir failed: {e}"))?;
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Read entry failed: {e}"))?;
-        let entry_path = entry.path();
-        if !entry_path.is_dir() {
-            continue;
-        }
-
+    for entry_path in discover_skill_dirs(root)? {
         let file_path = entry_path.join("SKILL.md");
-        if !file_path.exists() {
-            continue;
-        }
 
         let raw =
             fs::read_to_string(&file_path).map_err(|e| format!("Read SKILL.md failed: {e}"))?;
         let (frontmatter, _) = split_frontmatter(&raw)?;
         let name = yaml_get_string(&frontmatter, "name")
-            .unwrap_or_else(|| entry.file_name().to_string_lossy().to_string());
+            .or_else(|| {
+                entry_path
+                    .file_name()
+                    .and_then(|segment| segment.to_str())
+                    .map(std::string::ToString::to_string)
+            })
+            .unwrap_or_default();
         let taxonomy_key = normalize_skill_path_key(&file_path);
         let inferred_tags = shape_tag_overrides
             .get(&taxonomy_key)
@@ -800,6 +826,56 @@ tags:
     }
 
     #[test]
+    fn list_skills_detects_grouped_nested_skill_dirs() {
+        let root = temp_root("myskills-tauri-skills-test");
+        let grouped_dir = root.join("community").join("deep-research");
+        fs::create_dir_all(&grouped_dir).expect("create grouped skill dir");
+        fs::write(
+            grouped_dir.join("SKILL.md"),
+            r#"---
+name: deep-research
+description: nested skill
+---
+
+# Deep Research
+"#,
+        )
+        .expect("write nested skill");
+
+        let skills = list_skills(&root).expect("list skills");
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "deep-research");
+        assert!(
+            skills[0]
+                .directory
+                .replace('\\', "/")
+                .ends_with("/community/deep-research")
+        );
+    }
+
+    #[test]
+    fn get_content_finds_grouped_nested_skill_dirs() {
+        let root = temp_root("myskills-tauri-skills-test");
+        let grouped_dir = root.join("catalog").join("flow-router");
+        fs::create_dir_all(&grouped_dir).expect("create grouped skill dir");
+        fs::write(
+            grouped_dir.join("SKILL.md"),
+            r#"---
+name: flow-router
+description: nested resolver
+---
+
+Nested content
+"#,
+        )
+        .expect("write nested skill");
+
+        let content = get_content(&root, "flow-router").expect("get nested content");
+        assert_eq!(content.frontmatter["name"], "flow-router");
+        assert!(content.body.contains("Nested content"));
+    }
+
+    #[test]
     fn list_skills_reads_taxonomy_metadata() {
         let root = temp_root("myskills-tauri-skills-test");
         fs::create_dir_all(root.join("taxonomy-skill")).expect("create skill dir");
@@ -891,6 +967,32 @@ description: run scripted automation
             .iter()
             .any(|tag| tag == "taxonomy:anthropic-category:workflow-automation"));
         assert!(inferred.iter().any(|tag| tag == "taxonomy:shape:scripted"));
+    }
+
+    #[test]
+    fn rescan_shape_tags_includes_grouped_nested_skill_dirs() {
+        let home = temp_root("myskills-tauri-skills-test");
+        let root = temp_root("myskills-tauri-skills-test");
+        let skill_dir = root.join("community").join("nested-shape-skill");
+        fs::create_dir_all(skill_dir.join("scripts")).expect("create nested scripts dir");
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            r#"---
+name: nested-shape-skill
+description: nested shape demo
+---
+
+# Nested Shape Skill
+"#,
+        )
+        .expect("write nested skill");
+        fs::write(skill_dir.join("scripts").join("run.py"), "print('ok')\n").expect("write script");
+
+        let result = rescan_shape_tags_with_home_and_root(&home, &root).expect("rescan nested tags");
+        assert_eq!(result.scanned_skills, 1);
+
+        let overrides = load_shape_tag_overrides(&home);
+        assert_eq!(overrides.len(), 1);
     }
 
     #[test]

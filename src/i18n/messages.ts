@@ -537,6 +537,13 @@ const enMessages = {
   "skills.overview.sync.start": "Recording {count} missing skills to my-skills...",
   "skills.overview.sync.done":
     "Recorded {imported}/{detected}, skipped existing {skipped}. Remaining missing: {missing}.",
+  "skills.overview.sync.single.button": "Sync this skill",
+  "skills.overview.sync.single.busy": "Syncing",
+  "skills.overview.sync.single.start": "Syncing {skill} from {source}...",
+  "skills.overview.sync.single.done": "Synced {skill} from {source}. Remaining missing: {missing}.",
+  "skills.overview.sync.none": "No missing skills to sync.",
+  "skills.overview.sync.partial":
+    "Synced {imported}, failed {failed}. Remaining missing: {missing}. Error: {error}",
   "skills.overview.panel.summary":
     "Tools {tools}, total skills {total}, unique {unique}, recorded {matched}, not recorded {missing}, conflicts {conflict}",
   "skills.overview.legend.matched": "Hash matched",
@@ -1592,6 +1599,13 @@ const zhMessages: Partial<Record<MessageKey, string>> = {
   "skills.overview.scan.noChange": "{summary} 当前无需同步。",
   "skills.overview.sync.start": "开始同步 {count} 个未收录技能...",
   "skills.overview.sync.done": "已同步 {imported}/{detected}，跳过已存在 {skipped}。当前未收录 {missing}。",
+  "skills.overview.sync.single.button": "同步此技能",
+  "skills.overview.sync.single.busy": "同步中",
+  "skills.overview.sync.single.start": "正在从 {source} 同步 {skill}...",
+  "skills.overview.sync.single.done": "已从 {source} 同步 {skill}。当前未收录 {missing}。",
+  "skills.overview.sync.none": "当前没有可同步的未收录技能。",
+  "skills.overview.sync.partial":
+    "已同步 {imported} 个，失败 {failed} 个。当前未收录 {missing}。错误：{error}",
   "skills.overview.panel.summary": "工具数 {tools}，技能总数 {total}，唯一技能 {unique}，已同步 {matched}，未收录 {missing}，冲突 {conflict}",
   "skills.overview.legend.matched": "哈希一致",
   "skills.overview.legend.missing": "未收录",

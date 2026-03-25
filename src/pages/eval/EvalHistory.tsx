@@ -43,7 +43,7 @@ export default function EvalHistory({ open, onClose, skillName }: EvalHistoryPro
   const [listLoading, setListLoading] = useState(false);
   const [loadBusyPath, setLoadBusyPath] = useState<string | null>(null);
   const [loadError, setLoadError] = useState("");
-  const { dialogRef } = useDialogA11y<HTMLElement>({
+  const { dialogRef } = useDialogA11y({
     open,
     onClose,
     initialFocusRef: closeButtonRef,

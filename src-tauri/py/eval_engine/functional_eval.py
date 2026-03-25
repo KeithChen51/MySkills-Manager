@@ -345,7 +345,7 @@ class JudgeClient:
         model: str,
         evidence_dir: Path | None,
     ) -> dict[str, Any]:
-        if self.provider == "openai-compatible" and self.api_key:
+        if self.provider == "openai-compatible":
             try:
                 return _judge_quality_llm(
                     prompt=prompt,
@@ -524,57 +524,9 @@ def _aggregate_case_dimension_scores(results: list[dict[str, Any]]) -> dict[str,
     return {key: round(mean(values), 4) for key, values in sorted(buckets.items()) if values}
 
 
-def _validate_functional_eval_set(payload: object) -> list[dict[str, Any]]:
-    if not isinstance(payload, list):
-        raise ValueError("Invalid functional eval set: expected top-level JSON array.")
-
-    validated: list[dict[str, Any]] = []
-    for index, item in enumerate(payload, start=1):
-        if not isinstance(item, dict):
-            raise ValueError(
-                f"Invalid functional eval set: item #{index} must be an object with keys: id, prompt, assertions."
-            )
-
-        case_id = item.get("id")
-        prompt = item.get("prompt")
-        assertions = item.get("assertions")
-
-        if not isinstance(case_id, str) or not case_id.strip():
-            raise ValueError(
-                f"Invalid functional eval set: item #{index} field 'id' must be a non-empty string."
-            )
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise ValueError(
-                f"Invalid functional eval set: item #{index} field 'prompt' must be a non-empty string."
-            )
-        if not isinstance(assertions, list):
-            raise ValueError(
-                f"Invalid functional eval set: item #{index} field 'assertions' must be an array of strings."
-            )
-
-        cleaned_assertions = [str(x).strip() for x in assertions if isinstance(x, str) and str(x).strip()]
-        if not cleaned_assertions:
-            raise ValueError(
-                f"Invalid functional eval set: item #{index} field 'assertions' must contain at least one non-empty string."
-            )
-
-        validated.append(
-            {
-                "id": case_id.strip(),
-                "prompt": prompt.strip(),
-                "assertions": cleaned_assertions,
-            }
-        )
-
-    if not validated:
-        raise ValueError("Invalid functional eval set: no valid cases found.")
-
-    return validated
-
-
 def run(args: argparse.Namespace) -> dict[str, Any]:
     try:
-        eval_set = _validate_functional_eval_set(json.loads(read_text_file(args.eval_set_path)))
+        eval_set = json.loads(read_text_file(args.eval_set_path))
     except (json.JSONDecodeError, FileNotFoundError, OSError, ValueError) as exc:
         return {"status": "error", "message": f"Failed to read or parse eval set file: {exc}"}
 

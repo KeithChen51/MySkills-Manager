@@ -114,8 +114,6 @@ pub struct EvalConfig {
     pub run_model: String,
     pub default_model: String,
     pub judge_model: String,
-    pub sample_model_group_id: Option<String>,
-    pub run_model_group_id: Option<String>,
     pub cost_currency: String,
     #[serde(default)]
     pub model_groups: Vec<ModelGroup>,
@@ -131,8 +129,6 @@ pub(crate) struct RawEvalConfig {
     pub(crate) run_model: Option<String>,
     pub(crate) default_model: Option<String>,
     pub(crate) judge_model: Option<String>,
-    pub(crate) sample_model_group_id: Option<String>,
-    pub(crate) run_model_group_id: Option<String>,
     pub(crate) cost_currency: Option<String>,
     #[serde(default)]
     pub(crate) model_groups: Vec<ModelGroup>,
@@ -148,8 +144,6 @@ impl Default for EvalConfig {
             run_model: DEFAULT_MODEL.to_string(),
             default_model: DEFAULT_MODEL.to_string(),
             judge_model: String::new(),
-            sample_model_group_id: None,
-            run_model_group_id: None,
             cost_currency: DEFAULT_COST_CURRENCY.to_string(),
             model_groups: Vec::new(),
         }
