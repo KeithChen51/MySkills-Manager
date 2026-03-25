@@ -40,3 +40,11 @@ lerna-debug.log*
 
 # Local Codex environment files
 .codex/environments/
+
+# Local AI tool workspace artifacts
+.agents/
+.claude/
+.codebuddy/
+.codex-merge-backup/
+.trae/
+.windsurf/

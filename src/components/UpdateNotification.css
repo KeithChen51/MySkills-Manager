@@ -37,9 +37,9 @@
   color: var(--text-secondary);
   cursor: pointer;
   font-size: var(--text-lg);
-  height: 40px;
+  height: var(--control-height-touch);
   line-height: 1;
-  width: 40px;
+  width: var(--control-height-touch);
 }
 
 .update-close-btn:hover {
@@ -87,7 +87,10 @@
   background: linear-gradient(90deg, var(--accent), var(--prism-aqua));
   border-radius: inherit;
   height: 100%;
-  transition: width var(--transition-fast);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--transition-fast);
+  will-change: transform;
 }
 
 .update-progress-text {

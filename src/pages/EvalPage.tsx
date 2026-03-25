@@ -1,6 +1,5 @@
 ﻿import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
-import ReactECharts from "echarts-for-react";
 import {
   Component,
   useCallback,
@@ -40,6 +39,7 @@ import {
   type ModelGroup,
   type SkillMeta,
 } from "../api/tauri";
+import DeferredEChart from "../components/DeferredEChart";
 import KpiCard from "../components/KpiCard";
 import { useI18n } from "../i18n/I18nProvider";
 import type { MessageKey } from "../i18n/messages";
@@ -2985,8 +2985,10 @@ export default function EvalPage({ skills }: Props) {
                 resetKey={`${panelKey}-${chartThemeName}-${results.length}`}
                 fallback={<p className="eval-path-hint">{t("eval.chart.failedFallback")}</p>}
               >
-                <ReactECharts
+                <DeferredEChart
+                  variant="eval"
                   className="eval-chart"
+                  placeholderHeight={220}
                   theme={chartThemeName}
                   option={{
                     animationDuration: 120,
@@ -3296,8 +3298,10 @@ export default function EvalPage({ skills }: Props) {
                 resetKey={`functional-${chartThemeName}-${results.length}`}
                 fallback={<p className="eval-path-hint">{t("eval.chart.failedFallback")}</p>}
               >
-                <ReactECharts
+                <DeferredEChart
+                  variant="eval"
                   className="eval-chart"
+                  placeholderHeight={220}
                   theme={chartThemeName}
                   option={{
                     animationDuration: 120,
@@ -4510,7 +4514,7 @@ export default function EvalPage({ skills }: Props) {
             total: progressEvent?.totalSteps ?? 0,
           })}
         >
-          <span style={{ width: `${progressPercent}%` }} />
+          <span style={{ transform: `scaleX(${progressPercent / 100})` }} />
         </div>
         </article>
       )}

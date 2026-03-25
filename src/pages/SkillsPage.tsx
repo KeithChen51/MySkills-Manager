@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import {
   evalListHistory,
@@ -12,7 +12,6 @@ import {
   type SkillMeta,
 } from "../api/tauri";
 import SkillCard from "../components/SkillCard";
-import SkillEditor from "../components/SkillEditor";
 import { IconRefresh, IconSearch } from "../components/icons";
 import useDialogA11y from "../components/useDialogA11y";
 import {
@@ -30,6 +29,8 @@ import SkillConflictDrawer from "./skills/SkillConflictDrawer";
 import SkillsOverviewPanel from "./skills/SkillsOverviewPanel";
 import { useSkillsPageController } from "./skills/useSkillsPageController";
 import "./SkillsPage.css";
+
+const SkillEditor = lazy(() => import("../components/SkillEditor"));
 
 type Props = {
   skills: SkillMeta[];
@@ -518,14 +519,22 @@ export default function SkillsPage({ skills, onRefresh }: Props) {
       )}
 
       {editing && (
-        <SkillEditor
-          skill={editing}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            onRefresh();
-            setEditing(null);
-          }}
-        />
+        <Suspense
+          fallback={
+            <div className="skills-editor-loading" role="status" aria-live="polite">
+              {t("app.loading")}
+            </div>
+          }
+        >
+          <SkillEditor
+            skill={editing}
+            onClose={() => setEditing(null)}
+            onSaved={() => {
+              onRefresh();
+              setEditing(null);
+            }}
+          />
+        </Suspense>
       )}
 
       {detailSkillName && (

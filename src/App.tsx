@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 
 import {
   APP_ERROR_EVENT,
@@ -18,13 +18,14 @@ import SilentUpdateToast from "./components/SilentUpdateToast";
 import UpdateNotification from "./components/UpdateNotification";
 import VersionJumpNotification from "./components/VersionJumpNotification";
 import { useI18n } from "./i18n/I18nProvider";
-import DashboardPage from "./pages/DashboardPage";
-import GitPage from "./pages/GitPage";
-import SkillToolsPage from "./pages/SkillToolsPage";
-import SettingsPage from "./pages/SettingsPage";
-import EvalPage from "./pages/EvalPage";
 import { useAppUpdater } from "./updater/useAppUpdater";
 import "./App.css";
+
+const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const GitPage = lazy(() => import("./pages/GitPage"));
+const SkillToolsPage = lazy(() => import("./pages/SkillToolsPage"));
+const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const EvalPage = lazy(() => import("./pages/EvalPage"));
 
 export default function App() {
   const { t } = useI18n();
@@ -33,6 +34,7 @@ export default function App() {
   const [ping, setPing] = useState(t("app.loading"));
   const [booting, setBooting] = useState(true);
   const [onboardingCompleted, setOnboardingCompleted] = useState(true);
+  const [hasOpenedEval, setHasOpenedEval] = useState(false);
   const [initialSkillsDir, setInitialSkillsDir] = useState("");
   const [initialAutoSync, setInitialAutoSync] = useState(false);
   const [globalErrors, setGlobalErrors] = useState<
@@ -157,6 +159,12 @@ export default function App() {
     loadSkills();
   }
 
+  useEffect(() => {
+    if (view === "eval") {
+      setHasOpenedEval(true);
+    }
+  }, [view]);
+
   if (booting) {
     return <div className="app-status-bar">{t("app.loading")}</div>;
   }
@@ -177,6 +185,8 @@ export default function App() {
         return <SkillToolsPage skills={skills} onRefresh={loadSkills} />;
       case "dashboard":
         return <DashboardPage skills={skills} />;
+      case "eval":
+        return <EvalPage skills={skills} />;
       case "git":
         return <GitPage />;
       case "settings":
@@ -197,6 +207,8 @@ export default function App() {
         );
     }
   }
+
+  const showEvalContainer = hasOpenedEval || view === "eval";
 
   return (
     <AppErrorBoundary
@@ -245,10 +257,20 @@ export default function App() {
               onDismiss={updater.dismissSilentReady}
             />
           )}
-          <div style={{ display: view === "eval" ? "flex" : "none", flex: 1, minHeight: 0 }}>
-            <EvalPage skills={skills} />
-          </div>
-          {view !== "eval" && renderPage()}
+          <Suspense
+            fallback={
+              <div className="app-page-loading" role="status" aria-live="polite">
+                {t("app.loading")}
+              </div>
+            }
+          >
+            {showEvalContainer ? (
+              <div style={{ display: view === "eval" ? "flex" : "none", flex: 1, minHeight: 0 }}>
+                <EvalPage skills={skills} />
+              </div>
+            ) : null}
+            {view !== "eval" ? renderPage() : null}
+          </Suspense>
         </div>
         <div className="app-error-toast-wrap">
           {globalErrors.map((item) => (

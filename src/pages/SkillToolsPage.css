@@ -2,59 +2,66 @@
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--sp-md);
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  overflow: clip;
 }
 
+/* ── Segmented Control Track ── */
 .skill-tools-tabs {
   align-items: center;
-  background: color-mix(in srgb, var(--bg-card) 84%, var(--bg-input) 16%);
-  border: 1px solid var(--border-card);
+  background: color-mix(in srgb, var(--bg-input) 60%, var(--bg-app));
+  border: 1px solid color-mix(in srgb, var(--border-card) 40%, transparent);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.06);
   display: inline-flex;
-  gap: 6px;
-  padding: 4px;
+  gap: 4px;
+  padding: 3px;
   width: fit-content;
 }
 
+/* ── Segmented Control Tab ── */
 .skill-tools-tab {
   background: transparent;
   border: 1px solid transparent;
-  border-radius: calc(var(--radius-md) - 3px);
-  color: var(--text-secondary);
+  border-radius: calc(var(--radius-md) - 4px);
+  color: var(--text-muted);
   cursor: pointer;
   font-family: var(--font-heading);
   font-size: var(--typo-body-size);
   font-weight: 600;
+  letter-spacing: -0.005em;
   line-height: 1;
-  min-height: 38px;
-  min-width: 132px;
+  min-height: var(--control-height-touch);
+  min-width: 120px;
   padding: 0 16px;
   transition:
     background var(--transition-fast),
     border-color var(--transition-fast),
-    color var(--transition-fast),
-    box-shadow var(--transition-fast);
+    box-shadow var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .skill-tools-tab:hover {
-  color: var(--text-primary);
-  border-color: color-mix(in srgb, var(--border-card) 72%, var(--card-hover-border));
+  color: var(--text-secondary);
 }
 
+.skill-tools-tab:focus-visible {
+  border-color: var(--border-active);
+  box-shadow: var(--focus-ring);
+  color: var(--text-primary);
+  outline: none;
+}
+
+/* ── Active Thumb (floating slider) ── */
 .skill-tools-tab.active {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--bg-card) 80%, var(--accent-light)) 0%,
-      var(--bg-card) 100%
-    ),
-    var(--bg-card);
-  border-color: var(--card-hover-border);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--bg-card) 60%, transparent);
+  background: var(--bg-card);
+  border-color: color-mix(in srgb, var(--border-card) 50%, transparent);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.06),
+    0 1px 0 rgba(255, 255, 255, 0.6) inset;
   color: var(--text-primary);
 }
 
@@ -64,6 +71,7 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  overflow: clip;
 }
 
 .skill-tools-pane.is-active {

@@ -66,8 +66,11 @@ export default function SkillEditor({ skill, onClose, onSaved }: Props) {
     }
     monacoConfiguredRef.current = true;
     let active = true;
-    void import("monaco-editor")
-      .then((monaco) => {
+    void Promise.all([
+      import("monaco-editor/esm/vs/editor/editor.api"),
+      import("monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution"),
+    ])
+      .then(([monaco]) => {
         loader.config({ monaco });
         if (active) {
           setMonacoReady(true);

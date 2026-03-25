@@ -36,8 +36,8 @@
   color: var(--text-secondary);
   cursor: pointer;
   font-size: var(--text-lg);
-  height: 40px;
-  width: 40px;
+  height: var(--control-height-touch);
+  width: var(--control-height-touch);
 }
 
 .version-jump-close:hover {

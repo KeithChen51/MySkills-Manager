@@ -1,5 +1,7 @@
 .git-page {
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-x: clip;
+  overflow-y: auto;
 }
 
 .git-page-header {
@@ -107,7 +109,7 @@
 }
 
 .git-remove-overlay {
-  background: color-mix(in srgb, var(--surface-base) 55%, #0b1224);
+  background: color-mix(in srgb, var(--surface-base) 55%, var(--overlay-scrim));
   border: 0;
   cursor: pointer;
   inset: 0;
@@ -352,6 +354,7 @@
 .git-repo-card-main {
   background: transparent;
   border: 0;
+  border-radius: var(--radius-sm);
   color: inherit;
   cursor: pointer;
   display: grid;
@@ -362,6 +365,11 @@
 
 .git-repo-card-main:hover {
   transform: translateY(-1px);
+}
+
+.git-repo-card-main:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
 }
 
 .git-repo-card-main:disabled {
@@ -1241,9 +1249,9 @@
 }
 
 .git-repo-state-pill.is-syncing {
-  background: color-mix(in srgb, #0ea5e9 12%, transparent);
-  border-color: color-mix(in srgb, #0ea5e9 32%, var(--stroke-soft));
-  color: color-mix(in srgb, #0b5d84 78%, var(--text-secondary));
+  background: var(--info-bg);
+  border-color: color-mix(in srgb, var(--info) 32%, var(--stroke-soft));
+  color: color-mix(in srgb, var(--info) 78%, var(--text-secondary));
 }
 
 .git-repo-state-pill.is-error {

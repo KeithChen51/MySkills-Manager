@@ -20,6 +20,7 @@
     "vscode:test": "npm run test --prefix vscode-extension",
     "vscode:package": "npm run package --prefix vscode-extension",
     "lint": "eslint .",
+    "test:ui-regression": "npm run lint && npm run build && node scripts/ui-regression-check.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

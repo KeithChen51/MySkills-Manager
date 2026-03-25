@@ -7,7 +7,7 @@
   display: grid;
   gap: var(--sp-md);
   grid-template-columns: 232px minmax(0, 1fr);
-  min-height: 620px;
+  min-height: clamp(480px, 64vh, 760px);
   padding: var(--sp-md);
 }
 
@@ -51,14 +51,15 @@
   font-size: var(--text-sm);
   font-weight: 600;
   gap: var(--sp-xs);
-  min-height: 40px;
+  min-height: var(--control-height-touch);
   padding: 0 var(--sp-sm) 0 var(--sp-md);
   position: relative;
   text-align: left;
   transition:
     background var(--transition),
     border-color var(--transition),
-    color var(--transition);
+    color var(--transition),
+    box-shadow var(--transition-fast);
   width: 100%;
 }
 
@@ -74,6 +75,13 @@
 .settings-nav-item:hover {
   background: var(--bg-card-hover);
   color: var(--text-primary);
+}
+
+.settings-nav-item:focus-visible {
+  border-color: var(--border-active);
+  box-shadow: var(--focus-ring);
+  color: var(--text-primary);
+  outline: none;
 }
 
 .settings-nav-item.is-active {
@@ -96,7 +104,7 @@
   border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
-  min-height: 620px;
+  min-height: clamp(480px, 64vh, 760px);
   min-width: 0;
 }
 
@@ -444,6 +452,7 @@
 @media (max-width: 1080px) {
   .settings-workbench {
     grid-template-columns: 1fr;
+    min-height: 0;
   }
 
   .settings-pane {

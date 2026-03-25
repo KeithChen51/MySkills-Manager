@@ -49,7 +49,7 @@
   background: color-mix(in srgb, var(--bg-card) 76%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid color-mix(in srgb, var(--text-primary) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 4%, transparent);
   border-radius: var(--radius-md);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 2px 6px rgba(0, 0, 0, 0.02);
   display: grid;
@@ -100,7 +100,7 @@
 .search-box {
   align-items: center;
   background: color-mix(in srgb, var(--bg-input) 40%, var(--bg-card) 60%);
-  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 5%, transparent);
   border-radius: var(--radius-md);
   box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
   color: var(--text-muted);
@@ -301,6 +301,16 @@
   inset: 0;
   position: fixed;
   z-index: var(--z-overlay);
+}
+
+.skills-editor-loading {
+  align-items: center;
+  color: var(--text-secondary);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  position: fixed;
+  z-index: var(--z-modal-backdrop);
 }
 
 .skills-insight-detail-panel {

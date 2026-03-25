@@ -125,7 +125,7 @@ export default function UpdateNotification({
         {isDownloading && (
           <div className="update-progress">
             <div className="update-progress-bar">
-              <div className="update-progress-fill" style={{ width: `${progress}%` }} />
+              <div className="update-progress-fill" style={{ transform: `scaleX(${progress / 100})` }} />
             </div>
             <span className="update-progress-text">
               {t("settings.update.dialog.downloading")} {progress}%

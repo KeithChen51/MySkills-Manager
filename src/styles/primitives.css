@@ -12,6 +12,19 @@
   padding: var(--page-grid-inset-y) var(--page-grid-inset-x);
 }
 
+.sr-only {
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
 .page-header {
   align-items: baseline;
   display: flex;
@@ -49,11 +62,11 @@
 
 .page-title,
 .typo-page-title {
-  color: var(--text-primary);
+  color: color-mix(in srgb, var(--prism-blue) 14%, var(--text-primary));
   font-family: var(--font-heading);
   font-size: var(--typo-page-title-size);
   font-weight: var(--typo-page-title-weight);
-  letter-spacing: 0.01em;
+  letter-spacing: -0.01em;
   line-height: var(--typo-page-title-line);
   margin: 0;
 }
@@ -81,7 +94,7 @@
   font-family: var(--font-heading);
   font-size: var(--typo-section-title-size);
   font-weight: var(--typo-section-title-weight);
-  letter-spacing: 0.01em;
+  letter-spacing: -0.005em;
   line-height: var(--typo-section-title-line);
   margin: 0 0 var(--sp-md);
 }
@@ -101,10 +114,17 @@
 }
 
 .empty-state {
+  background: color-mix(in srgb, var(--accent) 3%, var(--bg-primary));
+  border: 1.5px dashed color-mix(in srgb, var(--border-card) 50%, transparent);
+  border-radius: var(--radius-lg);
   color: var(--text-muted);
   font-size: var(--typo-body-size);
   line-height: var(--typo-body-line);
-  padding: var(--sp-2xl);
+  margin: var(--sp-md) 0;
+  max-width: 520px;
+  margin-left: auto;
+  margin-right: auto;
+  padding: var(--sp-3xl) var(--sp-2xl);
   text-align: center;
 }
 
@@ -116,7 +136,7 @@
       color-mix(in srgb, var(--bg-card) 94%, transparent) 58%
     ),
     var(--bg-card);
-  border: 1px solid var(--border-card);
+  border: 1px solid color-mix(in srgb, var(--border-card) 60%, transparent);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-card);
   padding: 16px;
@@ -185,7 +205,7 @@
       var(--bg-input) 100%
     ),
     var(--bg-input);
-  border: 1px solid var(--border-input);
+  border: 1px solid color-mix(in srgb, var(--border-input) 60%, transparent);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: var(--typo-body-size);
@@ -271,7 +291,7 @@
 .btn-secondary {
   background: var(--secondary);
   border-color: var(--secondary-border);
-  color: #fff;
+  color: var(--text-inverse);
 }
 
 .btn-secondary:hover:not(:disabled) {

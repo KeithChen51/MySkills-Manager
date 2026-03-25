@@ -95,16 +95,16 @@
   color: var(--text-muted);
   cursor: pointer;
   display: flex;
-  height: 40px;
+  height: var(--control-height-touch);
   justify-content: center;
   transition: all 0.15s;
-  width: 40px;
+  width: var(--control-height-touch);
 }
 
 .modal-close-btn:hover {
-  background: var(--danger-bg, rgba(244, 67, 54, 0.1));
-  border-color: var(--danger, #f44336);
-  color: var(--danger, #f44336);
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 /* ─── Metadata Bar ─── */
@@ -114,7 +114,7 @@
   flex-wrap: wrap;
   gap: 4px 16px;
   padding: 10px 24px;
-  background: var(--bg-secondary, rgba(128, 128, 128, 0.04));
+  background: var(--bg-secondary);
 }
 
 .meta-field {
@@ -154,7 +154,7 @@
 }
 
 .meta-input:focus {
-  border-color: var(--prism-aqua, #00bcd4);
+  border-color: var(--prism-aqua);
   outline: none;
 }
 
@@ -226,7 +226,7 @@
   cursor: pointer;
   display: flex;
   gap: 6px;
-  min-height: 40px;
+  min-height: var(--control-height-touch);
   padding: 6px 14px;
   text-align: left;
   transition: background 0.12s;
@@ -243,8 +243,8 @@
 }
 
 .modal-files-item-btn.active {
-  background: var(--prism-aqua-bg, rgba(0, 188, 212, 0.1));
-  border-left: 2px solid var(--prism-aqua, #00bcd4);
+  background: var(--prism-aqua-bg);
+  border-left: 2px solid var(--prism-aqua);
   padding-left: 12px;
 }
 

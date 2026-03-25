@@ -1,38 +1,26 @@
 .app-shell {
-  background:
-    radial-gradient(78% 62% at -12% -18%, var(--shell-glow), transparent 66%),
-    radial-gradient(64% 56% at 112% 108%, color-mix(in srgb, var(--content-glow) 88%, transparent), transparent 68%),
-    linear-gradient(
-      150deg,
-      color-mix(in srgb, var(--prism-blue) 5%, transparent) 0%,
-      transparent 45%,
-      color-mix(in srgb, var(--prism-purple) 5%, transparent) 100%
-    ),
-    var(--bg-app);
+  background: var(--bg-app);
   color: var(--text-primary);
   display: flex;
   height: 100%;
   isolation: isolate;
   overflow: hidden;
+  overflow: clip;
   position: relative;
   transition: background var(--transition), color var(--transition);
 }
 
 .app-content {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--content-glow) 92%, transparent) 0%,
-      color-mix(in srgb, var(--content-glow) 40%, transparent) 20%,
-      transparent 52%
-    ),
-    var(--bg-app);
-  border-left: 1px solid var(--border-card);
+  background: var(--bg-primary);
+  border-radius: var(--radius-lg) 0 0 0;
+  box-shadow: var(--shadow-canvas);
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .app-status-bar {
@@ -101,6 +89,15 @@
   color: var(--danger);
   font-size: var(--typo-body-size);
   padding: var(--sp-sm) var(--sp-md);
+}
+
+.app-page-loading {
+  align-items: center;
+  color: var(--text-secondary);
+  display: flex;
+  flex: 1;
+  font-size: var(--text-sm);
+  justify-content: center;
 }
 
 .app-fallback {

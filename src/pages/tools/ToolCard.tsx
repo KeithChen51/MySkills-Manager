@@ -104,6 +104,7 @@ export default function ToolCard({
     ? t("tools.manual.syncingStatus", { tool: tool.name })
     : syncFeedback?.text ?? "";
   const syncLiveTone = syncingCurrentTool ? "neutral" : (syncFeedback?.kind ?? "neutral");
+  const syncDirectionHintId = `tool-sync-direction-hint-${tool.id}`;
 
   return (
     <article key={tool.id} className={`tool-card ${installed ? "" : "tool-card-uninstalled"}`.trim()}>
@@ -286,17 +287,19 @@ export default function ToolCard({
               onClick={onManualSync}
               disabled={busy || syncingCurrentTool}
               aria-busy={syncingCurrentTool}
+              aria-describedby={syncDirectionHintId}
             >
               {syncingCurrentTool ? (
                 <span className="tool-card-btn-spinner" aria-hidden="true" />
               ) : null}
               <span>{syncingCurrentTool ? t("tools.manual.syncing") : t("tools.manual.button")}</span>
             </button>
+            <span id={syncDirectionHintId} className="sr-only">
+              {t("tools.manual.directionHint")}
+            </span>
             <span
               className="tool-card-info-icon"
-              role="img"
-              tabIndex={0}
-              aria-label={t("tools.manual.directionHint.aria")}
+              aria-hidden="true"
               title={t("tools.manual.directionHint")}
             >
               i

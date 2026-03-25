@@ -4,83 +4,84 @@
   color-scheme: light dark;
 
   /* Skillar light theme: Prism Rational x F-soft */
-  --bg-primary: #f2f4f9;
-  --bg-app: #e9eef6;
-  --bg-sidebar: #e3e9f3;
-  --bg-card: #fbfcfe;
-  --bg-card-hover: #f3f6fb;
-  --bg-input: #f1f5fa;
-  --border-card: #d3dcea;
-  --border-input: #bcc9dc;
-  --border-active: #63b3ed;
-  --text-primary: #2d3748;
-  --text-secondary: #475467;
-  --text-muted: #68788f;
-  --accent: #63b3ed;
-  --accent-hover: #55a4dc;
-  --accent-light: rgba(99, 179, 237, 0.16);
-  --accent-strong: #488dc3;
-  --accent-contrast: #132032;
-  --success: #2f7a66;
-  --success-bg: rgba(47, 122, 102, 0.14);
-  --warning: #e39e4f;
-  --warning-bg: rgba(227, 158, 79, 0.15);
-  --danger: #d46d82;
-  --danger-bg: rgba(212, 109, 130, 0.14);
-  --focus-ring: 0 0 0 3px rgba(99, 179, 237, 0.26);
+  --bg-primary: oklch(97.2% 0.006 95);
+  --bg-app: oklch(95.6% 0.014 236);
+  --bg-sidebar: oklch(91.8% 0.024 238);
+  --bg-card: oklch(98.8% 0.004 235);
+  --bg-card-hover: oklch(96.9% 0.011 235);
+  --bg-input: oklch(95.9% 0.013 234);
+  --border-card: oklch(88.9% 0.019 236);
+  --border-input: oklch(83.2% 0.026 236);
+  --border-active: oklch(69.8% 0.138 238);
+  --text-primary: oklch(32.2% 0.03 245);
+  --text-secondary: oklch(44.5% 0.026 244);
+  --text-muted: oklch(56.3% 0.02 242);
+  --text-inverse: oklch(98.4% 0.003 235);
+  --accent: oklch(69.8% 0.138 238);
+  --accent-hover: oklch(65.4% 0.137 238);
+  --accent-light: color-mix(in oklab, var(--accent) 16%, transparent);
+  --accent-strong: oklch(60.8% 0.125 238);
+  --accent-contrast: oklch(28.8% 0.032 250);
+  --success: oklch(63.2% 0.115 160);
+  --success-bg: color-mix(in oklab, var(--success) 16%, transparent);
+  --warning: oklch(77.4% 0.138 73);
+  --warning-bg: color-mix(in oklab, var(--warning) 18%, transparent);
+  --danger: oklch(66.3% 0.123 22);
+  --danger-bg: color-mix(in oklab, var(--danger) 16%, transparent);
+  --focus-ring: 0 0 0 3px color-mix(in oklab, var(--accent) 34%, transparent);
 
   /* Brand functional tokens (Logo palette → UI roles) */
-  --secondary: #b794f4;
-  --secondary-hover: #a67df0;
-  --secondary-bg: rgba(183, 148, 244, 0.14);
-  --secondary-border: rgba(183, 148, 244, 0.32);
-  --highlight: #f6ad55;
-  --highlight-hover: #ed9d3f;
-  --highlight-bg: rgba(246, 173, 85, 0.14);
-  --highlight-border: rgba(246, 173, 85, 0.36);
-  --info: #7f9cf5;
-  --info-bg: rgba(127, 156, 245, 0.12);
-  --info-border: rgba(127, 156, 245, 0.28);
-  --text-disabled: #a0aec0;
+  --secondary: oklch(71.6% 0.132 300);
+  --secondary-hover: oklch(67.2% 0.13 300);
+  --secondary-bg: color-mix(in oklab, var(--secondary) 16%, transparent);
+  --secondary-border: color-mix(in oklab, var(--secondary) 34%, transparent);
+  --highlight: oklch(80.1% 0.14 70);
+  --highlight-hover: oklch(75.2% 0.142 70);
+  --highlight-bg: color-mix(in oklab, var(--highlight) 17%, transparent);
+  --highlight-border: color-mix(in oklab, var(--highlight) 38%, transparent);
+  --info: oklch(73.4% 0.109 262);
+  --info-bg: color-mix(in oklab, var(--info) 15%, transparent);
+  --info-border: color-mix(in oklab, var(--info) 32%, transparent);
+  --text-disabled: oklch(72% 0.015 240);
 
   /* Decorative tones from brand palette */
-  --prism-orange: #f6ad55;
-  --prism-yellow: #f2c27f;
-  --prism-aqua: #63b3ed;
-  --prism-blue: #7f9cf5;
-  --prism-purple: #b794f4;
+  --prism-orange: oklch(79.6% 0.135 71);
+  --prism-yellow: oklch(86% 0.1 95);
+  --prism-aqua: oklch(69.8% 0.138 238);
+  --prism-blue: oklch(73.4% 0.109 262);
+  --prism-purple: oklch(71.6% 0.132 300);
 
   /* Chart palette */
-  --chart-1: #7f9cf5;
-  --chart-2: #63b3ed;
-  --chart-3: #b794f4;
-  --chart-4: #2f7a66;
-  --chart-5: #f6ad55;
-  --chart-6: #d46d82;
+  --chart-1: var(--prism-blue);
+  --chart-2: var(--prism-aqua);
+  --chart-3: var(--prism-purple);
+  --chart-4: var(--success);
+  --chart-5: var(--highlight);
+  --chart-6: var(--danger);
 
   /* Theme visuals */
-  --ambient-glow-1: rgba(127, 156, 245, 0.16);
-  --ambient-glow-2: rgba(99, 179, 237, 0.16);
-  --ambient-glow-3: rgba(183, 148, 244, 0.12);
-  --shell-glow: rgba(127, 156, 245, 0.12);
-  --content-glow: rgba(99, 179, 237, 0.08);
-  --status-bar-bg: rgba(251, 252, 254, 0.84);
-  --sidebar-glow-1: rgba(127, 156, 245, 0.14);
-  --sidebar-glow-2: rgba(99, 179, 237, 0.12);
-  --sidebar-glow-3: rgba(183, 148, 244, 0.1);
-  --sidebar-logo-shadow: 0 8px 18px rgba(45, 55, 72, 0.14);
-  --accent-outline: rgba(99, 179, 237, 0.42);
-  --accent-outline-soft: rgba(99, 179, 237, 0.2);
-  --card-hover-border: rgba(99, 179, 237, 0.32);
-  --tag-accent-bg: rgba(99, 179, 237, 0.12);
-  --tag-accent-border: rgba(99, 179, 237, 0.26);
-  --overlay-scrim: rgba(16, 22, 34, 0.32);
-  --switch-track: #d2dbe9;
-  --switch-track-border: #b8c6dc;
-  --switch-track-active: #2f7a66;
-  --switch-track-active-border: #286a59;
-  --switch-thumb: #ffffff;
-  --switch-thumb-shadow: 0 1px 2px rgba(45, 55, 72, 0.2);
+  --ambient-glow-1: color-mix(in oklab, var(--info) 9%, transparent);
+  --ambient-glow-2: color-mix(in oklab, var(--accent) 8%, transparent);
+  --ambient-glow-3: color-mix(in oklab, var(--highlight) 7%, transparent);
+  --shell-glow: color-mix(in oklab, var(--info) 7%, transparent);
+  --content-glow: color-mix(in oklab, var(--accent) 6%, transparent);
+  --status-bar-bg: color-mix(in oklab, var(--bg-card) 86%, transparent);
+  --sidebar-glow-1: color-mix(in oklab, var(--info) 8%, transparent);
+  --sidebar-glow-2: color-mix(in oklab, var(--accent) 7%, transparent);
+  --sidebar-glow-3: color-mix(in oklab, var(--secondary) 6%, transparent);
+  --sidebar-logo-shadow: 0 10px 22px color-mix(in oklab, var(--accent-contrast) 16%, transparent);
+  --accent-outline: color-mix(in oklab, var(--accent) 46%, transparent);
+  --accent-outline-soft: color-mix(in oklab, var(--accent) 24%, transparent);
+  --card-hover-border: color-mix(in oklab, var(--accent) 34%, transparent);
+  --tag-accent-bg: color-mix(in oklab, var(--accent) 14%, transparent);
+  --tag-accent-border: color-mix(in oklab, var(--accent) 28%, transparent);
+  --overlay-scrim: color-mix(in oklab, var(--accent-contrast) 32%, transparent);
+  --switch-track: oklch(88.4% 0.02 236);
+  --switch-track-border: oklch(81.4% 0.026 236);
+  --switch-track-active: var(--success);
+  --switch-track-active-border: color-mix(in oklab, var(--success) 78%, black);
+  --switch-thumb: oklch(99.1% 0.003 240);
+  --switch-thumb-shadow: 0 1px 2px color-mix(in oklab, var(--accent-contrast) 22%, transparent);
 
   /* Semantic aliases for legacy pages */
   --surface-base: var(--bg-card);
@@ -104,7 +105,7 @@
 
   /* Typography semantics (Decision 5.136/5.137) */
   --typo-page-title-size: 1.375rem;
-  --typo-page-title-weight: 600;
+  --typo-page-title-weight: 700;
   --typo-page-title-line: 1.3;
   --typo-section-title-size: 1.125rem;
   --typo-section-title-weight: 600;
@@ -141,6 +142,7 @@
   /* Shadows */
   --shadow-card: 0 1px 2px rgba(45, 55, 72, 0.06), 0 8px 18px rgba(85, 103, 133, 0.06);
   --shadow-card-hover: 0 2px 6px rgba(45, 55, 72, 0.07), 0 14px 26px rgba(85, 103, 133, 0.1);
+  --shadow-canvas: -1px 0 0 rgba(45, 55, 72, 0.08), 0 2px 6px rgba(45, 55, 72, 0.06), 0 8px 20px rgba(85, 103, 133, 0.05);
   --shadow-drawer: -18px 0 36px rgba(27, 37, 54, 0.24);
 
   /* Layout */
@@ -184,79 +186,80 @@
 }
 
 :root[data-theme="dark"] {
-  --bg-primary: #0f1521;
-  --bg-app: #111a2a;
-  --bg-sidebar: #0f1826;
-  --bg-card: #182236;
-  --bg-card-hover: #223049;
-  --bg-input: #1a2740;
-  --border-card: #31415f;
-  --border-input: #44587a;
-  --border-active: #7fc2f1;
-  --text-primary: #e8eefb;
-  --text-secondary: #bac7dc;
-  --text-muted: #8fa3c0;
-  --accent: #7fc2f1;
-  --accent-hover: #96cff6;
-  --accent-light: rgba(127, 194, 241, 0.24);
-  --accent-strong: #b3ddfb;
-  --accent-contrast: #0d1625;
-  --success: #2f7a66;
-  --success-bg: rgba(47, 122, 102, 0.26);
-  --warning: #f0b46b;
-  --warning-bg: rgba(240, 180, 107, 0.24);
-  --danger: #ef8ca1;
-  --danger-bg: rgba(239, 140, 161, 0.24);
-  --focus-ring: 0 0 0 3px rgba(127, 194, 241, 0.32);
+  --bg-primary: oklch(21.8% 0.022 255);
+  --bg-app: oklch(24.1% 0.024 254);
+  --bg-sidebar: oklch(20.4% 0.021 256);
+  --bg-card: oklch(28.4% 0.026 255);
+  --bg-card-hover: oklch(33% 0.03 252);
+  --bg-input: oklch(31.2% 0.03 252);
+  --border-card: oklch(42.5% 0.03 250);
+  --border-input: oklch(51.3% 0.033 248);
+  --border-active: oklch(79.2% 0.118 236);
+  --text-primary: oklch(93.5% 0.01 240);
+  --text-secondary: oklch(83.2% 0.017 240);
+  --text-muted: oklch(72.4% 0.018 241);
+  --text-inverse: oklch(97.2% 0.005 242);
+  --accent: oklch(79.2% 0.118 236);
+  --accent-hover: oklch(83.1% 0.11 236);
+  --accent-light: color-mix(in oklab, var(--accent) 25%, transparent);
+  --accent-strong: oklch(87.5% 0.102 236);
+  --accent-contrast: oklch(16.8% 0.018 252);
+  --success: oklch(74.1% 0.106 160);
+  --success-bg: color-mix(in oklab, var(--success) 25%, transparent);
+  --warning: oklch(82.2% 0.12 73);
+  --warning-bg: color-mix(in oklab, var(--warning) 25%, transparent);
+  --danger: oklch(74.1% 0.12 22);
+  --danger-bg: color-mix(in oklab, var(--danger) 24%, transparent);
+  --focus-ring: 0 0 0 3px color-mix(in oklab, var(--accent) 38%, transparent);
 
-  --secondary: #cfb2ff;
-  --secondary-hover: #d9c4ff;
-  --secondary-bg: rgba(207, 178, 255, 0.20);
-  --secondary-border: rgba(207, 178, 255, 0.36);
-  --highlight: #fbd38d;
-  --highlight-hover: #fcc468;
-  --highlight-bg: rgba(251, 211, 141, 0.20);
-  --highlight-border: rgba(251, 211, 141, 0.36);
-  --info: #a3bffa;
-  --info-bg: rgba(163, 191, 250, 0.16);
-  --info-border: rgba(163, 191, 250, 0.32);
-  --text-disabled: #5a6e8a;
+  --secondary: oklch(79% 0.124 300);
+  --secondary-hover: oklch(83% 0.117 300);
+  --secondary-bg: color-mix(in oklab, var(--secondary) 25%, transparent);
+  --secondary-border: color-mix(in oklab, var(--secondary) 40%, transparent);
+  --highlight: oklch(84.2% 0.115 70);
+  --highlight-hover: oklch(87.2% 0.108 70);
+  --highlight-bg: color-mix(in oklab, var(--highlight) 24%, transparent);
+  --highlight-border: color-mix(in oklab, var(--highlight) 40%, transparent);
+  --info: oklch(80.5% 0.104 262);
+  --info-bg: color-mix(in oklab, var(--info) 22%, transparent);
+  --info-border: color-mix(in oklab, var(--info) 36%, transparent);
+  --text-disabled: oklch(60% 0.016 240);
 
-  --prism-orange: #f6c083;
-  --prism-yellow: #f1d296;
-  --prism-aqua: #86c7f2;
-  --prism-blue: #9fb4ff;
-  --prism-purple: #cfb2ff;
+  --prism-orange: oklch(84.2% 0.115 70);
+  --prism-yellow: oklch(89.3% 0.086 94);
+  --prism-aqua: oklch(79.2% 0.118 236);
+  --prism-blue: oklch(80.5% 0.104 262);
+  --prism-purple: oklch(79% 0.124 300);
 
-  --chart-1: #9fb4ff;
-  --chart-2: #86c7f2;
-  --chart-3: #cfb2ff;
-  --chart-4: #2f7a66;
-  --chart-5: #f0b46b;
-  --chart-6: #ef8ca1;
+  --chart-1: var(--prism-blue);
+  --chart-2: var(--prism-aqua);
+  --chart-3: var(--prism-purple);
+  --chart-4: var(--success);
+  --chart-5: var(--highlight);
+  --chart-6: var(--danger);
 
-  --ambient-glow-1: rgba(159, 180, 255, 0.14);
-  --ambient-glow-2: rgba(134, 199, 242, 0.12);
-  --ambient-glow-3: rgba(207, 178, 255, 0.1);
-  --shell-glow: rgba(159, 180, 255, 0.1);
-  --content-glow: rgba(134, 199, 242, 0.08);
-  --status-bar-bg: rgba(24, 34, 54, 0.84);
-  --sidebar-glow-1: rgba(159, 180, 255, 0.16);
-  --sidebar-glow-2: rgba(134, 199, 242, 0.12);
-  --sidebar-glow-3: rgba(207, 178, 255, 0.1);
-  --sidebar-logo-shadow: 0 10px 18px rgba(5, 10, 20, 0.45);
-  --accent-outline: rgba(127, 194, 241, 0.5);
-  --accent-outline-soft: rgba(127, 194, 241, 0.24);
-  --card-hover-border: rgba(127, 194, 241, 0.42);
-  --tag-accent-bg: rgba(127, 194, 241, 0.22);
-  --tag-accent-border: rgba(127, 194, 241, 0.36);
-  --overlay-scrim: rgba(4, 10, 20, 0.58);
-  --switch-track: #324869;
-  --switch-track-border: #426086;
-  --switch-track-active: #2f7a66;
-  --switch-track-active-border: #3f907a;
-  --switch-thumb: #edf2fb;
-  --switch-thumb-shadow: 0 1px 2px rgba(5, 10, 20, 0.5);
+  --ambient-glow-1: color-mix(in oklab, var(--info) 11%, transparent);
+  --ambient-glow-2: color-mix(in oklab, var(--accent) 10%, transparent);
+  --ambient-glow-3: color-mix(in oklab, var(--highlight) 8%, transparent);
+  --shell-glow: color-mix(in oklab, var(--info) 9%, transparent);
+  --content-glow: color-mix(in oklab, var(--accent) 8%, transparent);
+  --status-bar-bg: color-mix(in oklab, var(--bg-card) 70%, transparent);
+  --sidebar-glow-1: color-mix(in oklab, var(--info) 10%, transparent);
+  --sidebar-glow-2: color-mix(in oklab, var(--accent) 8%, transparent);
+  --sidebar-glow-3: color-mix(in oklab, var(--secondary) 7%, transparent);
+  --sidebar-logo-shadow: 0 12px 24px color-mix(in oklab, var(--accent-contrast) 58%, transparent);
+  --accent-outline: color-mix(in oklab, var(--accent) 56%, transparent);
+  --accent-outline-soft: color-mix(in oklab, var(--accent) 30%, transparent);
+  --card-hover-border: color-mix(in oklab, var(--accent) 44%, transparent);
+  --tag-accent-bg: color-mix(in oklab, var(--accent) 24%, transparent);
+  --tag-accent-border: color-mix(in oklab, var(--accent) 38%, transparent);
+  --overlay-scrim: color-mix(in oklab, var(--accent-contrast) 68%, transparent);
+  --switch-track: oklch(38% 0.03 248);
+  --switch-track-border: oklch(47% 0.032 248);
+  --switch-track-active: var(--success);
+  --switch-track-active-border: color-mix(in oklab, var(--success) 72%, black);
+  --switch-thumb: oklch(95.2% 0.008 240);
+  --switch-thumb-shadow: 0 1px 2px color-mix(in oklab, var(--accent-contrast) 54%, transparent);
 
   --surface-base: var(--bg-card);
   --surface-soft: color-mix(in srgb, var(--bg-card) 80%, var(--bg-app));
@@ -267,9 +270,10 @@
   --prism-aqua-bg: color-mix(in srgb, var(--prism-aqua) 20%, transparent);
   --color-text-secondary: var(--text-secondary);
 
-  --shadow-card: 0 1px 2px rgba(2, 6, 14, 0.4), 0 8px 20px rgba(2, 6, 14, 0.3);
-  --shadow-card-hover: 0 2px 8px rgba(2, 6, 14, 0.46), 0 14px 30px rgba(2, 6, 14, 0.38);
-  --shadow-drawer: -18px 0 40px rgba(2, 6, 14, 0.6);
+  --shadow-card: 0 1px 2px color-mix(in oklab, var(--accent-contrast) 42%, transparent), 0 10px 24px color-mix(in oklab, var(--accent-contrast) 34%, transparent);
+  --shadow-card-hover: 0 2px 8px color-mix(in oklab, var(--accent-contrast) 48%, transparent), 0 16px 34px color-mix(in oklab, var(--accent-contrast) 40%, transparent);
+  --shadow-canvas: -1px 0 0 color-mix(in oklab, var(--accent-contrast) 20%, transparent), 0 2px 8px color-mix(in oklab, var(--accent-contrast) 18%, transparent), 0 8px 22px color-mix(in oklab, var(--accent-contrast) 14%, transparent);
+  --shadow-drawer: -18px 0 40px color-mix(in oklab, var(--accent-contrast) 62%, transparent);
 }
 
 /* ===== Animations ===== */

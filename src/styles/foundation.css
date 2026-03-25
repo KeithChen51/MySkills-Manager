@@ -17,15 +17,11 @@ html {
 
 body {
   background:
-    radial-gradient(120% 78% at -8% -12%, var(--ambient-glow-1), transparent 58%),
-    radial-gradient(96% 72% at 108% 102%, var(--ambient-glow-2), transparent 52%),
-    radial-gradient(82% 62% at 52% 108%, var(--ambient-glow-3), transparent 58%),
     linear-gradient(
       168deg,
-      color-mix(in srgb, var(--prism-blue) 8%, transparent) 0%,
-      transparent 34%,
-      color-mix(in srgb, var(--prism-aqua) 8%, transparent) 72%,
-      color-mix(in srgb, var(--prism-purple) 7%, transparent) 100%
+      color-mix(in srgb, var(--prism-blue) 3%, transparent) 0%,
+      transparent 40%,
+      color-mix(in srgb, var(--prism-purple) 2%, transparent) 100%
     ),
     var(--bg-primary);
   color: var(--text-primary);
@@ -33,7 +29,7 @@ body {
   font-size: var(--typo-body-size);
   font-weight: var(--typo-body-weight);
   line-height: var(--typo-body-line);
-  letter-spacing: 0.006em;
+  letter-spacing: 0.004em;
   transition: background var(--transition), color var(--transition);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

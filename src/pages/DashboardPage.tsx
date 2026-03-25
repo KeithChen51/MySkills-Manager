@@ -1,4 +1,3 @@
-import ReactECharts from "echarts-for-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -9,6 +8,7 @@ import {
   type SkillMeta,
   type StatsResult,
 } from "../api/tauri";
+import DeferredEChart from "../components/DeferredEChart";
 import KpiCard from "../components/KpiCard";
 import { IconChevronLeft, IconChevronRight, IconClose, IconLogs } from "../components/icons";
 import { toIsoEnd, toIsoStart } from "../domain/logDateRange";
@@ -263,8 +263,9 @@ export default function DashboardPage({ skills }: Props) {
       <div className="chart-row">
         <article className="chart-card">
           <h3 className="chart-title">{t("dashboard.topSkills")}</h3>
-          <ReactECharts
+          <DeferredEChart
             className="dashboard-chart dashboard-chart--tall"
+            placeholderHeight={280}
             onEvents={topSkillsChartEvents}
             option={{
               color: chartTokens.palette,
@@ -298,8 +299,9 @@ export default function DashboardPage({ skills }: Props) {
 
         <article className="chart-card">
           <h3 className="chart-title">{t("dashboard.byTool")}</h3>
-          <ReactECharts
+          <DeferredEChart
             className="dashboard-chart dashboard-chart--tall"
+            placeholderHeight={280}
             option={{
               color: chartTokens.palette,
               textStyle: { color: chartTokens.textPrimary },
@@ -323,8 +325,9 @@ export default function DashboardPage({ skills }: Props) {
 
       <article className="chart-card">
         <h3 className="chart-title">{t("dashboard.byDay")}</h3>
-        <ReactECharts
+        <DeferredEChart
           className="dashboard-chart dashboard-chart--medium"
+          placeholderHeight={220}
           option={{
             color: chartTokens.palette,
             textStyle: { color: chartTokens.textPrimary },
