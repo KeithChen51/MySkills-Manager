@@ -651,7 +651,11 @@ export default function SettingsPage({
           <h3 className="settings-card-title">{t("onboard.step3.skillsDir")}</h3>
           <p className="settings-help">{t("onboard.step1.desc")}</p>
           <div className="settings-row">
+            <label className="field-label sr-only" htmlFor="settings-skills-dir-input">
+              {t("onboard.step3.skillsDir")}
+            </label>
             <input
+              id="settings-skills-dir-input"
               className="field-input settings-path-input"
               value={skillsDir}
               onChange={(event) => setSkillsDir(event.target.value)}

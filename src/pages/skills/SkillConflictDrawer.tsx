@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import type { SkillConflictDetail } from "../../api/tauri";
 import useDialogA11y from "../../components/useDialogA11y";
 import { IconClose } from "../../components/icons";
@@ -42,6 +42,7 @@ export default function SkillConflictDrawer({
   onResolveConflict,
 }: Props) {
   const { baseline, hiddenMatchedCount, conflicts, computingDiff } = useConflictDiffView(conflictDetail);
+  const [conflictViewMode, setConflictViewMode] = useState<"diff" | "full">("diff");
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const { dialogRef } = useDialogA11y<HTMLElement>({
     open: Boolean(activeConflictSkill),
@@ -100,6 +101,29 @@ export default function SkillConflictDrawer({
                   {t("skills.conflict.placeholder.hiddenMatched", { count: hiddenMatchedCount })}
                 </p>
               )}
+              <div className="skills-conflict-view-mode">
+                <span className="skills-conflict-view-mode-label">
+                  {t("skills.conflict.view.label")}
+                </span>
+                <div className="skills-conflict-view-mode-actions">
+                  <button
+                    type="button"
+                    className={`btn ${conflictViewMode === "diff" ? "btn-primary" : "btn-ghost"}`}
+                    onClick={() => setConflictViewMode("diff")}
+                    aria-pressed={conflictViewMode === "diff"}
+                  >
+                    {t("skills.conflict.view.diff")}
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn ${conflictViewMode === "full" ? "btn-primary" : "btn-ghost"}`}
+                    onClick={() => setConflictViewMode("full")}
+                    aria-pressed={conflictViewMode === "full"}
+                  >
+                    {t("skills.conflict.view.full")}
+                  </button>
+                </div>
+              </div>
 
               <div className="skills-conflict-variants">
                 {baseline && (
@@ -159,7 +183,9 @@ export default function SkillConflictDrawer({
                         </button>
                       </div>
                     </div>
-                    {!diff ? (
+                    {conflictViewMode === "full" ? (
+                      <pre className="skills-conflict-content">{variant.content}</pre>
+                    ) : !diff ? (
                       <p className="skills-conflict-placeholder">
                         {computingDiff
                           ? t("skills.conflict.diff.calculating")

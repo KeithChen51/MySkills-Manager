@@ -50,7 +50,7 @@ test("Settings model-group header uses native button instead of role=button div"
   );
   assert.match(
     source,
-    /<button[\s\S]*className="settings-model-group-header"[\s\S]*onClick=\{\(\) => toggleGroupExpanded\(group.id\)\}/,
+    /<button[\s\S]*className="btn btn-ghost settings-model-group-toggle"[\s\S]*onClick=\{\(\) => toggleGroupCollapsed\(group.id\)\}/,
     "SettingsPage collapse header should be a native button",
   );
 });

@@ -372,8 +372,8 @@ test("Eval overlay and run monitor use opaque theme tokens instead of undefined 
     "EvalPage CSS should use existing opaque bg-card token for modal and cards",
   );
   assert.ok(
-    css.includes("background-color: var(--bg-card, #ffffff);"),
-    "run dock/modal should include explicit opaque fallback background color",
+    css.includes("background-color: var(--bg-card);"),
+    "run dock/modal should include explicit opaque background color",
   );
   assert.ok(
     css.includes("isolation: isolate;"),

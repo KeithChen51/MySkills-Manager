@@ -43,14 +43,14 @@ test("EvalHistory dialog uses semantic role and shared dialog a11y hook", () => 
 test("SkillEditor dialog uses shared dialog a11y hook", () => {
   const source = read("src/components/SkillEditor.tsx");
 
-  assert.match(source, /useDialogA11y\(/, "SkillEditor should use shared dialog hook");
+  assert.match(source, /useDialogA11y(?:<[^>]+>)?\(/, "SkillEditor should use shared dialog hook");
   assert.match(source, /ref=\{dialogRef\}/, "SkillEditor should bind dialogRef to dialog container");
 });
 
 test("SkillConflictDrawer dialog uses shared dialog a11y hook", () => {
   const source = read("src/pages/skills/SkillConflictDrawer.tsx");
 
-  assert.match(source, /useDialogA11y\(/, "SkillConflictDrawer should use shared dialog hook");
+  assert.match(source, /useDialogA11y(?:<[^>]+>)?\(/, "SkillConflictDrawer should use shared dialog hook");
   assert.match(
     source,
     /ref=\{dialogRef\}/,
@@ -63,7 +63,7 @@ test("Skills detail overlay uses shared dialog a11y hook", () => {
 
   assert.match(
     source,
-    /useDialogA11y\(\{\s*open:\s*Boolean\(detailSkillName\)/,
+    /useDialogA11y(?:<[^>]+>)?\(\{\s*open:\s*Boolean\(detailSkillName\)/,
     "SkillsPage should pass detail overlay open-state to shared dialog hook",
   );
   assert.match(

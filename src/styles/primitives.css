@@ -64,7 +64,7 @@
 .typo-page-title {
   color: color-mix(in srgb, var(--prism-blue) 14%, var(--text-primary));
   font-family: var(--font-heading);
-  font-size: var(--typo-page-title-size);
+  font-size: var(--type-display);
   font-weight: var(--typo-page-title-weight);
   letter-spacing: -0.01em;
   line-height: var(--typo-page-title-line);

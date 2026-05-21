@@ -31,13 +31,13 @@ type DashboardChartTokens = {
 
 function readDashboardChartTokens(): DashboardChartTokens {
   const fallback: DashboardChartTokens = {
-    palette: ["#7f9cf5", "#63b3ed", "#b794f4", "#2f7a66", "#f6ad55", "#d46d82"],
-    textPrimary: "#2d3748",
-    textSecondary: "#475467",
-    border: "#d3dcea",
-    split: "#d3dcea",
-    tooltipBg: "#fbfcfe",
-    tooltipBorder: "#d3dcea",
+    palette: ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)", "var(--chart-6)"],
+    textPrimary: "var(--text-primary)",
+    textSecondary: "var(--text-secondary)",
+    border: "var(--border-card)",
+    split: "var(--border-card)",
+    tooltipBg: "var(--bg-card)",
+    tooltipBorder: "var(--border-card)",
   };
   if (typeof window === "undefined") {
     return fallback;

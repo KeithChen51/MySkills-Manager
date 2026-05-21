@@ -27,9 +27,11 @@ test("syncReleaseArtifacts copies latest artifacts and removes stale setup files
     await mkdir(path.dirname(sourceExe), { recursive: true });
     await mkdir(nsisDir, { recursive: true });
     await mkdir(releaseDir, { recursive: true });
+    await mkdir(path.join(projectRoot, "src-tauri", "py"), { recursive: true });
     await writeFile(path.join(projectRoot, "package.json"), JSON.stringify({ version: "0.1.8" }));
     await writeFile(sourceExe, "new-app-binary");
     await writeFile(latestSetup, "new-setup-binary");
+    await writeFile(path.join(projectRoot, "src-tauri", "py", "runtime.txt"), "portable-runtime");
     await writeFile(oldSetup, "old-setup-binary");
 
     const result = await syncReleaseArtifacts({ projectRoot, releaseDir });

@@ -1268,7 +1268,10 @@ export default function GitPage() {
                       className={`git-repo-card ${isSelected ? "is-selected" : ""} ${isPending ? "is-pending" : ""}`}
                     >
                       <button
+                        type="button"
                         className="git-repo-card-main"
+                        aria-label={t("git.repo.open")}
+                        title={t("git.repo.open")}
                         onClick={() => openRepositoryDetail(repo)}
                         disabled={isPending}
                       >

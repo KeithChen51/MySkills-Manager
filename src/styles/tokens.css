@@ -15,18 +15,18 @@
   --border-active: oklch(69.8% 0.138 238);
   --text-primary: oklch(32.2% 0.03 245);
   --text-secondary: oklch(44.5% 0.026 244);
-  --text-muted: oklch(56.3% 0.02 242);
+  --text-muted: oklch(50.5% 0.022 242);
   --text-inverse: oklch(98.4% 0.003 235);
   --accent: oklch(69.8% 0.138 238);
   --accent-hover: oklch(65.4% 0.137 238);
   --accent-light: color-mix(in oklab, var(--accent) 16%, transparent);
   --accent-strong: oklch(60.8% 0.125 238);
   --accent-contrast: oklch(28.8% 0.032 250);
-  --success: oklch(63.2% 0.115 160);
+  --success: oklch(43% 0.11 160);
   --success-bg: color-mix(in oklab, var(--success) 16%, transparent);
-  --warning: oklch(77.4% 0.138 73);
+  --warning: oklch(43% 0.105 73);
   --warning-bg: color-mix(in oklab, var(--warning) 18%, transparent);
-  --danger: oklch(66.3% 0.123 22);
+  --danger: oklch(43% 0.122 22);
   --danger-bg: color-mix(in oklab, var(--danger) 16%, transparent);
   --focus-ring: 0 0 0 3px color-mix(in oklab, var(--accent) 34%, transparent);
 
@@ -78,9 +78,9 @@
   --overlay-scrim: color-mix(in oklab, var(--accent-contrast) 32%, transparent);
   --switch-track: oklch(88.4% 0.02 236);
   --switch-track-border: oklch(81.4% 0.026 236);
-  --switch-track-active: var(--success);
+  --switch-track-active: #2f7a66;
   --switch-track-active-border: color-mix(in oklab, var(--success) 78%, black);
-  --switch-thumb: oklch(99.1% 0.003 240);
+  --switch-thumb: #ffffff;
   --switch-thumb-shadow: 0 1px 2px color-mix(in oklab, var(--accent-contrast) 22%, transparent);
 
   /* Semantic aliases for legacy pages */
@@ -102,6 +102,7 @@
   --text-md: 1rem;
   --text-lg: 1.125rem;
   --text-xl: 1.375rem;
+  --type-display: 1.375rem;
 
   /* Typography semantics (Decision 5.136/5.137) */
   --typo-page-title-size: 1.375rem;
@@ -132,6 +133,7 @@
   --sp-xl: 24px;
   --sp-2xl: 32px;
   --sp-3xl: 40px;
+  --card-rhythm-gap: var(--sp-md);
 
   /* Radius */
   --radius-sm: 6px;
@@ -146,7 +148,7 @@
   --shadow-drawer: -18px 0 36px rgba(27, 37, 54, 0.24);
 
   /* Layout */
-  --control-height: 40px;
+  --control-height: 44px;
   --control-height-compact: 32px;
   --control-height-touch: 44px;
   --status-bar-height: 52px;
@@ -163,7 +165,9 @@
   --filter-min-width-sm: 130px;
   --filter-min-width-md: 170px;
   --capsule-option-min-width: 52px;
-  --drawer-min-width: 540px;
+  --drawer-min-width: clamp(320px, 42vw, 540px);
+  --chart-height-tall: 280px;
+  --chart-height-medium: 220px;
   --editor-meta-textarea-min-height: 88px;
   --editor-pane-min-height: 320px;
   --rules-editor-min-height: 400px;
@@ -256,9 +260,9 @@
   --overlay-scrim: color-mix(in oklab, var(--accent-contrast) 68%, transparent);
   --switch-track: oklch(38% 0.03 248);
   --switch-track-border: oklch(47% 0.032 248);
-  --switch-track-active: var(--success);
+  --switch-track-active: #5bbf94;
   --switch-track-active-border: color-mix(in oklab, var(--success) 72%, black);
-  --switch-thumb: oklch(95.2% 0.008 240);
+  --switch-thumb: #f8fafc;
   --switch-thumb-shadow: 0 1px 2px color-mix(in oklab, var(--accent-contrast) 54%, transparent);
 
   --surface-base: var(--bg-card);
